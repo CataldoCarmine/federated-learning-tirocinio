@@ -1,0 +1,21 @@
+# Ignora ambienti virtuali
+.venv/
+venv/
+
+# File di sistema macOS
+.DS_Store
+
+# Output di Python
+__pycache__/
+*.py[cod]
+*.so
+
+# File temporanei
+*.log
+*.tmp
+
+# Notebook checkpoints (se usi Jupyter)
+.ipynb_checkpoints/
+
+# Cache pip
+pip-wheel-metadata/
