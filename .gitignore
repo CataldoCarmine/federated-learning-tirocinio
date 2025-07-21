@@ -19,3 +19,5 @@ __pycache__/
 
 # Cache pip
 pip-wheel-metadata/
+.DS_Store
+.idea/
