@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+from sklearn.impute import SimpleImputer
 import time
 import sys
 import os
@@ -17,6 +18,9 @@ def load_centralized_smartgrid_data():
         Tuple con (X_scaled, y, scaler, dataset_info)
     """
     print("=== CARICAMENTO DATASET SMARTGRID CENTRALIZZATO ===")
+
+    # Directory contenente questo script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
 
     # Path assoluto alla cartella dei dati
     data_dir = os.path.join(script_dir, "..", "..", "data", "SmartGrid")
@@ -88,12 +92,15 @@ def load_centralized_smartgrid_data():
         if len(features_with_nans) <= 10:  # Mostra solo se poche
             for feature, count in features_with_nans.items():
                 print(f"    - {feature}: {count} NaN")
+
+        # Imputazione dei NaN con la mediana
+        imputer = SimpleImputer(strategy="median")
+        X_imputed = imputer.fit_transform(X)
+        X = pd.DataFrame(X_imputed, columns=X.columns)
+        print("  - Imputazione completata.")
+
     else:
         print(f"  - Nessun valore NaN trovato")
-    
-    # Rimuovi righe con NaN
-    X.dropna(inplace=True)
-    y = y.loc[X.index]
     
     final_samples = len(X)
     removed_samples = initial_samples - final_samples
