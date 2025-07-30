@@ -60,8 +60,12 @@ def get_smartgrid_evaluate_fn():
         
         # Pulizia dati
         X_global.replace([np.inf, -np.inf], np.nan, inplace=True)
-        X_global.dropna(inplace=True)
-        y_global = y_global.loc[X_global.index]
+
+        # Imputazione con la mediana
+        from sklearn.impute import SimpleImputer
+        imputer = SimpleImputer(strategy="median")
+        X_global_imputed = imputer.fit_transform(X_global)
+        X_global = pd.DataFrame(X_global_imputed, columns=X_global.columns)
         
         # Normalizzazione
         scaler_global = StandardScaler()

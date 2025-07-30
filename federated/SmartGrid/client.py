@@ -52,21 +52,24 @@ def load_client_smartgrid_data(client_id):
     # Pulizia dei dati
     print(f"Pulizia dei dati:")
     initial_samples = len(X)
-    
+
     # Gestisci valori infiniti e NaN
     X.replace([np.inf, -np.inf], np.nan, inplace=True)
     nan_count = X.isnull().sum().sum()
     print(f"  - Valori NaN trovati: {nan_count}")
-    
-    # Rimuovi righe con NaN
-    X.dropna(inplace=True)
-    y = y.loc[X.index]
-    
+
+    # Imputazione dei NaN con la mediana
+    from sklearn.impute import SimpleImputer
+    imputer = SimpleImputer(strategy="median")
+    X_imputed = imputer.fit_transform(X)
+    X = pd.DataFrame(X_imputed, columns=X.columns)
+
+    # y resta allineato (nessuna riga viene rimossa)
     final_samples = len(X)
-    removed_samples = initial_samples - final_samples
+    removed_samples = initial_samples - final_samples  # Sarà 0 ora
     print(f"  - Campioni rimossi: {removed_samples}")
     print(f"  - Campioni finali: {final_samples}")
-    
+
     if final_samples == 0:
         raise ValueError(f"Nessun campione valido rimasto per il client {client_id}")
     
