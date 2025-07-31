@@ -5,6 +5,7 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
+from imblearn.over_sampling import SMOTE
 import time
 import sys
 import os
@@ -74,7 +75,7 @@ def load_centralized_smartgrid_data():
         percentage = (count / len(df_combined)) * 100
         print(f"  - {marker}: {count} campioni ({percentage:.2f}%)")
     
-    # Pulizia dei dati: gestione di valori infiniti e NaN
+    # === PREPROCESSING STEP 1: GESTIONE VALORI MANCANTI ===
     print(f"\nPulizia dei dati:")
     initial_samples = len(X)
     
@@ -93,7 +94,8 @@ def load_centralized_smartgrid_data():
             for feature, count in features_with_nans.items():
                 print(f"    - {feature}: {count} NaN")
 
-        # Imputazione dei NaN con la mediana
+        # MODIFICA: Imputazione dei NaN con la mediana (invece di rimozione)
+        print(f"  - Applicazione imputazione con mediana...")
         imputer = SimpleImputer(strategy="median")
         X_imputed = imputer.fit_transform(X)
         X = pd.DataFrame(X_imputed, columns=X.columns)
@@ -111,7 +113,7 @@ def load_centralized_smartgrid_data():
     if final_samples == 0:
         raise ValueError("Nessun campione valido rimasto dopo la pulizia dei dati")
     
-    # Normalizzazione delle feature
+    # === PREPROCESSING STEP 2: NORMALIZZAZIONE ===
     print(f"\nNormalizzazione feature...")
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
@@ -181,8 +183,8 @@ def train_smartgrid_model(model, X_train, y_train, X_test, y_test):
     
     Args:
         model: Modello Keras da addestrare
-        X_train, y_train: Dati di training
-        X_test, y_test: Dati di test per validazione
+        X_train, y_train: Dati di training (possibilmente bilanciati con SMOTE)
+        X_test, y_test: Dati di test per validazione (sbilanciati, distribuzione reale)
     
     Returns:
         History dell'addestramento
@@ -362,7 +364,7 @@ def main():
         # 1. Carica e prepara tutti i dati centralizzati
         X_scaled, y, scaler, dataset_info = load_centralized_smartgrid_data()
         
-        # 2. Suddividi in train/test (come MNIST)
+        # 2. Suddividi in train/test (come MNIST) PRIMA del bilanciamento
         X_train, X_test, y_train, y_test = train_test_split(
             X_scaled, y, 
             test_size=0.2,      # Stessa proporzione di MNIST  
@@ -373,8 +375,54 @@ def main():
         print(f"Suddivisione train/test:")
         print(f"  - Training set: {len(X_train)} campioni")
         print(f"  - Test set: {len(X_test)} campioni")
-        print(f"  - Proporzione attacchi training: {y_train.mean()*100:.2f}%")
+        print(f"  - Proporzione attacchi training (originale): {y_train.mean()*100:.2f}%")
         print(f"  - Proporzione attacchi test: {y_test.mean()*100:.2f}%")
+        
+        # === PREPROCESSING STEP 3: GESTIONE SQUILIBRIO CLASSI (SOLO TRAINING) ===
+        print(f"\n=== BILANCIAMENTO CLASSI SUL TRAINING SET ===")
+        
+        # Calcola il rapporto di squilibrio nel training set
+        train_attack_ratio = y_train.mean()
+        minority_class_ratio = min(train_attack_ratio, 1 - train_attack_ratio)
+        
+        print(f"  - Distribuzione training PRIMA del bilanciamento:")
+        print(f"    - Classe 0 (Natural): {(y_train == 0).sum()} campioni ({(1-train_attack_ratio)*100:.2f}%)")
+        print(f"    - Classe 1 (Attack): {(y_train == 1).sum()} campioni ({train_attack_ratio*100:.2f}%)")
+        print(f"    - Rapporto classe minoritaria: {minority_class_ratio*100:.2f}%")
+        
+        # Applica SMOTE solo se lo squilibrio è significativo (< 40%)
+        if minority_class_ratio < 0.4:
+            print(f"  - Squilibrio significativo rilevato, applicazione SMOTE al training set...")
+            
+            # Configura SMOTE
+            smote = SMOTE(
+                sampling_strategy='auto',  # Bilancia automaticamente alla classe maggioritaria
+                random_state=42,          # Per riproducibilità
+                k_neighbors=5             # Numero di vicini per generare campioni sintetici
+            )
+            
+            try:
+                X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
+                
+                # Statistiche dopo il bilanciamento
+                print(f"  - SMOTE applicato con successo al training set")
+                print(f"  - Distribuzione training DOPO il bilanciamento:")
+                print(f"    - Classe 0 (Natural): {(y_train_balanced == 0).sum()} campioni ({(y_train_balanced == 0).mean()*100:.2f}%)")
+                print(f"    - Classe 1 (Attack): {(y_train_balanced == 1).sum()} campioni ({(y_train_balanced == 1).mean()*100:.2f}%)")
+                print(f"    - Campioni sintetici generati: {len(X_train_balanced) - len(X_train)}")
+                
+                # Usa i dati di training bilanciati
+                X_train = X_train_balanced
+                y_train = y_train_balanced
+                
+                print(f"  - Test set rimane sbilanciato per valutazione realistica")
+                
+            except Exception as e:
+                print(f"  - Errore durante l'applicazione di SMOTE: {e}")
+                print(f"  - Continuazione con dati di training originali sbilanciati")
+        else:
+            print(f"  - Squilibrio accettabile, SMOTE non necessario")
+        
         print("=" * 70)
         
         # 3. Crea il modello

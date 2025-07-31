@@ -7,6 +7,8 @@ import sys
 import os
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
+from sklearn.impute import SimpleImputer
+from imblearn.over_sampling import SMOTE
 
 def load_client_smartgrid_data(client_id):
     """
@@ -49,7 +51,7 @@ def load_client_smartgrid_data(client_id):
     print(f"  - Campioni di attacco: {attack_samples} ({attack_ratio*100:.2f}%)")
     print(f"  - Campioni naturali: {natural_samples} ({(1-attack_ratio)*100:.2f}%)")
     
-    # Pulizia dei dati
+    # === PREPROCESSING STEP 1: GESTIONE VALORI MANCANTI ===
     print(f"Pulizia dei dati:")
     initial_samples = len(X)
 
@@ -58,11 +60,13 @@ def load_client_smartgrid_data(client_id):
     nan_count = X.isnull().sum().sum()
     print(f"  - Valori NaN trovati: {nan_count}")
 
-    # Imputazione dei NaN con la mediana
-    from sklearn.impute import SimpleImputer
-    imputer = SimpleImputer(strategy="median")
-    X_imputed = imputer.fit_transform(X)
-    X = pd.DataFrame(X_imputed, columns=X.columns)
+    # MODIFICA: Imputazione dei NaN con la mediana (invece di rimozione)
+    if nan_count > 0:
+        print(f"  - Applicazione imputazione con mediana...")
+        imputer = SimpleImputer(strategy="median")
+        X_imputed = imputer.fit_transform(X)
+        X = pd.DataFrame(X_imputed, columns=X.columns)
+        print(f"  - Imputazione completata")
 
     # y resta allineato (nessuna riga viene rimossa)
     final_samples = len(X)
@@ -73,12 +77,12 @@ def load_client_smartgrid_data(client_id):
     if final_samples == 0:
         raise ValueError(f"Nessun campione valido rimasto per il client {client_id}")
     
-    # Normalizzazione locale delle feature
+    # === PREPROCESSING STEP 2: NORMALIZZAZIONE ===
     print(f"Normalizzazione feature locali...")
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     
-    # Suddivisione in train/test locale
+    # Suddivisione in train/test locale PRIMA del bilanciamento
     X_train, X_test, y_train, y_test = train_test_split(
         X_scaled, y,
         test_size=0.2,
@@ -90,14 +94,67 @@ def load_client_smartgrid_data(client_id):
     print(f"  - Training set: {len(X_train)} campioni")
     print(f"  - Test set: {len(X_test)} campioni")
     
-    # Verifica distribuzione delle classi
+    # Verifica distribuzione delle classi prima del bilanciamento
     if len(X_train) > 0:
         train_attack_ratio = y_train.mean() if len(y_train) > 0 else 0
-        print(f"  - Proporzione attacchi training: {train_attack_ratio*100:.2f}%")
+        print(f"  - Proporzione attacchi training (originale): {train_attack_ratio*100:.2f}%")
     
     if len(X_test) > 0:
         test_attack_ratio = y_test.mean() if len(y_test) > 0 else 0
         print(f"  - Proporzione attacchi test: {test_attack_ratio*100:.2f}%")
+    
+    # === PREPROCESSING STEP 3: GESTIONE SQUILIBRIO CLASSI (SOLO TRAINING) ===
+    print(f"\n=== BILANCIAMENTO CLASSI SUL TRAINING SET ===")
+    
+    # Calcola il rapporto di squilibrio nel training set
+    if len(y_train) > 0:
+        train_attack_ratio = y_train.mean()
+        minority_class_ratio = min(train_attack_ratio, 1 - train_attack_ratio)
+        unique_classes = len(np.unique(y_train))
+        
+        print(f"  - Distribuzione training PRIMA del bilanciamento:")
+        print(f"    - Classe 0 (Natural): {(y_train == 0).sum()} campioni ({(1-train_attack_ratio)*100:.2f}%)")
+        print(f"    - Classe 1 (Attack): {(y_train == 1).sum()} campioni ({train_attack_ratio*100:.2f}%)")
+        print(f"    - Rapporto classe minoritaria: {minority_class_ratio*100:.2f}%")
+        
+        # Applica SMOTE solo se lo squilibrio è significativo e ci sono entrambe le classi
+        if minority_class_ratio < 0.4 and unique_classes > 1:
+            print(f"  - Squilibrio significativo rilevato, applicazione SMOTE al training set...")
+            
+            try:
+                # Configura SMOTE con k_neighbors adattivo
+                min_samples_per_class = min((y_train == 0).sum(), (y_train == 1).sum())
+                k_neighbors = min(5, min_samples_per_class - 1) if min_samples_per_class > 1 else 1
+                
+                smote = SMOTE(
+                    sampling_strategy='auto',
+                    random_state=42,
+                    k_neighbors=k_neighbors
+                )
+                
+                X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
+                
+                # Statistiche dopo il bilanciamento
+                print(f"  - SMOTE applicato con successo al training set")
+                print(f"  - Distribuzione training DOPO il bilanciamento:")
+                print(f"    - Classe 0 (Natural): {(y_train_balanced == 0).sum()} campioni ({(y_train_balanced == 0).mean()*100:.2f}%)")
+                print(f"    - Classe 1 (Attack): {(y_train_balanced == 1).sum()} campioni ({(y_train_balanced == 1).mean()*100:.2f}%)")
+                print(f"    - Campioni sintetici generati: {len(X_train_balanced) - len(X_train)}")
+                
+                # Usa i dati di training bilanciati
+                X_train = X_train_balanced
+                y_train = y_train_balanced
+                
+                print(f"  - Test set rimane sbilanciato per valutazione realistica")
+                
+            except Exception as e:
+                print(f"  - Errore durante l'applicazione di SMOTE: {e}")
+                print(f"  - Continuazione con dati di training originali")
+        else:
+            if unique_classes == 1:
+                print(f"  - ATTENZIONE: Presente solo una classe nei dati, SMOTE non applicabile")
+            else:
+                print(f"  - Squilibrio accettabile, SMOTE non necessario")
     
     # Informazioni del dataset per reporting
     dataset_info = {

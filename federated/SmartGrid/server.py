@@ -5,6 +5,9 @@ import sys
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
+from sklearn.impute import SimpleImputer
+from imblearn.over_sampling import SMOTE
+import os
 
 def get_smartgrid_evaluate_fn():
     """
@@ -58,21 +61,28 @@ def get_smartgrid_evaluate_fn():
         X_global = df_global.drop(columns=["marker"])
         y_global = (df_global["marker"] != "Natural").astype(int)
         
-        # Pulizia dati
-        X_global.replace([np.inf, -np.inf], np.nan, inplace=True)
-
-        # Imputazione con la mediana
-        from sklearn.impute import SimpleImputer
-        imputer = SimpleImputer(strategy="median")
-        X_global_imputed = imputer.fit_transform(X_global)
-        X_global = pd.DataFrame(X_global_imputed, columns=X_global.columns)
+        # === PREPROCESSING IDENTICO AI CLIENT ===
         
-        # Normalizzazione
+        # STEP 1: Gestione valori mancanti con imputazione
+        X_global.replace([np.inf, -np.inf], np.nan, inplace=True)
+        nan_count = X_global.isnull().sum().sum()
+        
+        if nan_count > 0:
+            print(f"  - Valori NaN trovati: {nan_count}, applicazione imputazione...")
+            imputer = SimpleImputer(strategy="median")
+            X_global_imputed = imputer.fit_transform(X_global)
+            X_global = pd.DataFrame(X_global_imputed, columns=X_global.columns)
+
+        # STEP 2: Normalizzazione
         scaler_global = StandardScaler()
         X_global_scaled = scaler_global.fit_transform(X_global)
         
+        # NOTA: Per la valutazione globale manteniamo i dati sbilanciati
+        # per rispecchiare la distribuzione reale (nessun SMOTE sul test set)
+        
         print(f"  - Dataset globale preparato: {len(X_global_scaled)} campioni")
         print(f"  - Attacchi: {y_global.sum()}, Naturali: {(y_global == 0).sum()}")
+        print(f"  - Dataset di test globale mantiene distribuzione reale (sbilanciata)")
         
         return X_global_scaled, y_global
     
