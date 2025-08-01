@@ -252,7 +252,7 @@ def train_smartgrid_model(model, X_train, y_train, X_val, y_val):
     print("=== ADDESTRAMENTO CENTRALIZZATO SMARTGRID ===")
     
     # Configurazione identica alla versione MNIST
-    epochs = 5
+    epochs = 66 # calcolato come (200 round * 5 epoche per round) / 15 client in modo tale da avere un confronto equo con la versione federata
     batch_size = 32  # Stesso batch size di MNIST
     
     print(f"Configurazione addestramento:")
