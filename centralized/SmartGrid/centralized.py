@@ -94,7 +94,7 @@ def load_centralized_smartgrid_data():
             for feature, count in features_with_nans.items():
                 print(f"    - {feature}: {count} NaN")
 
-        # MODIFICA: Imputazione dei NaN con la mediana (invece di rimozione)
+        # Imputazione dei NaN con la mediana (invece di rimozione)
         print(f"  - Applicazione imputazione con mediana...")
         imputer = SimpleImputer(strategy="median")
         X_imputed = imputer.fit_transform(X)
@@ -143,6 +143,66 @@ def load_centralized_smartgrid_data():
     
     return X_scaled, y, scaler, dataset_info
 
+def split_train_validation_test(X, y, train_size=0.7, val_size=0.15, test_size=0.15, random_state=42):
+    """
+    Suddivide il dataset in train (70%), validation (15%) e test (15%).
+    
+    Args:
+        X: Feature del dataset
+        y: Target del dataset
+        train_size: Proporzione per il training set (default: 0.7)
+        val_size: Proporzione per il validation set (default: 0.15)
+        test_size: Proporzione per il test set (default: 0.15)
+        random_state: Seed per riproducibilità
+    
+    Returns:
+        Tuple con (X_train, X_val, X_test, y_train, y_val, y_test)
+    """
+    print(f"=== SUDDIVISIONE TRAIN/VALIDATION/TEST ===")
+    
+    # Verifica che le proporzioni sommino a 1
+    total_size = train_size + val_size + test_size
+    if abs(total_size - 1.0) > 0.001:
+        raise ValueError(f"Le proporzioni devono sommare a 1.0, ricevuto: {total_size}")
+    
+    # Prima divisione: separa il training set dal resto (validation + test)
+    temp_val_test_size = val_size + test_size  # 0.30
+    X_train, X_temp, y_train, y_temp = train_test_split(
+        X, y,
+        test_size=temp_val_test_size,
+        random_state=random_state,
+        stratify=y
+    )
+    
+    # Seconda divisione: separa validation e test dal resto
+    # Calcola la proporzione relativa tra validation e test
+    relative_test_size = test_size / temp_val_test_size  # 0.15 / 0.30 = 0.5
+    
+    X_val, X_test, y_val, y_test = train_test_split(
+        X_temp, y_temp,
+        test_size=relative_test_size,
+        random_state=random_state,
+        stratify=y_temp
+    )
+    
+    # Stampa informazioni sulla suddivisione
+    print(f"  - Training set: {len(X_train)} campioni ({len(X_train)/len(X)*100:.1f}%)")
+    print(f"  - Validation set: {len(X_val)} campioni ({len(X_val)/len(X)*100:.1f}%)")
+    print(f"  - Test set: {len(X_test)} campioni ({len(X_test)/len(X)*100:.1f}%)")
+    
+    # Verifica distribuzione delle classi
+    train_attack_ratio = y_train.mean()
+    val_attack_ratio = y_val.mean()
+    test_attack_ratio = y_test.mean()
+    
+    print(f"  - Proporzione attacchi training: {train_attack_ratio*100:.2f}%")
+    print(f"  - Proporzione attacchi validation: {val_attack_ratio*100:.2f}%")
+    print(f"  - Proporzione attacchi test: {test_attack_ratio*100:.2f}%")
+    
+    print("=" * 60)
+    
+    return X_train, X_val, X_test, y_train, y_val, y_test
+
 def create_smartgrid_model(input_shape):
     """
     Crea il modello per la classificazione binaria SmartGrid.
@@ -176,15 +236,15 @@ def create_smartgrid_model(input_shape):
     
     return model
 
-def train_smartgrid_model(model, X_train, y_train, X_test, y_test):
+def train_smartgrid_model(model, X_train, y_train, X_val, y_val):
     """
     Addestra il modello SmartGrid sui dati centralizzati.
-    Configurazione identica alla versione MNIST centralizzata.
+    Utilizza validation set per monitoraggio durante l'addestramento.
     
     Args:
         model: Modello Keras da addestrare
         X_train, y_train: Dati di training (possibilmente bilanciati con SMOTE)
-        X_test, y_test: Dati di test per validazione (sbilanciati, distribuzione reale)
+        X_val, y_val: Dati di validation per monitoraggio (sbilanciati, distribuzione reale)
     
     Returns:
         History dell'addestramento
@@ -199,30 +259,30 @@ def train_smartgrid_model(model, X_train, y_train, X_test, y_test):
     print(f"  - Epoche: {epochs}")
     print(f"  - Batch size: {batch_size}")
     print(f"  - Campioni training: {len(X_train)}")
-    print(f"  - Campioni test: {len(X_test)}")
+    print(f"  - Campioni validation: {len(X_val)}")
     print(f"  - Batch per epoca: {len(X_train) // batch_size}")
     
-    # Distribuzione delle classi nei set di training e test
+    # Distribuzione delle classi nei set di training e validation
     train_attacks = y_train.sum()
     train_naturals = (y_train == 0).sum()
-    test_attacks = y_test.sum()
-    test_naturals = (y_test == 0).sum()
+    val_attacks = y_val.sum()
+    val_naturals = (y_val == 0).sum()
     
     print(f"  - Distribuzione training: {train_attacks} attacchi, {train_naturals} naturali")
-    print(f"  - Distribuzione test: {test_attacks} attacchi, {test_naturals} naturali")
+    print(f"  - Distribuzione validation: {val_attacks} attacchi, {val_naturals} naturali")
     
     print("=" * 60)
     
     # Registra il tempo di inizio
     start_time = time.time()
     
-    # Addestra il modello con validation data (come MNIST)
+    # Addestra il modello con validation data per monitoraggio
     print("Inizio addestramento...")
     history = model.fit(
         X_train, y_train,
         epochs=epochs,
         batch_size=batch_size,
-        validation_data=(X_test, y_test),  # Validazione ad ogni epoca
+        validation_data=(X_val, y_val),  # Validation per monitoraggio
         verbose=1  # Mostra il progresso dettagliato
     )
     
@@ -234,34 +294,34 @@ def train_smartgrid_model(model, X_train, y_train, X_test, y_test):
     
     return history
 
-def evaluate_smartgrid_model(model, X_test, y_test):
+def evaluate_smartgrid_model(model, X_test, y_test, set_name="Test"):
     """
-    Valuta il modello SmartGrid sui dati di test.
-    Output simile alla versione MNIST per facilità di confronto.
+    Valuta il modello SmartGrid sui dati specificati.
     
     Args:
         model: Modello addestrato
         X_test, y_test: Dati di test
+        set_name: Nome del set per logging (default: "Test")
     
     Returns:
         Tuple con (loss, accuracy)
     """
-    print("=== VALUTAZIONE FINALE SMARTGRID ===")
+    print(f"=== VALUTAZIONE FINALE SMARTGRID - {set_name.upper()} SET ===")
     
     # Valutazione finale
     loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
     
-    print(f"Risultati finali:")
-    print(f"  - Test Loss: {loss:.4f}")
-    print(f"  - Test Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
-    print(f"  - Campioni di test utilizzati: {len(X_test)}")
+    print(f"Risultati finali {set_name}:")
+    print(f"  - {set_name} Loss: {loss:.4f}")
+    print(f"  - {set_name} Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
+    print(f"  - Campioni di {set_name.lower()} utilizzati: {len(X_test)}")
     
-    # Predizioni per analisi dettagliata (come MNIST con accuracy per classe)
+    # Predizioni per analisi dettagliata
     predictions_prob = model.predict(X_test, verbose=0)
     predictions_binary = (predictions_prob > 0.5).astype(int).flatten()
     
-    # Analisi per classe (simile all'analisi per classe di MNIST)
-    print(f"\nAccuracy per classe:")
+    # Analisi per classe
+    print(f"\nAccuracy per classe ({set_name}):")
     
     # Classe 0 (Natural/Normale)
     natural_mask = (y_test == 0)
@@ -279,13 +339,13 @@ def evaluate_smartgrid_model(model, X_test, y_test):
         attack_count = np.sum(attack_mask)
         print(f"  Classe 1 (Attack): {attack_accuracy:.4f} ({attack_accuracy*100:.2f}%) - {attack_count} campioni")
     
-    # Matrice di confusione semplificata (informazioni aggiuntive)
+    # Matrice di confusione
     true_negatives = np.sum((y_test == 0) & (predictions_binary == 0))
     false_positives = np.sum((y_test == 0) & (predictions_binary == 1))
     false_negatives = np.sum((y_test == 1) & (predictions_binary == 0))
     true_positives = np.sum((y_test == 1) & (predictions_binary == 1))
     
-    print(f"\nMatrice di confusione:")
+    print(f"\nMatrice di confusione ({set_name}):")
     print(f"  - True Negatives (TN): {true_negatives}")
     print(f"  - False Positives (FP): {false_positives}") 
     print(f"  - False Negatives (FN): {false_negatives}")
@@ -296,7 +356,7 @@ def evaluate_smartgrid_model(model, X_test, y_test):
     recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
     f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
     
-    print(f"\nMetriche aggiuntive:")
+    print(f"\nMetriche aggiuntive ({set_name}):")
     print(f"  - Precision: {precision:.4f} ({precision*100:.2f}%)")
     print(f"  - Recall: {recall:.4f} ({recall*100:.2f}%)")
     print(f"  - F1-Score: {f1_score:.4f} ({f1_score*100:.2f}%)")
@@ -312,7 +372,7 @@ def print_training_summary(history, final_loss, final_accuracy, dataset_info):
     
     Args:
         history: History dell'addestramento
-        final_loss, final_accuracy: Metriche finali
+        final_loss, final_accuracy: Metriche finali del test set
         dataset_info: Informazioni sul dataset
     """
     print("=== RIASSUNTO ADDESTRAMENTO CENTRALIZZATO SMARTGRID ===")
@@ -332,8 +392,8 @@ def print_training_summary(history, final_loss, final_accuracy, dataset_info):
               f"{val_loss[epoch]:<12.4f} {val_accuracy[epoch]:<12.4f}")
     
     print(f"\nRisultati finali:")
-    print(f"  - Loss finale: {final_loss:.4f}")
-    print(f"  - Accuracy finale: {final_accuracy:.4f}")
+    print(f"  - Loss finale (Test): {final_loss:.4f}")
+    print(f"  - Accuracy finale (Test): {final_accuracy:.4f}")
     print(f"  - Miglioramento accuracy: {(final_accuracy - train_accuracy[0]):.4f}")
     
     # Informazioni sul dataset utilizzato
@@ -344,6 +404,7 @@ def print_training_summary(history, final_loss, final_accuracy, dataset_info):
     print(f"  - Campioni rimossi (pulizia): {dataset_info['removed_samples']}")
     print(f"  - Feature utilizzate: {dataset_info['features']}")
     print(f"  - Proporzione attacchi: {dataset_info['attack_ratio']*100:.2f}%")
+    print(f"  - Suddivisione: 70% train, 15% validation, 15% test")
     
     print("\n" + "=" * 70)
     print("ADDESTRAMENTO CENTRALIZZATO SMARTGRID COMPLETATO")
@@ -358,25 +419,21 @@ def main():
     print("INIZIO ADDESTRAMENTO CENTRALIZZATO SMARTGRID")
     print("Questo script addestra un modello di rilevamento intrusioni SmartGrid")
     print("usando un approccio centralizzato tradizionale.")
+    print("Suddivisione: 70% train, 15% validation, 15% test")
     print("=" * 70)
     
     try:
         # 1. Carica e prepara tutti i dati centralizzati
         X_scaled, y, scaler, dataset_info = load_centralized_smartgrid_data()
         
-        # 2. Suddividi in train/test (come MNIST) PRIMA del bilanciamento
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_scaled, y, 
-            test_size=0.2,      # Stessa proporzione di MNIST  
-            random_state=42,    # Stesso seed per riproducibilità
-            stratify=y          # Mantieni la proporzione delle classi
+        # 2. Suddividi in train/validation/test PRIMA del bilanciamento
+        X_train, X_val, X_test, y_train, y_val, y_test = split_train_validation_test(
+            X_scaled, y,
+            train_size=0.7,
+            val_size=0.15,
+            test_size=0.15,
+            random_state=42
         )
-        
-        print(f"Suddivisione train/test:")
-        print(f"  - Training set: {len(X_train)} campioni")
-        print(f"  - Test set: {len(X_test)} campioni")
-        print(f"  - Proporzione attacchi training (originale): {y_train.mean()*100:.2f}%")
-        print(f"  - Proporzione attacchi test: {y_test.mean()*100:.2f}%")
         
         # === PREPROCESSING STEP 3: GESTIONE SQUILIBRIO CLASSI (SOLO TRAINING) ===
         print(f"\n=== BILANCIAMENTO CLASSI SUL TRAINING SET ===")
@@ -415,7 +472,7 @@ def main():
                 X_train = X_train_balanced
                 y_train = y_train_balanced
                 
-                print(f"  - Test set rimane sbilanciato per valutazione realistica")
+                print(f"  - Validation e Test set rimangono sbilanciati per valutazione realistica")
                 
             except Exception as e:
                 print(f"  - Errore durante l'applicazione di SMOTE: {e}")
@@ -428,13 +485,18 @@ def main():
         # 3. Crea il modello
         model = create_smartgrid_model(X_train.shape[1])
         
-        # 4. Addestra il modello
-        history = train_smartgrid_model(model, X_train, y_train, X_test, y_test)
+        # 4. Addestra il modello (usa validation per monitoraggio)
+        history = train_smartgrid_model(model, X_train, y_train, X_val, y_val)
         
-        # 5. Valuta il modello
-        final_loss, final_accuracy = evaluate_smartgrid_model(model, X_test, y_test)
+        # 5. Valuta il modello sul validation set (per completezza)
+        print("\n" + "=" * 70)
+        evaluate_smartgrid_model(model, X_val, y_val, "Validation")
         
-        # 6. Stampa riassunto finale
+        # 6. Valuta il modello sul test set (valutazione finale)
+        print("\n" + "=" * 70)
+        final_loss, final_accuracy = evaluate_smartgrid_model(model, X_test, y_test, "Test")
+        
+        # 7. Stampa riassunto finale
         print_training_summary(history, final_loss, final_accuracy, dataset_info)
         
     except Exception as e:
