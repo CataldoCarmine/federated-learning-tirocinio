@@ -5,6 +5,8 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
+from sklearn.decomposition import PCA
+from sklearn.pipeline import Pipeline
 from imblearn.over_sampling import SMOTE
 import time
 import sys
@@ -16,7 +18,7 @@ def load_centralized_smartgrid_data():
     Simula il caso tradizionale dove tutti i dati sono disponibili centralmente.
     
     Returns:
-        Tuple con (X_scaled, y, scaler, dataset_info)
+        Tuple con (X, y, dataset_info)
     """
     print("=== CARICAMENTO DATASET SMARTGRID CENTRALIZZATO ===")
 
@@ -75,64 +77,15 @@ def load_centralized_smartgrid_data():
         percentage = (count / len(df_combined)) * 100
         print(f"  - {marker}: {count} campioni ({percentage:.2f}%)")
     
-    # === PREPROCESSING STEP 1: GESTIONE VALORI MANCANTI ===
-    print(f"\nPulizia dei dati:")
-    initial_samples = len(X)
-    
-    # Sostituisci valori infiniti con NaN
+    # Gestione preliminare valori infiniti
+    print(f"\nPulizia preliminare valori infiniti...")
     X.replace([np.inf, -np.inf], np.nan, inplace=True)
-    
-    # Conta i NaN per feature
-    nan_counts = X.isnull().sum()
-    total_nans = nan_counts.sum()
-    
-    if total_nans > 0:
-        print(f"  - Valori NaN trovati: {total_nans}")
-        features_with_nans = nan_counts[nan_counts > 0]
-        print(f"  - Feature con NaN: {len(features_with_nans)}")
-        if len(features_with_nans) <= 10:  # Mostra solo se poche
-            for feature, count in features_with_nans.items():
-                print(f"    - {feature}: {count} NaN")
-
-        # Imputazione dei NaN con la mediana (invece di rimozione)
-        print(f"  - Applicazione imputazione con mediana...")
-        imputer = SimpleImputer(strategy="median")
-        X_imputed = imputer.fit_transform(X)
-        X = pd.DataFrame(X_imputed, columns=X.columns)
-        print("  - Imputazione completata.")
-
-    else:
-        print(f"  - Nessun valore NaN trovato")
-    
-    final_samples = len(X)
-    removed_samples = initial_samples - final_samples
-    
-    print(f"  - Campioni rimossi: {removed_samples}")
-    print(f"  - Campioni finali: {final_samples}")
-    
-    if final_samples == 0:
-        raise ValueError("Nessun campione valido rimasto dopo la pulizia dei dati")
-    
-    # === PREPROCESSING STEP 2: NORMALIZZAZIONE ===
-    print(f"\nNormalizzazione feature...")
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    
-    # Verifica della normalizzazione (mostra solo le prime 5 feature)
-    feature_means = np.mean(X_scaled, axis=0)
-    feature_stds = np.std(X_scaled, axis=0)
-    
-    print(f"  - Verifica normalizzazione (prime 5 feature):")
-    print(f"    - Medie: {feature_means[:5]}")
-    print(f"    - Deviazioni standard: {feature_stds[:5]}")
     
     # Informazioni del dataset per il riassunto finale
     dataset_info = {
         'files_loaded': files_loaded,
         'total_files': len(files_loaded),
-        'initial_samples': initial_samples,
-        'final_samples': final_samples,
-        'removed_samples': removed_samples,
+        'total_samples': len(df_combined),
         'features': X.shape[1],
         'attack_samples': attack_samples,
         'natural_samples': natural_samples,
@@ -141,11 +94,12 @@ def load_centralized_smartgrid_data():
     
     print("=" * 60)
     
-    return X_scaled, y, scaler, dataset_info
+    return X, y, dataset_info
 
 def split_train_validation_test(X, y, train_size=0.7, val_size=0.15, test_size=0.15, random_state=42):
     """
-    Suddivide il dataset in train (70%), validation (15%) e test (15%).
+    STEP 1: Suddivide il dataset in train (70%), validation (15%) e test (15%).
+    Questo viene fatto PRIMA di qualsiasi preprocessing per evitare data leakage.
     
     Args:
         X: Feature del dataset
@@ -158,7 +112,7 @@ def split_train_validation_test(X, y, train_size=0.7, val_size=0.15, test_size=0
     Returns:
         Tuple con (X_train, X_val, X_test, y_train, y_val, y_test)
     """
-    print(f"=== SUDDIVISIONE TRAIN/VALIDATION/TEST ===")
+    print(f"=== STEP 1: SUDDIVISIONE TRAIN/VALIDATION/TEST (PRIMA DEL PREPROCESSING) ===")
     
     # Verifica che le proporzioni sommino a 1
     total_size = train_size + val_size + test_size
@@ -203,13 +157,155 @@ def split_train_validation_test(X, y, train_size=0.7, val_size=0.15, test_size=0
     
     return X_train, X_val, X_test, y_train, y_val, y_test
 
+def create_preprocessing_pipeline(variance_threshold=0.95):
+    """
+    Crea la pipeline di preprocessing scikit-learn.
+    STEP 2-3: Imputazione e Normalizzazione
+    
+    Args:
+        variance_threshold: Soglia per PCA
+    
+    Returns:
+        Pipeline di preprocessing
+    """
+    print(f"=== CREAZIONE PIPELINE PREPROCESSING ===")
+    print(f"  - Step 2: Imputazione con mediana")
+    print(f"  - Step 3: Normalizzazione con StandardScaler")
+    print(f"  - PCA verrà applicata successivamente dopo SMOTE")
+    
+    pipeline = Pipeline([
+        ('imputer', SimpleImputer(strategy='median')),
+        ('scaler', StandardScaler())
+    ])
+    
+    print("=" * 60)
+    
+    return pipeline
+
+def apply_smote_balancing(X_train, y_train):
+    """
+    STEP 4: Applica SMOTE per bilanciare le classi solo sul training set.
+    
+    Args:
+        X_train: Feature di training (già preprocessate)
+        y_train: Target di training
+    
+    Returns:
+        Tuple (X_train_balanced, y_train_balanced)
+    """
+    print(f"=== STEP 4: BILANCIAMENTO CLASSI CON SMOTE ===")
+    
+    # Calcola il rapporto di squilibrio nel training set
+    train_attack_ratio = y_train.mean()
+    minority_class_ratio = min(train_attack_ratio, 1 - train_attack_ratio)
+    
+    print(f"  - Distribuzione training PRIMA del bilanciamento:")
+    print(f"    - Classe 0 (Natural): {(y_train == 0).sum()} campioni ({(1-train_attack_ratio)*100:.2f}%)")
+    print(f"    - Classe 1 (Attack): {(y_train == 1).sum()} campioni ({train_attack_ratio*100:.2f}%)")
+    print(f"    - Rapporto classe minoritaria: {minority_class_ratio*100:.2f}%")
+    
+    # Applica SMOTE solo se lo squilibrio è significativo (< 40%)
+    if minority_class_ratio < 0.4:
+        print(f"  - Squilibrio significativo rilevato, applicazione SMOTE...")
+        
+        # Configura SMOTE
+        smote = SMOTE(
+            sampling_strategy='auto',  # Bilancia automaticamente alla classe maggioritaria
+            random_state=42,          # Per riproducibilità
+            k_neighbors=5             # Numero di vicini per generare campioni sintetici
+        )
+        
+        try:
+            X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
+            
+            # Statistiche dopo il bilanciamento
+            print(f"  - SMOTE applicato con successo")
+            print(f"  - Distribuzione training DOPO il bilanciamento:")
+            print(f"    - Classe 0 (Natural): {(y_train_balanced == 0).sum()} campioni ({(y_train_balanced == 0).mean()*100:.2f}%)")
+            print(f"    - Classe 1 (Attack): {(y_train_balanced == 1).sum()} campioni ({(y_train_balanced == 1).mean()*100:.2f}%)")
+            print(f"    - Campioni sintetici generati: {len(X_train_balanced) - len(X_train)}")
+            
+            print("=" * 60)
+            return X_train_balanced, y_train_balanced
+            
+        except Exception as e:
+            print(f"  - Errore durante l'applicazione di SMOTE: {e}")
+            print(f"  - Continuazione con dati originali sbilanciati")
+            print("=" * 60)
+            return X_train, y_train
+    else:
+        print(f"  - Squilibrio accettabile, SMOTE non necessario")
+        print("=" * 60)
+        return X_train, y_train
+
+def apply_pca_reduction(X_train, X_val, X_test, variance_threshold=0.95):
+    """
+    STEP 5: Applica PCA per riduzione dimensionale DOPO SMOTE.
+    Fit della PCA solo sul training set, transform su tutti i set.
+    
+    Args:
+        X_train: Dati di training (dopo SMOTE)
+        X_val: Dati di validation (preprocessati)
+        X_test: Dati di test (preprocessati)
+        variance_threshold: Soglia di varianza cumulativa
+    
+    Returns:
+        Tuple (X_train_pca, X_val_pca, X_test_pca, pca_object, n_components_selected)
+    """
+    print(f"=== STEP 5: RIDUZIONE DIMENSIONALE CON PCA ===")
+    
+    original_features = X_train.shape[1]
+    print(f"  - Feature originali: {original_features}")
+    print(f"  - Soglia varianza cumulativa: {variance_threshold*100:.1f}%")
+    
+    # Prima esecuzione: PCA completa per analizzare la varianza
+    pca_full = PCA()
+    pca_full.fit(X_train)  # Fit solo sui dati di training (inclusi quelli generati da SMOTE)
+    
+    # Calcola varianza cumulativa
+    cumulative_variance = np.cumsum(pca_full.explained_variance_ratio_)
+    
+    # Trova il numero di componenti necessarie per raggiungere la soglia
+    n_components_selected = np.argmax(cumulative_variance >= variance_threshold) + 1
+    
+    # Assicurati che il numero di componenti sia valido
+    n_components_selected = min(n_components_selected, original_features, len(X_train))
+    
+    print(f"  - Componenti selezionate: {n_components_selected}")
+    print(f"  - Varianza spiegata con {n_components_selected} componenti: {cumulative_variance[n_components_selected-1]*100:.2f}%")
+    print(f"  - Riduzione dimensionalità: {original_features} → {n_components_selected} ({(1-n_components_selected/original_features)*100:.1f}% riduzione)")
+    
+    # Mostra varianza spiegata dalle prime 10 componenti
+    print(f"  - Varianza spiegata dalle prime 10 componenti:")
+    for i in range(min(10, len(pca_full.explained_variance_ratio_))):
+        print(f"    - PC{i+1}: {pca_full.explained_variance_ratio_[i]*100:.2f}% (cumulativa: {cumulative_variance[i]*100:.2f}%)")
+    
+    # Seconda esecuzione: PCA con numero ottimale di componenti
+    pca_optimal = PCA(n_components=n_components_selected)
+    
+    # Fit della PCA solo sui dati di training
+    X_train_pca = pca_optimal.fit_transform(X_train)
+    
+    # Transform su validation e test usando la PCA fitted sul training
+    X_val_pca = pca_optimal.transform(X_val)
+    X_test_pca = pca_optimal.transform(X_test)
+    
+    print(f"  - Shape dopo PCA:")
+    print(f"    - Training: {X_train_pca.shape}")
+    print(f"    - Validation: {X_val_pca.shape}")
+    print(f"    - Test: {X_test_pca.shape}")
+    
+    print("=" * 60)
+    
+    return X_train_pca, X_val_pca, X_test_pca, pca_optimal, n_components_selected
+
 def create_smartgrid_model(input_shape):
     """
     Crea il modello per la classificazione binaria SmartGrid.
     Architettura identica a quella della versione MNIST centralizzata per consistenza.
     
     Args:
-        input_shape: Numero di feature in input
+        input_shape: Numero di feature in input (dopo PCA)
     
     Returns:
         Modello Keras compilato
@@ -218,7 +314,7 @@ def create_smartgrid_model(input_shape):
     
     # Crea il modello (architettura semplice per classificazione binaria)
     model = keras.Sequential([
-        keras.layers.Input(shape=(input_shape,)),    # Layer di input
+        keras.layers.Input(shape=(input_shape,)),    # Layer di input (feature ridotte da PCA)
         keras.layers.Dense(64, activation='relu'),   # Layer nascosto con 64 neuroni e ReLU
         keras.layers.Dense(1, activation='sigmoid')  # Layer di output con attivazione sigmoid per classificazione binaria
     ])
@@ -232,6 +328,7 @@ def create_smartgrid_model(input_shape):
     
     print("Architettura del modello:")
     model.summary()
+    print(f"Input shape del modello: {input_shape} feature (dopo riduzione PCA)")
     print("=" * 60)
     
     return model
@@ -243,8 +340,8 @@ def train_smartgrid_model(model, X_train, y_train, X_val, y_val):
     
     Args:
         model: Modello Keras da addestrare
-        X_train, y_train: Dati di training (possibilmente bilanciati con SMOTE)
-        X_val, y_val: Dati di validation per monitoraggio (sbilanciati, distribuzione reale)
+        X_train, y_train: Dati di training (bilanciati con SMOTE, con PCA applicata)
+        X_val, y_val: Dati di validation per monitoraggio (sbilanciati, distribuzione reale, con PCA applicata)
     
     Returns:
         History dell'addestramento
@@ -260,6 +357,7 @@ def train_smartgrid_model(model, X_train, y_train, X_val, y_val):
     print(f"  - Batch size: {batch_size}")
     print(f"  - Campioni training: {len(X_train)}")
     print(f"  - Campioni validation: {len(X_val)}")
+    print(f"  - Feature in input (post-PCA): {X_train.shape[1]}")
     print(f"  - Batch per epoca: {len(X_train) // batch_size}")
     
     # Distribuzione delle classi nei set di training e validation
@@ -300,7 +398,7 @@ def evaluate_smartgrid_model(model, X_test, y_test, set_name="Test"):
     
     Args:
         model: Modello addestrato
-        X_test, y_test: Dati di test
+        X_test, y_test: Dati di test (con PCA applicata)
         set_name: Nome del set per logging (default: "Test")
     
     Returns:
@@ -315,6 +413,7 @@ def evaluate_smartgrid_model(model, X_test, y_test, set_name="Test"):
     print(f"  - {set_name} Loss: {loss:.4f}")
     print(f"  - {set_name} Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
     print(f"  - Campioni di {set_name.lower()} utilizzati: {len(X_test)}")
+    print(f"  - Feature utilizzate (post-PCA): {X_test.shape[1]}")
     
     # Predizioni per analisi dettagliata
     predictions_prob = model.predict(X_test, verbose=0)
@@ -365,7 +464,7 @@ def evaluate_smartgrid_model(model, X_test, y_test, set_name="Test"):
     
     return loss, accuracy
 
-def print_training_summary(history, final_loss, final_accuracy, dataset_info):
+def print_training_summary(history, final_loss, final_accuracy, dataset_info, pca_components):
     """
     Stampa un riassunto dell'addestramento SmartGrid.
     Formato identico alla versione MNIST per facilità di confronto.
@@ -374,6 +473,7 @@ def print_training_summary(history, final_loss, final_accuracy, dataset_info):
         history: History dell'addestramento
         final_loss, final_accuracy: Metriche finali del test set
         dataset_info: Informazioni sul dataset
+        pca_components: Numero di componenti PCA selezionate
     """
     print("=== RIASSUNTO ADDESTRAMENTO CENTRALIZZATO SMARTGRID ===")
     
@@ -399,105 +499,88 @@ def print_training_summary(history, final_loss, final_accuracy, dataset_info):
     # Informazioni sul dataset utilizzato
     print(f"\nInformazioni dataset:")
     print(f"  - File utilizzati: {dataset_info['total_files']} (data{min(dataset_info['files_loaded'])}.csv - data{max(dataset_info['files_loaded'])}.csv)")
-    print(f"  - Campioni totali processati: {dataset_info['initial_samples']}")
-    print(f"  - Campioni utilizzati: {dataset_info['final_samples']}")
-    print(f"  - Campioni rimossi (pulizia): {dataset_info['removed_samples']}")
-    print(f"  - Feature utilizzate: {dataset_info['features']}")
+    print(f"  - Campioni totali processati: {dataset_info['total_samples']}")
+    print(f"  - Feature originali: {dataset_info['features']}")
+    print(f"  - Feature dopo PCA: {pca_components}")
+    print(f"  - Riduzione dimensionalità: {(1-pca_components/dataset_info['features'])*100:.1f}%")
     print(f"  - Proporzione attacchi: {dataset_info['attack_ratio']*100:.2f}%")
     print(f"  - Suddivisione: 70% train, 15% validation, 15% test")
+    print(f"  - Pipeline preprocessing: Split → Imputazione → Normalizzazione → SMOTE → PCA")
     
     print("\n" + "=" * 70)
-    print("ADDESTRAMENTO CENTRALIZZATO SMARTGRID COMPLETATO")
+    print("ADDESTRAMENTO CENTRALIZZATO SMARTGRID CON PIPELINE COMPLETATO")
     print("Ora puoi confrontare questi risultati con l'approccio federato.")
     print("=" * 70)
 
 def main():
     """
     Funzione principale per l'addestramento centralizzato SmartGrid.
-    Struttura identica alla versione MNIST centralizzata.
+    Implementa la pipeline corretta di preprocessing.
     """
-    print("INIZIO ADDESTRAMENTO CENTRALIZZATO SMARTGRID")
+    print("INIZIO ADDESTRAMENTO CENTRALIZZATO SMARTGRID CON PIPELINE CORRETTA")
     print("Questo script addestra un modello di rilevamento intrusioni SmartGrid")
-    print("usando un approccio centralizzato tradizionale.")
+    print("usando un approccio centralizzato con pipeline di preprocessing corretta.")
+    print("Pipeline: Split → Imputazione → Normalizzazione → SMOTE → PCA")
     print("Suddivisione: 70% train, 15% validation, 15% test")
     print("=" * 70)
     
     try:
-        # 1. Carica e prepara tutti i dati centralizzati
-        X_scaled, y, scaler, dataset_info = load_centralized_smartgrid_data()
+        # 1. Carica i dati grezzi
+        X, y, dataset_info = load_centralized_smartgrid_data()
         
-        # 2. Suddividi in train/validation/test PRIMA del bilanciamento
-        X_train, X_val, X_test, y_train, y_val, y_test = split_train_validation_test(
-            X_scaled, y,
+        # STEP 1: Suddividi in train/validation/test CON DATI ORIGINALI (no preprocessing)
+        X_train_raw, X_val_raw, X_test_raw, y_train, y_val, y_test = split_train_validation_test(
+            X, y,
             train_size=0.7,
             val_size=0.15,
             test_size=0.15,
             random_state=42
         )
         
-        # === PREPROCESSING STEP 3: GESTIONE SQUILIBRIO CLASSI (SOLO TRAINING) ===
-        print(f"\n=== BILANCIAMENTO CLASSI SUL TRAINING SET ===")
+        # STEP 2-3: Crea e applica pipeline di preprocessing (Imputazione + Normalizzazione)
+        preprocessing_pipeline = create_preprocessing_pipeline()
         
-        # Calcola il rapporto di squilibrio nel training set
-        train_attack_ratio = y_train.mean()
-        minority_class_ratio = min(train_attack_ratio, 1 - train_attack_ratio)
+        print(f"=== STEP 2-3: APPLICAZIONE PIPELINE PREPROCESSING ===")
+        print(f"  - Fit della pipeline sui dati di training")
+        print(f"  - Transform su training, validation e test")
         
-        print(f"  - Distribuzione training PRIMA del bilanciamento:")
-        print(f"    - Classe 0 (Natural): {(y_train == 0).sum()} campioni ({(1-train_attack_ratio)*100:.2f}%)")
-        print(f"    - Classe 1 (Attack): {(y_train == 1).sum()} campioni ({train_attack_ratio*100:.2f}%)")
-        print(f"    - Rapporto classe minoritaria: {minority_class_ratio*100:.2f}%")
+        # Fit della pipeline SOLO sui dati di training
+        X_train_preprocessed = preprocessing_pipeline.fit_transform(X_train_raw)
         
-        # Applica SMOTE solo se lo squilibrio è significativo (< 40%)
-        if minority_class_ratio < 0.4:
-            print(f"  - Squilibrio significativo rilevato, applicazione SMOTE al training set...")
-            
-            # Configura SMOTE
-            smote = SMOTE(
-                sampling_strategy='auto',  # Bilancia automaticamente alla classe maggioritaria
-                random_state=42,          # Per riproducibilità
-                k_neighbors=5             # Numero di vicini per generare campioni sintetici
-            )
-            
-            try:
-                X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
-                
-                # Statistiche dopo il bilanciamento
-                print(f"  - SMOTE applicato con successo al training set")
-                print(f"  - Distribuzione training DOPO il bilanciamento:")
-                print(f"    - Classe 0 (Natural): {(y_train_balanced == 0).sum()} campioni ({(y_train_balanced == 0).mean()*100:.2f}%)")
-                print(f"    - Classe 1 (Attack): {(y_train_balanced == 1).sum()} campioni ({(y_train_balanced == 1).mean()*100:.2f}%)")
-                print(f"    - Campioni sintetici generati: {len(X_train_balanced) - len(X_train)}")
-                
-                # Usa i dati di training bilanciati
-                X_train = X_train_balanced
-                y_train = y_train_balanced
-                
-                print(f"  - Validation e Test set rimangono sbilanciati per valutazione realistica")
-                
-            except Exception as e:
-                print(f"  - Errore durante l'applicazione di SMOTE: {e}")
-                print(f"  - Continuazione con dati di training originali sbilanciati")
-        else:
-            print(f"  - Squilibrio accettabile, SMOTE non necessario")
+        # Transform su validation e test con i parametri appresi dal training
+        X_val_preprocessed = preprocessing_pipeline.transform(X_val_raw)
+        X_test_preprocessed = preprocessing_pipeline.transform(X_test_raw)
         
-        print("=" * 70)
+        print(f"  - Training preprocessed shape: {X_train_preprocessed.shape}")
+        print(f"  - Validation preprocessed shape: {X_val_preprocessed.shape}")
+        print(f"  - Test preprocessed shape: {X_test_preprocessed.shape}")
+        print("=" * 60)
         
-        # 3. Crea il modello
-        model = create_smartgrid_model(X_train.shape[1])
+        # STEP 4: Applica SMOTE solo sul training set
+        X_train_balanced, y_train_balanced = apply_smote_balancing(X_train_preprocessed, y_train)
         
-        # 4. Addestra il modello (usa validation per monitoraggio)
-        history = train_smartgrid_model(model, X_train, y_train, X_val, y_val)
+        # STEP 5: Applica PCA (fit sui dati bilanciati, transform su tutti)
+        X_train_final, X_val_final, X_test_final, pca_object, n_components = apply_pca_reduction(
+            X_train_balanced, X_val_preprocessed, X_test_preprocessed,
+            variance_threshold=0.95
+        )
         
-        # 5. Valuta il modello sul validation set (per completezza)
+        # 6. Crea il modello (con input shape delle feature ridotte da PCA)
+        model = create_smartgrid_model(n_components)
+        
+        # 7. Addestra il modello
+        history = train_smartgrid_model(model, X_train_final, y_train_balanced, X_val_final, y_val)
+        
+        # 8. Valuta il modello sul validation set (per completezza)
         print("\n" + "=" * 70)
-        evaluate_smartgrid_model(model, X_val, y_val, "Validation")
+        evaluate_smartgrid_model(model, X_val_final, y_val, "Validation")
         
-        # 6. Valuta il modello sul test set (valutazione finale)
+        # 9. Valuta il modello sul test set (valutazione finale)
         print("\n" + "=" * 70)
-        final_loss, final_accuracy = evaluate_smartgrid_model(model, X_test, y_test, "Test")
+        final_loss, final_accuracy = evaluate_smartgrid_model(model, X_test_final, y_test, "Test")
         
-        # 7. Stampa riassunto finale
-        print_training_summary(history, final_loss, final_accuracy, dataset_info)
+        # 10. Stampa riassunto finale
+        print_training_summary(history, final_loss, final_accuracy, dataset_info, n_components)
         
     except Exception as e:
         print(f"Errore durante l'esecuzione: {e}")
