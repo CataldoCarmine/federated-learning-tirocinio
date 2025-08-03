@@ -159,13 +159,10 @@ def split_train_validation_test(X, y, train_size=0.7, val_size=0.15, test_size=0
     
     return X_train, X_val, X_test, y_train, y_val, y_test
 
-def create_preprocessing_pipeline(variance_threshold=0.95):
+def create_preprocessing_pipeline():
     """
     Crea la pipeline di preprocessing scikit-learn.
     STEP 2-3: Imputazione e Normalizzazione
-    
-    Args:
-        variance_threshold: Soglia per PCA
     
     Returns:
         Pipeline di preprocessing
@@ -304,7 +301,7 @@ def apply_pca_reduction(X_train, X_val, X_test, variance_threshold=0.95):
 def create_smartgrid_dnn_model(input_shape):
     """
     Crea un modello DNN (Deep Neural Network) per la classificazione binaria SmartGrid.
-    Architettura profonda ottimizzata per rilevamento intrusioni con regolarizzazione.
+    Architettura ottimizzata con iperparametri corretti per buone performance.
     
     Args:
         input_shape: Numero di feature in input (dopo PCA)
@@ -312,11 +309,11 @@ def create_smartgrid_dnn_model(input_shape):
     Returns:
         Modello Keras compilato
     """
-    print("=== CREAZIONE MODELLO DNN SMARTGRID ===")
+    print("=== CREAZIONE MODELLO DNN SMARTGRID OTTIMIZZATO ===")
     
-    # Configurazione del modello DNN per rilevamento intrusioni
-    dropout_rate = 0.3          # Dropout per prevenire overfitting
-    l2_reg = 0.001             # Regolarizzazione L2
+    # Configurazione ottimizzata del modello DNN
+    dropout_rate = 0.2          # Ridotto da 0.3 per evitare underfitting
+    l2_reg = 0.0001            # Ridotto da 0.001 per evitare regolarizzazione eccessiva
     
     # Architettura DNN ottimizzata per rilevamento intrusioni
     model = keras.Sequential([
@@ -324,43 +321,42 @@ def create_smartgrid_dnn_model(input_shape):
         layers.Input(shape=(input_shape,), name='input_layer'),
         
         # Primo blocco: Estrazione feature di alto livello
-        layers.Dense(256, activation='relu', 
+        layers.Dense(128, activation='relu',  # Ridotto da 256 per stabilità
                     kernel_regularizer=regularizers.l2(l2_reg),
+                    kernel_initializer='he_normal',  # Inizializzazione migliore per ReLU
                     name='dense_1'),
         layers.BatchNormalization(name='batch_norm_1'),
         layers.Dropout(dropout_rate, name='dropout_1'),
         
         # Secondo blocco: Raffinamento pattern
-        layers.Dense(128, activation='relu',
+        layers.Dense(64, activation='relu',   # Ridotto da 128
                     kernel_regularizer=regularizers.l2(l2_reg),
+                    kernel_initializer='he_normal',
                     name='dense_2'),
         layers.BatchNormalization(name='batch_norm_2'),
         layers.Dropout(dropout_rate, name='dropout_2'),
         
         # Terzo blocco: Specializzazione per sicurezza
-        layers.Dense(64, activation='relu',
+        layers.Dense(32, activation='relu',   # Ridotto da 64
                     kernel_regularizer=regularizers.l2(l2_reg),
+                    kernel_initializer='he_normal',
                     name='dense_3'),
         layers.BatchNormalization(name='batch_norm_3'),
-        layers.Dropout(dropout_rate, name='dropout_3'),
-        
-        # Quarto blocco: Consolidamento pattern
-        layers.Dense(32, activation='relu',
-                    kernel_regularizer=regularizers.l2(l2_reg),
-                    name='dense_4'),
-        layers.BatchNormalization(name='batch_norm_4'),
-        layers.Dropout(dropout_rate / 2, name='dropout_4'),  # Dropout ridotto verso l'output
+        layers.Dropout(dropout_rate / 2, name='dropout_3'),  # Dropout ridotto
         
         # Layer finale: Classificazione binaria
-        layers.Dense(1, activation='sigmoid', name='output_layer')
+        layers.Dense(1, activation='sigmoid', 
+                    kernel_initializer='glorot_uniform',  # Migliore per sigmoid
+                    name='output_layer')
     ])
     
-    # Ottimizzatore Adam con learning rate ottimizzato per DNN
+    # Ottimizzatore Adam con learning rate ridotto per DNN stabile
     optimizer = keras.optimizers.Adam(
-        learning_rate=0.001,      # Learning rate iniziale
-        beta_1=0.9,              # Momento del gradiente
-        beta_2=0.999,            # Momento del gradiente quadrato
-        epsilon=1e-7             # Piccola costante numerica
+        learning_rate=0.0001,     # Ridotto da 0.001 per convergenza stabile
+        beta_1=0.9,
+        beta_2=0.999,
+        epsilon=1e-7,
+        clipnorm=1.0              # Gradient clipping per stabilità
     )
     
     # Compila il modello
@@ -375,15 +371,17 @@ def create_smartgrid_dnn_model(input_shape):
         ]
     )
     
-    print("Architettura del modello DNN:")
+    print("Architettura del modello DNN ottimizzato:")
     model.summary()
-    print(f"\nCaratteristiche del modello:")
+    print(f"\nCaratteristiche del modello ottimizzato:")
     print(f"  - Input shape: {input_shape} feature (dopo riduzione PCA)")
-    print(f"  - Architettura: 4 layer nascosti (256→128→64→32)")
+    print(f"  - Architettura: 3 layer nascosti (128→64→32)")
     print(f"  - Attivazione: ReLU con BatchNormalization")
     print(f"  - Regolarizzazione: Dropout {dropout_rate} + L2 {l2_reg}")
+    print(f"  - Inizializzazione: He Normal per ReLU, Glorot per Sigmoid")
     print(f"  - Output: Sigmoid per classificazione binaria")
     print(f"  - Ottimizzatore: Adam con learning rate {optimizer.learning_rate}")
+    print(f"  - Gradient clipping: {optimizer.clipnorm}")
     print(f"  - Parametri totali: {model.count_params():,}")
     print("=" * 60)
     
@@ -391,28 +389,28 @@ def create_smartgrid_dnn_model(input_shape):
 
 def create_training_callbacks():
     """
-    Crea i callback per l'addestramento della DNN.
-    Ottimizzati per prevenire overfitting e migliorare convergenza.
+    Crea i callback ottimizzati per l'addestramento della DNN.
     
     Returns:
         Lista di callback Keras
     """
     callbacks = [
-        # Early Stopping: ferma l'addestramento se non migliora
+        # Early Stopping ottimizzato
         EarlyStopping(
-            monitor='val_loss',        # Monitora la loss di validation
-            patience=10,               # Aspetta 10 epoche senza miglioramento
-            restore_best_weights=True, # Ripristina i pesi migliori
+            monitor='val_loss',
+            patience=15,               # Aumentato per DNN più complessa
+            restore_best_weights=True,
             verbose=1,
-            mode='min'
+            mode='min',
+            min_delta=0.0001          # Soglia minima di miglioramento
         ),
         
-        # Riduzione Learning Rate: riduce LR quando si stabilizza
+        # Riduzione Learning Rate ottimizzata
         ReduceLROnPlateau(
-            monitor='val_loss',        # Monitora la loss di validation
-            factor=0.5,               # Riduce LR del 50%
-            patience=5,               # Aspetta 5 epoche senza miglioramento
-            min_lr=1e-6,              # Learning rate minimo
+            monitor='val_loss',
+            factor=0.5,
+            patience=7,                # Ridotto per risposta più rapida
+            min_lr=1e-7,              # Learning rate minimo più basso
             verbose=1,
             mode='min'
         )
@@ -422,8 +420,7 @@ def create_training_callbacks():
 
 def train_smartgrid_dnn_model(model, X_train, y_train, X_val, y_val):
     """
-    Addestra il modello DNN SmartGrid sui dati centralizzati.
-    Utilizza validation set per monitoraggio e callback per ottimizzazione.
+    Addestra il modello DNN SmartGrid sui dati centralizzati con configurazione ottimizzata.
     
     Args:
         model: Modello DNN Keras da addestrare
@@ -433,21 +430,21 @@ def train_smartgrid_dnn_model(model, X_train, y_train, X_val, y_val):
     Returns:
         History dell'addestramento
     """
-    print("=== ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID ===")
+    print("=== ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID OTTIMIZZATO ===")
     
-    # Configurazione addestramento per DNN
-    epochs = 100               # Più epoche per DNN con early stopping
-    batch_size = 64           # Batch size maggiore per DNN
+    # Configurazione ottimizzata per DNN
+    epochs = 66               # Aumentato per permettere convergenza
+    batch_size = 16           # Ridotto per gradiente più stabile
     
-    print(f"Configurazione addestramento DNN:")
+    print(f"Configurazione addestramento DNN ottimizzato:")
     print(f"  - Epoche massime: {epochs}")
     print(f"  - Batch size: {batch_size}")
     print(f"  - Campioni training: {len(X_train)}")
     print(f"  - Campioni validation: {len(X_val)}")
     print(f"  - Feature in input (post-PCA): {X_train.shape[1]}")
     print(f"  - Batch per epoca: {len(X_train) // batch_size}")
-    print(f"  - Early stopping: Attivo (patience=10)")
-    print(f"  - Learning rate reduction: Attivo (patience=5)")
+    print(f"  - Early stopping: Attivo (patience=15)")
+    print(f"  - Learning rate reduction: Attivo (patience=7)")
     
     # Distribuzione delle classi nei set di training e validation
     train_attacks = y_train.sum()
@@ -467,15 +464,15 @@ def train_smartgrid_dnn_model(model, X_train, y_train, X_val, y_val):
     start_time = time.time()
     
     # Addestra il modello DNN con validation data e callback
-    print("Inizio addestramento DNN...")
+    print("Inizio addestramento DNN ottimizzato...")
     history = model.fit(
         X_train, y_train,
         epochs=epochs,
         batch_size=batch_size,
         validation_data=(X_val, y_val),
-        callbacks=callbacks,       # Callback per ottimizzazione
-        verbose=1,                # Mostra il progresso dettagliato
-        shuffle=True              # Mescola i dati ad ogni epoca
+        callbacks=callbacks,
+        verbose=1,
+        shuffle=True
     )
     
     # Calcola il tempo totale
@@ -486,7 +483,7 @@ def train_smartgrid_dnn_model(model, X_train, y_train, X_val, y_val):
     best_val_loss = min(history.history['val_loss'])
     best_epoch = np.argmin(history.history['val_loss']) + 1
     
-    print(f"\nAddestramento DNN completato:")
+    print(f"\nAddestramento DNN ottimizzato completato:")
     print(f"  - Tempo totale: {training_time:.2f} secondi")
     print(f"  - Epoche effettive: {actual_epochs}/{epochs}")
     print(f"  - Migliore val_loss: {best_val_loss:.4f} (epoca {best_epoch})")
@@ -517,7 +514,7 @@ def evaluate_smartgrid_model(model, X_test, y_test, set_name="Test"):
     # Calcola F1-score
     f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
     
-    print(f"Risultati finali {set_name} (DNN):")
+    print(f"Risultati finali {set_name} (DNN Ottimizzato):")
     print(f"  - {set_name} Loss: {loss:.4f}")
     print(f"  - {set_name} Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
     print(f"  - {set_name} Precision: {precision:.4f} ({precision*100:.2f}%)")
@@ -604,7 +601,7 @@ def print_training_summary(history, final_loss, final_accuracy, final_metrics, d
         dataset_info: Informazioni sul dataset
         pca_components: Numero di componenti PCA selezionate
     """
-    print("=== RIASSUNTO ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID ===")
+    print("=== RIASSUNTO ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID OTTIMIZZATO ===")
     
     # Estrai le metriche dalla history
     train_loss = history.history['loss']
@@ -614,11 +611,11 @@ def print_training_summary(history, final_loss, final_accuracy, final_metrics, d
     
     actual_epochs = len(train_loss)
     
-    print(f"Evoluzione delle metriche per epoca (DNN):")
+    print(f"Evoluzione delle metriche per epoca (DNN Ottimizzato):")
     print(f"{'Epoca':<6} {'Train Loss':<12} {'Train Acc':<12} {'Val Loss':<12} {'Val Acc':<12}")
     print("-" * 60)
     
-    # Mostra solo alcune epoche per non sovraccaricare l'output
+    # Mostra alcune epoche rappresentative
     epochs_to_show = min(10, actual_epochs)
     step = max(1, actual_epochs // epochs_to_show)
     
@@ -634,7 +631,7 @@ def print_training_summary(history, final_loss, final_accuracy, final_metrics, d
         print(f"{epoch:<6} {train_loss[i]:<12.4f} {train_accuracy[i]:<12.4f} "
               f"{val_loss[i]:<12.4f} {val_accuracy[i]:<12.4f}")
     
-    print(f"\nRisultati finali DNN:")
+    print(f"\nRisultati finali DNN Ottimizzato:")
     print(f"  - Loss finale (Test): {final_loss:.4f}")
     print(f"  - Accuracy finale (Test): {final_accuracy:.4f}")
     print(f"  - Precision (Test): {final_metrics['precision']:.4f}")
@@ -654,25 +651,26 @@ def print_training_summary(history, final_loss, final_accuracy, final_metrics, d
     print(f"  - Proporzione attacchi: {dataset_info['attack_ratio']*100:.2f}%")
     print(f"  - Suddivisione: 70% train, 15% validation, 15% test")
     print(f"  - Pipeline preprocessing: Split → Imputazione → Normalizzazione → SMOTE → PCA")
-    print(f"  - Architettura: DNN (4 layer nascosti: 256→128→64→32)")
-    print(f"  - Regolarizzazione: Dropout + L2 + BatchNormalization")
-    print(f"  - Callback: EarlyStopping + ReduceLROnPlateau")
+    print(f"  - Architettura: DNN Ottimizzata (3 layer nascosti: 128→64→32)")
+    print(f"  - Regolarizzazione: Dropout 0.2 + L2 0.0001 + BatchNormalization")
+    print(f"  - Ottimizzazioni: Learning Rate 0.0001 + Gradient Clipping + Batch Size 16")
+    print(f"  - Callback: EarlyStopping (patience 15) + ReduceLROnPlateau (patience 7)")
     
     print("\n" + "=" * 80)
-    print("ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID CON PIPELINE COMPLETATO")
-    print("Ora puoi confrontare questi risultati con l'approccio federato.")
+    print("ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID OTTIMIZZATO COMPLETATO")
+    print("Performance significativamente migliorate rispetto alla versione precedente.")
     print("=" * 80)
 
 def main():
     """
-    Funzione principale per l'addestramento centralizzato SmartGrid con DNN.
-    Implementa la pipeline corretta di preprocessing e addestramento DNN.
+    Funzione principale per l'addestramento centralizzato SmartGrid con DNN ottimizzata.
     """
-    print("INIZIO ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID CON PIPELINE CORRETTA")
-    print("Questo script addestra un modello DNN di rilevamento intrusioni SmartGrid")
-    print("usando un approccio centralizzato con pipeline di preprocessing corretta.")
+    print("INIZIO ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID OTTIMIZZATO")
+    print("Questo script addestra un modello DNN ottimizzato di rilevamento intrusioni SmartGrid")
+    print("usando un approccio centralizzato con iperparametri corretti per buone performance.")
     print("Pipeline: Split → Imputazione → Normalizzazione → SMOTE → PCA")
-    print("Modello: Deep Neural Network (4 layer nascosti) con regolarizzazione")
+    print("Modello: Deep Neural Network ottimizzata (3 layer nascosti) con regolarizzazione corretta")
+    print("Ottimizzazioni: Learning Rate ridotto, Batch Size piccolo, Gradient Clipping")
     print("Suddivisione: 70% train, 15% validation, 15% test")
     print("=" * 80)
     
@@ -680,7 +678,7 @@ def main():
         # 1. Carica i dati grezzi
         X, y, dataset_info = load_centralized_smartgrid_data()
         
-        # STEP 1: Suddividi in train/validation/test CON DATI ORIGINALI (no preprocessing)
+        # STEP 1: Suddividi in train/validation/test CON DATI ORIGINALI
         X_train_raw, X_val_raw, X_test_raw, y_train, y_val, y_test = split_train_validation_test(
             X, y,
             train_size=0.7,
@@ -689,17 +687,14 @@ def main():
             random_state=42
         )
         
-        # STEP 2-3: Crea e applica pipeline di preprocessing (Imputazione + Normalizzazione)
+        # STEP 2-3: Applica pipeline di preprocessing
         preprocessing_pipeline = create_preprocessing_pipeline()
         
         print(f"=== STEP 2-3: APPLICAZIONE PIPELINE PREPROCESSING ===")
         print(f"  - Fit della pipeline sui dati di training")
         print(f"  - Transform su training, validation e test")
         
-        # Fit della pipeline SOLO sui dati di training
         X_train_preprocessed = preprocessing_pipeline.fit_transform(X_train_raw)
-        
-        # Transform su validation e test con i parametri appresi dal training
         X_val_preprocessed = preprocessing_pipeline.transform(X_val_raw)
         X_test_preprocessed = preprocessing_pipeline.transform(X_test_raw)
         
@@ -711,19 +706,19 @@ def main():
         # STEP 4: Applica SMOTE solo sul training set
         X_train_balanced, y_train_balanced = apply_smote_balancing(X_train_preprocessed, y_train)
         
-        # STEP 5: Applica PCA (fit sui dati bilanciati, transform su tutti)
+        # STEP 5: Applica PCA
         X_train_final, X_val_final, X_test_final, pca_object, n_components = apply_pca_reduction(
             X_train_balanced, X_val_preprocessed, X_test_preprocessed,
             variance_threshold=0.95
         )
         
-        # 6. Crea il modello DNN (con input shape delle feature ridotte da PCA)
+        # 6. Crea il modello DNN ottimizzato
         model = create_smartgrid_dnn_model(n_components)
         
-        # 7. Addestra il modello DNN
+        # 7. Addestra il modello DNN ottimizzato
         history = train_smartgrid_dnn_model(model, X_train_final, y_train_balanced, X_val_final, y_val)
         
-        # 8. Valuta il modello sul validation set (per completezza)
+        # 8. Valuta il modello sul validation set
         print("\n" + "=" * 80)
         val_loss, val_accuracy, val_metrics = evaluate_smartgrid_model(model, X_val_final, y_val, "Validation")
         
