@@ -1,5 +1,7 @@
 import tensorflow as tf
 from tensorflow import keras
+from tensorflow.keras import layers, regularizers
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -299,10 +301,10 @@ def apply_pca_reduction(X_train, X_val, X_test, variance_threshold=0.95):
     
     return X_train_pca, X_val_pca, X_test_pca, pca_optimal, n_components_selected
 
-def create_smartgrid_model(input_shape):
+def create_smartgrid_dnn_model(input_shape):
     """
-    Crea il modello per la classificazione binaria SmartGrid.
-    Architettura identica a quella della versione MNIST centralizzata per consistenza.
+    Crea un modello DNN (Deep Neural Network) per la classificazione binaria SmartGrid.
+    Architettura profonda ottimizzata per rilevamento intrusioni con regolarizzazione.
     
     Args:
         input_shape: Numero di feature in input (dopo PCA)
@@ -310,55 +312,142 @@ def create_smartgrid_model(input_shape):
     Returns:
         Modello Keras compilato
     """
-    print("=== CREAZIONE MODELLO SMARTGRID ===")
+    print("=== CREAZIONE MODELLO DNN SMARTGRID ===")
     
-    # Crea il modello (architettura semplice per classificazione binaria)
+    # Configurazione del modello DNN per rilevamento intrusioni
+    dropout_rate = 0.3          # Dropout per prevenire overfitting
+    l2_reg = 0.001             # Regolarizzazione L2
+    
+    # Architettura DNN ottimizzata per rilevamento intrusioni
     model = keras.Sequential([
-        keras.layers.Input(shape=(input_shape,)),    # Layer di input (feature ridotte da PCA)
-        keras.layers.Dense(64, activation='relu'),   # Layer nascosto con 64 neuroni e ReLU
-        keras.layers.Dense(1, activation='sigmoid')  # Layer di output con attivazione sigmoid per classificazione binaria
+        # Layer di input
+        layers.Input(shape=(input_shape,), name='input_layer'),
+        
+        # Primo blocco: Estrazione feature di alto livello
+        layers.Dense(256, activation='relu', 
+                    kernel_regularizer=regularizers.l2(l2_reg),
+                    name='dense_1'),
+        layers.BatchNormalization(name='batch_norm_1'),
+        layers.Dropout(dropout_rate, name='dropout_1'),
+        
+        # Secondo blocco: Raffinamento pattern
+        layers.Dense(128, activation='relu',
+                    kernel_regularizer=regularizers.l2(l2_reg),
+                    name='dense_2'),
+        layers.BatchNormalization(name='batch_norm_2'),
+        layers.Dropout(dropout_rate, name='dropout_2'),
+        
+        # Terzo blocco: Specializzazione per sicurezza
+        layers.Dense(64, activation='relu',
+                    kernel_regularizer=regularizers.l2(l2_reg),
+                    name='dense_3'),
+        layers.BatchNormalization(name='batch_norm_3'),
+        layers.Dropout(dropout_rate, name='dropout_3'),
+        
+        # Quarto blocco: Consolidamento pattern
+        layers.Dense(32, activation='relu',
+                    kernel_regularizer=regularizers.l2(l2_reg),
+                    name='dense_4'),
+        layers.BatchNormalization(name='batch_norm_4'),
+        layers.Dropout(dropout_rate / 2, name='dropout_4'),  # Dropout ridotto verso l'output
+        
+        # Layer finale: Classificazione binaria
+        layers.Dense(1, activation='sigmoid', name='output_layer')
     ])
+    
+    # Ottimizzatore Adam con learning rate ottimizzato per DNN
+    optimizer = keras.optimizers.Adam(
+        learning_rate=0.001,      # Learning rate iniziale
+        beta_1=0.9,              # Momento del gradiente
+        beta_2=0.999,            # Momento del gradiente quadrato
+        epsilon=1e-7             # Piccola costante numerica
+    )
     
     # Compila il modello
     model.compile(
-        optimizer='adam',                           # Ottimizzatore Adam (stesso di MNIST)
-        loss=tf.keras.losses.BinaryCrossentropy(),  # Loss per classificazione binaria
-        metrics=['accuracy']                        # Metrica principale (come MNIST)
+        optimizer=optimizer,
+        loss=tf.keras.losses.BinaryCrossentropy(),
+        metrics=[
+            'accuracy',
+            tf.keras.metrics.Precision(name='precision'),
+            tf.keras.metrics.Recall(name='recall'),
+            tf.keras.metrics.AUC(name='auc')
+        ]
     )
     
-    print("Architettura del modello:")
+    print("Architettura del modello DNN:")
     model.summary()
-    print(f"Input shape del modello: {input_shape} feature (dopo riduzione PCA)")
+    print(f"\nCaratteristiche del modello:")
+    print(f"  - Input shape: {input_shape} feature (dopo riduzione PCA)")
+    print(f"  - Architettura: 4 layer nascosti (256→128→64→32)")
+    print(f"  - Attivazione: ReLU con BatchNormalization")
+    print(f"  - Regolarizzazione: Dropout {dropout_rate} + L2 {l2_reg}")
+    print(f"  - Output: Sigmoid per classificazione binaria")
+    print(f"  - Ottimizzatore: Adam con learning rate {optimizer.learning_rate}")
+    print(f"  - Parametri totali: {model.count_params():,}")
     print("=" * 60)
     
     return model
 
-def train_smartgrid_model(model, X_train, y_train, X_val, y_val):
+def create_training_callbacks():
     """
-    Addestra il modello SmartGrid sui dati centralizzati.
-    Utilizza validation set per monitoraggio durante l'addestramento.
+    Crea i callback per l'addestramento della DNN.
+    Ottimizzati per prevenire overfitting e migliorare convergenza.
+    
+    Returns:
+        Lista di callback Keras
+    """
+    callbacks = [
+        # Early Stopping: ferma l'addestramento se non migliora
+        EarlyStopping(
+            monitor='val_loss',        # Monitora la loss di validation
+            patience=10,               # Aspetta 10 epoche senza miglioramento
+            restore_best_weights=True, # Ripristina i pesi migliori
+            verbose=1,
+            mode='min'
+        ),
+        
+        # Riduzione Learning Rate: riduce LR quando si stabilizza
+        ReduceLROnPlateau(
+            monitor='val_loss',        # Monitora la loss di validation
+            factor=0.5,               # Riduce LR del 50%
+            patience=5,               # Aspetta 5 epoche senza miglioramento
+            min_lr=1e-6,              # Learning rate minimo
+            verbose=1,
+            mode='min'
+        )
+    ]
+    
+    return callbacks
+
+def train_smartgrid_dnn_model(model, X_train, y_train, X_val, y_val):
+    """
+    Addestra il modello DNN SmartGrid sui dati centralizzati.
+    Utilizza validation set per monitoraggio e callback per ottimizzazione.
     
     Args:
-        model: Modello Keras da addestrare
+        model: Modello DNN Keras da addestrare
         X_train, y_train: Dati di training (bilanciati con SMOTE, con PCA applicata)
         X_val, y_val: Dati di validation per monitoraggio (sbilanciati, distribuzione reale, con PCA applicata)
     
     Returns:
         History dell'addestramento
     """
-    print("=== ADDESTRAMENTO CENTRALIZZATO SMARTGRID ===")
+    print("=== ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID ===")
     
-    # Configurazione identica alla versione MNIST
-    epochs = 66 # calcolato come (200 round * 5 epoche per round) / 15 client in modo tale da avere un confronto equo con la versione federata
-    batch_size = 32  # Stesso batch size di MNIST
+    # Configurazione addestramento per DNN
+    epochs = 100               # Più epoche per DNN con early stopping
+    batch_size = 64           # Batch size maggiore per DNN
     
-    print(f"Configurazione addestramento:")
-    print(f"  - Epoche: {epochs}")
+    print(f"Configurazione addestramento DNN:")
+    print(f"  - Epoche massime: {epochs}")
     print(f"  - Batch size: {batch_size}")
     print(f"  - Campioni training: {len(X_train)}")
     print(f"  - Campioni validation: {len(X_val)}")
     print(f"  - Feature in input (post-PCA): {X_train.shape[1]}")
     print(f"  - Batch per epoca: {len(X_train) // batch_size}")
+    print(f"  - Early stopping: Attivo (patience=10)")
+    print(f"  - Learning rate reduction: Attivo (patience=5)")
     
     # Distribuzione delle classi nei set di training e validation
     train_attacks = y_train.sum()
@@ -369,49 +458,72 @@ def train_smartgrid_model(model, X_train, y_train, X_val, y_val):
     print(f"  - Distribuzione training: {train_attacks} attacchi, {train_naturals} naturali")
     print(f"  - Distribuzione validation: {val_attacks} attacchi, {val_naturals} naturali")
     
+    # Crea i callback per l'addestramento
+    callbacks = create_training_callbacks()
+    
     print("=" * 60)
     
     # Registra il tempo di inizio
     start_time = time.time()
     
-    # Addestra il modello con validation data per monitoraggio
-    print("Inizio addestramento...")
+    # Addestra il modello DNN con validation data e callback
+    print("Inizio addestramento DNN...")
     history = model.fit(
         X_train, y_train,
         epochs=epochs,
         batch_size=batch_size,
-        validation_data=(X_val, y_val),  # Validation per monitoraggio
-        verbose=1  # Mostra il progresso dettagliato
+        validation_data=(X_val, y_val),
+        callbacks=callbacks,       # Callback per ottimizzazione
+        verbose=1,                # Mostra il progresso dettagliato
+        shuffle=True              # Mescola i dati ad ogni epoca
     )
     
     # Calcola il tempo totale
     training_time = time.time() - start_time
     
-    print(f"\nAddestramento completato in {training_time:.2f} secondi")
+    # Statistiche sull'addestramento
+    actual_epochs = len(history.history['loss'])
+    best_val_loss = min(history.history['val_loss'])
+    best_epoch = np.argmin(history.history['val_loss']) + 1
+    
+    print(f"\nAddestramento DNN completato:")
+    print(f"  - Tempo totale: {training_time:.2f} secondi")
+    print(f"  - Epoche effettive: {actual_epochs}/{epochs}")
+    print(f"  - Migliore val_loss: {best_val_loss:.4f} (epoca {best_epoch})")
+    print(f"  - Early stopping: {'Attivato' if actual_epochs < epochs else 'Non attivato'}")
     print("=" * 60)
     
     return history
 
 def evaluate_smartgrid_model(model, X_test, y_test, set_name="Test"):
     """
-    Valuta il modello SmartGrid sui dati specificati.
+    Valuta il modello DNN SmartGrid sui dati specificati.
+    Include metriche estese per sistemi di sicurezza.
     
     Args:
-        model: Modello addestrato
+        model: Modello DNN addestrato
         X_test, y_test: Dati di test (con PCA applicata)
         set_name: Nome del set per logging (default: "Test")
     
     Returns:
-        Tuple con (loss, accuracy)
+        Tuple con (loss, accuracy, metrics_dict)
     """
-    print(f"=== VALUTAZIONE FINALE SMARTGRID - {set_name.upper()} SET ===")
+    print(f"=== VALUTAZIONE FINALE DNN SMARTGRID - {set_name.upper()} SET ===")
     
-    # Valutazione finale
-    loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
+    # Valutazione finale con tutte le metriche
+    results = model.evaluate(X_test, y_test, verbose=0)
+    loss, accuracy, precision, recall, auc = results
     
-    print(f"Risultati finali {set_name}:")
+    # Calcola F1-score
+    f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    
+    print(f"Risultati finali {set_name} (DNN):")
     print(f"  - {set_name} Loss: {loss:.4f}")
     print(f"  - {set_name} Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
+    print(f"  - {set_name} Precision: {precision:.4f} ({precision*100:.2f}%)")
+    print(f"  - {set_name} Recall: {recall:.4f} ({recall*100:.2f}%)")
+    print(f"  - {set_name} F1-Score: {f1_score:.4f} ({f1_score*100:.2f}%)")
+    print(f"  - {set_name} AUC: {auc:.4f} ({auc*100:.2f}%)")
     print(f"  - Campioni di {set_name.lower()} utilizzati: {len(X_test)}")
     print(f"  - Feature utilizzate (post-PCA): {X_test.shape[1]}")
     
@@ -426,7 +538,7 @@ def evaluate_smartgrid_model(model, X_test, y_test, set_name="Test"):
     natural_mask = (y_test == 0)
     if np.sum(natural_mask) > 0:
         natural_predictions = predictions_binary[natural_mask]
-        natural_accuracy = np.mean(natural_predictions == 0)  # Predizioni corrette per classe 0
+        natural_accuracy = np.mean(natural_predictions == 0)
         natural_count = np.sum(natural_mask)
         print(f"  Classe 0 (Natural): {natural_accuracy:.4f} ({natural_accuracy*100:.2f}%) - {natural_count} campioni")
     
@@ -434,7 +546,7 @@ def evaluate_smartgrid_model(model, X_test, y_test, set_name="Test"):
     attack_mask = (y_test == 1)
     if np.sum(attack_mask) > 0:
         attack_predictions = predictions_binary[attack_mask]
-        attack_accuracy = np.mean(attack_predictions == 1)  # Predizioni corrette per classe 1
+        attack_accuracy = np.mean(attack_predictions == 1)
         attack_count = np.sum(attack_mask)
         print(f"  Classe 1 (Attack): {attack_accuracy:.4f} ({attack_accuracy*100:.2f}%) - {attack_count} campioni")
     
@@ -450,32 +562,49 @@ def evaluate_smartgrid_model(model, X_test, y_test, set_name="Test"):
     print(f"  - False Negatives (FN): {false_negatives}")
     print(f"  - True Positives (TP): {true_positives}")
     
-    # Metriche aggiuntive per sistemi di sicurezza
-    precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
-    recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
-    f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    # Metriche di sicurezza aggiuntive
+    specificity = true_negatives / (true_negatives + false_positives) if (true_negatives + false_positives) > 0 else 0
+    false_positive_rate = false_positives / (false_positives + true_negatives) if (false_positives + true_negatives) > 0 else 0
+    false_negative_rate = false_negatives / (false_negatives + true_positives) if (false_negatives + true_positives) > 0 else 0
     
-    print(f"\nMetriche aggiuntive ({set_name}):")
-    print(f"  - Precision: {precision:.4f} ({precision*100:.2f}%)")
-    print(f"  - Recall: {recall:.4f} ({recall*100:.2f}%)")
-    print(f"  - F1-Score: {f1_score:.4f} ({f1_score*100:.2f}%)")
+    print(f"\nMetriche di sicurezza aggiuntive ({set_name}):")
+    print(f"  - Specificity (TNR): {specificity:.4f} ({specificity*100:.2f}%)")
+    print(f"  - False Positive Rate: {false_positive_rate:.4f} ({false_positive_rate*100:.2f}%)")
+    print(f"  - False Negative Rate: {false_negative_rate:.4f} ({false_negative_rate*100:.2f}%)")
+    
+    # Dizionario con tutte le metriche
+    metrics_dict = {
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'f1_score': f1_score,
+        'auc': auc,
+        'specificity': specificity,
+        'fpr': false_positive_rate,
+        'fnr': false_negative_rate,
+        'tn': true_negatives,
+        'fp': false_positives,
+        'fn': false_negatives,
+        'tp': true_positives
+    }
     
     print("=" * 60)
     
-    return loss, accuracy
+    return loss, accuracy, metrics_dict
 
-def print_training_summary(history, final_loss, final_accuracy, dataset_info, pca_components):
+def print_training_summary(history, final_loss, final_accuracy, final_metrics, dataset_info, pca_components):
     """
-    Stampa un riassunto dell'addestramento SmartGrid.
-    Formato identico alla versione MNIST per facilità di confronto.
+    Stampa un riassunto dell'addestramento DNN SmartGrid.
+    Include analisi dell'evoluzione delle metriche durante l'addestramento.
     
     Args:
         history: History dell'addestramento
         final_loss, final_accuracy: Metriche finali del test set
+        final_metrics: Dizionario con tutte le metriche finali
         dataset_info: Informazioni sul dataset
         pca_components: Numero di componenti PCA selezionate
     """
-    print("=== RIASSUNTO ADDESTRAMENTO CENTRALIZZATO SMARTGRID ===")
+    print("=== RIASSUNTO ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID ===")
     
     # Estrai le metriche dalla history
     train_loss = history.history['loss']
@@ -483,21 +612,40 @@ def print_training_summary(history, final_loss, final_accuracy, dataset_info, pc
     val_loss = history.history['val_loss']
     val_accuracy = history.history['val_accuracy']
     
-    print(f"Evoluzione delle metriche per epoca:")
+    actual_epochs = len(train_loss)
+    
+    print(f"Evoluzione delle metriche per epoca (DNN):")
     print(f"{'Epoca':<6} {'Train Loss':<12} {'Train Acc':<12} {'Val Loss':<12} {'Val Acc':<12}")
     print("-" * 60)
     
-    for epoch in range(len(train_loss)):
-        print(f"{epoch+1:<6} {train_loss[epoch]:<12.4f} {train_accuracy[epoch]:<12.4f} "
-              f"{val_loss[epoch]:<12.4f} {val_accuracy[epoch]:<12.4f}")
+    # Mostra solo alcune epoche per non sovraccaricare l'output
+    epochs_to_show = min(10, actual_epochs)
+    step = max(1, actual_epochs // epochs_to_show)
     
-    print(f"\nRisultati finali:")
+    for i in range(0, actual_epochs, step):
+        epoch = i + 1
+        print(f"{epoch:<6} {train_loss[i]:<12.4f} {train_accuracy[i]:<12.4f} "
+              f"{val_loss[i]:<12.4f} {val_accuracy[i]:<12.4f}")
+    
+    # Mostra sempre l'ultima epoca
+    if actual_epochs > 1 and (actual_epochs - 1) % step != 0:
+        i = actual_epochs - 1
+        epoch = actual_epochs
+        print(f"{epoch:<6} {train_loss[i]:<12.4f} {train_accuracy[i]:<12.4f} "
+              f"{val_loss[i]:<12.4f} {val_accuracy[i]:<12.4f}")
+    
+    print(f"\nRisultati finali DNN:")
     print(f"  - Loss finale (Test): {final_loss:.4f}")
     print(f"  - Accuracy finale (Test): {final_accuracy:.4f}")
+    print(f"  - Precision (Test): {final_metrics['precision']:.4f}")
+    print(f"  - Recall (Test): {final_metrics['recall']:.4f}")
+    print(f"  - F1-Score (Test): {final_metrics['f1_score']:.4f}")
+    print(f"  - AUC (Test): {final_metrics['auc']:.4f}")
     print(f"  - Miglioramento accuracy: {(final_accuracy - train_accuracy[0]):.4f}")
+    print(f"  - Epoche effettive: {actual_epochs}")
     
-    # Informazioni sul dataset utilizzato
-    print(f"\nInformazioni dataset:")
+    # Informazioni sul dataset e modello utilizzato
+    print(f"\nInformazioni dataset e modello:")
     print(f"  - File utilizzati: {dataset_info['total_files']} (data{min(dataset_info['files_loaded'])}.csv - data{max(dataset_info['files_loaded'])}.csv)")
     print(f"  - Campioni totali processati: {dataset_info['total_samples']}")
     print(f"  - Feature originali: {dataset_info['features']}")
@@ -506,23 +654,27 @@ def print_training_summary(history, final_loss, final_accuracy, dataset_info, pc
     print(f"  - Proporzione attacchi: {dataset_info['attack_ratio']*100:.2f}%")
     print(f"  - Suddivisione: 70% train, 15% validation, 15% test")
     print(f"  - Pipeline preprocessing: Split → Imputazione → Normalizzazione → SMOTE → PCA")
+    print(f"  - Architettura: DNN (4 layer nascosti: 256→128→64→32)")
+    print(f"  - Regolarizzazione: Dropout + L2 + BatchNormalization")
+    print(f"  - Callback: EarlyStopping + ReduceLROnPlateau")
     
-    print("\n" + "=" * 70)
-    print("ADDESTRAMENTO CENTRALIZZATO SMARTGRID CON PIPELINE COMPLETATO")
+    print("\n" + "=" * 80)
+    print("ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID CON PIPELINE COMPLETATO")
     print("Ora puoi confrontare questi risultati con l'approccio federato.")
-    print("=" * 70)
+    print("=" * 80)
 
 def main():
     """
-    Funzione principale per l'addestramento centralizzato SmartGrid.
-    Implementa la pipeline corretta di preprocessing.
+    Funzione principale per l'addestramento centralizzato SmartGrid con DNN.
+    Implementa la pipeline corretta di preprocessing e addestramento DNN.
     """
-    print("INIZIO ADDESTRAMENTO CENTRALIZZATO SMARTGRID CON PIPELINE CORRETTA")
-    print("Questo script addestra un modello di rilevamento intrusioni SmartGrid")
+    print("INIZIO ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID CON PIPELINE CORRETTA")
+    print("Questo script addestra un modello DNN di rilevamento intrusioni SmartGrid")
     print("usando un approccio centralizzato con pipeline di preprocessing corretta.")
     print("Pipeline: Split → Imputazione → Normalizzazione → SMOTE → PCA")
+    print("Modello: Deep Neural Network (4 layer nascosti) con regolarizzazione")
     print("Suddivisione: 70% train, 15% validation, 15% test")
-    print("=" * 70)
+    print("=" * 80)
     
     try:
         # 1. Carica i dati grezzi
@@ -565,22 +717,22 @@ def main():
             variance_threshold=0.95
         )
         
-        # 6. Crea il modello (con input shape delle feature ridotte da PCA)
-        model = create_smartgrid_model(n_components)
+        # 6. Crea il modello DNN (con input shape delle feature ridotte da PCA)
+        model = create_smartgrid_dnn_model(n_components)
         
-        # 7. Addestra il modello
-        history = train_smartgrid_model(model, X_train_final, y_train_balanced, X_val_final, y_val)
+        # 7. Addestra il modello DNN
+        history = train_smartgrid_dnn_model(model, X_train_final, y_train_balanced, X_val_final, y_val)
         
         # 8. Valuta il modello sul validation set (per completezza)
-        print("\n" + "=" * 70)
-        evaluate_smartgrid_model(model, X_val_final, y_val, "Validation")
+        print("\n" + "=" * 80)
+        val_loss, val_accuracy, val_metrics = evaluate_smartgrid_model(model, X_val_final, y_val, "Validation")
         
         # 9. Valuta il modello sul test set (valutazione finale)
-        print("\n" + "=" * 70)
-        final_loss, final_accuracy = evaluate_smartgrid_model(model, X_test_final, y_test, "Test")
+        print("\n" + "=" * 80)
+        final_loss, final_accuracy, final_metrics = evaluate_smartgrid_model(model, X_test_final, y_test, "Test")
         
         # 10. Stampa riassunto finale
-        print_training_summary(history, final_loss, final_accuracy, dataset_info, n_components)
+        print_training_summary(history, final_loss, final_accuracy, final_metrics, dataset_info, n_components)
         
     except Exception as e:
         print(f"Errore durante l'esecuzione: {e}")
