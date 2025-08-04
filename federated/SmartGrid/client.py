@@ -12,7 +12,6 @@ from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from imblearn.over_sampling import SMOTE
-import warnings
 
 def load_client_smartgrid_data(client_id):
     """
@@ -53,6 +52,9 @@ def load_client_smartgrid_data(client_id):
     print(f"  - Campioni di attacco: {attack_samples} ({attack_ratio*100:.2f}%)")
     print(f"  - Campioni naturali: {natural_samples} ({(1-attack_ratio)*100:.2f}%)")
     
+    # Gestione preliminare valori infiniti
+    X.replace([np.inf, -np.inf], np.nan, inplace=True)
+    
     # STEP 1: Suddivisione train/validation (70%/30% dei dati locali) PRIMA del preprocessing
     print(f"\n=== STEP 1: SUDDIVISIONE LOCALE TRAIN/VALIDATION ===")
     
@@ -74,18 +76,9 @@ def load_client_smartgrid_data(client_id):
         ('scaler', StandardScaler())
     ])
     
-    # CORREZIONE PROBLEMA 1: Pulizia robusta dei dati prima del preprocessing
-    print(f"  - Applicazione pulizia robusta dei dati...")
-    X_train_cleaned = clean_data_for_pca(X_train_raw)
-    X_val_cleaned = clean_data_for_pca(X_val_raw)
-    
     # Fit della pipeline SOLO sui dati di training del client
-    X_train_preprocessed = preprocessing_pipeline.fit_transform(X_train_cleaned)
-    X_val_preprocessed = preprocessing_pipeline.transform(X_val_cleaned)
-    
-    # CORREZIONE PROBLEMA 1: Controllo e pulizia post-preprocessing
-    X_train_preprocessed = ensure_numerical_stability(X_train_preprocessed, "training")
-    X_val_preprocessed = ensure_numerical_stability(X_val_preprocessed, "validation")
+    X_train_preprocessed = preprocessing_pipeline.fit_transform(X_train_raw)
+    X_val_preprocessed = preprocessing_pipeline.transform(X_val_raw)
     
     print(f"  - Fit pipeline sui dati training del client")
     print(f"  - Transform applicato su training e validation")
@@ -114,9 +107,6 @@ def load_client_smartgrid_data(client_id):
             smote = SMOTE(sampling_strategy='auto', random_state=42, k_neighbors=k_neighbors)
             X_train_balanced, y_train_balanced = smote.fit_resample(X_train_preprocessed, y_train)
             
-            # CORREZIONE PROBLEMA 1: Controllo stabilità post-SMOTE
-            X_train_balanced = ensure_numerical_stability(X_train_balanced, "post-SMOTE")
-            
             print(f"  - SMOTE applicato: {len(X_train_balanced)} campioni finali")
             print(f"  - Campioni sintetici: {len(X_train_balanced) - len(X_train_preprocessed)}")
             
@@ -132,10 +122,22 @@ def load_client_smartgrid_data(client_id):
     
     original_features = X_train_balanced.shape[1]
     
-    # CORREZIONE PROBLEMA 1: PCA numericamente stabile
-    X_train_final, X_val_final, n_components = apply_stable_pca(
-        X_train_balanced, X_val_preprocessed, variance_threshold=0.95
-    )
+    # Analisi PCA per selezione automatica componenti
+    pca_full = PCA()
+    pca_full.fit(X_train_balanced)
+    cumulative_variance = np.cumsum(pca_full.explained_variance_ratio_)
+    n_components = np.argmax(cumulative_variance >= 0.95) + 1
+    n_components = min(n_components, original_features, len(X_train_balanced))
+    
+    print(f"  - Feature originali: {original_features}")
+    print(f"  - Componenti selezionate: {n_components}")
+    print(f"  - Varianza spiegata: {cumulative_variance[n_components-1]*100:.2f}%")
+    print(f"  - Riduzione: {(1-n_components/original_features)*100:.1f}%")
+    
+    # Applica PCA
+    pca_optimal = PCA(n_components=n_components)
+    X_train_final = pca_optimal.fit_transform(X_train_balanced)
+    X_val_final = pca_optimal.transform(X_val_preprocessed)
     
     print(f"  - Training final shape: {X_train_final.shape}")
     print(f"  - Validation final shape: {X_val_final.shape}")
@@ -158,154 +160,10 @@ def load_client_smartgrid_data(client_id):
     
     return X_train_final, y_train_balanced, X_val_final, y_val, dataset_info
 
-def clean_data_for_pca(X):
-    """
-    CORREZIONE PROBLEMA 1: Pulizia robusta dei dati per prevenire problemi numerici in PCA.
-    
-    Args:
-        X: DataFrame o array dei dati
-    
-    Returns:
-        Array pulito numericamente stabile
-    """
-    # Converti a numpy se necessario
-    if hasattr(X, 'values'):
-        X_array = X.values.copy()
-    else:
-        X_array = X.copy()
-    
-    # Sostituisci inf e -inf con NaN
-    X_array = np.where(np.isinf(X_array), np.nan, X_array)
-    
-    # Rimuovi valori estremi che potrebbero causare overflow
-    # Sostituisci valori molto grandi con valori più gestibili
-    threshold = 1e10
-    X_array = np.where(np.abs(X_array) > threshold, np.nan, X_array)
-    
-    return X_array
-
-def ensure_numerical_stability(X, stage_name):
-    """
-    CORREZIONE PROBLEMA 1: Assicura stabilità numerica rimuovendo inf, nan e valori estremi.
-    
-    Args:
-        X: Array dei dati
-        stage_name: Nome dello stage per logging
-    
-    Returns:
-        Array numericamente stabile
-    """
-    print(f"  - Controllo stabilità numerica ({stage_name})...")
-    
-    # Conta problemi numerici
-    nan_count = np.isnan(X).sum()
-    inf_count = np.isinf(X).sum()
-    
-    if nan_count > 0 or inf_count > 0:
-        print(f"    - Trovati {nan_count} NaN e {inf_count} inf")
-        
-        # Sostituisci NaN e inf con valori finiti
-        X_clean = np.where(np.isnan(X) | np.isinf(X), 0, X)
-        
-        # Clip valori estremi per prevenire overflow in operazioni matriciali
-        X_clean = np.clip(X_clean, -1e6, 1e6)
-        
-        print(f"    - Valori problematici sostituiti e clippati")
-        return X_clean
-    else:
-        # Clip comunque per sicurezza
-        X_clipped = np.clip(X, -1e6, 1e6)
-        print(f"    - Dati numericamente stabili, applicato clipping preventivo")
-        return X_clipped
-
-def apply_stable_pca(X_train, X_val, variance_threshold=0.95):
-    """
-    CORREZIONE PROBLEMA 1: Applica PCA con controlli di stabilità numerica.
-    
-    Args:
-        X_train: Dati di training (dopo SMOTE)
-        X_val: Dati di validation
-        variance_threshold: Soglia di varianza cumulativa
-    
-    Returns:
-        Tuple (X_train_pca, X_val_pca, n_components_selected)
-    """
-    original_features = X_train.shape[1]
-    print(f"  - Feature originali: {original_features}")
-    print(f"  - Soglia varianza cumulativa: {variance_threshold*100:.1f}%")
-    
-    # Assicura stabilità numerica pre-PCA
-    X_train_stable = ensure_numerical_stability(X_train, "pre-PCA training")
-    X_val_stable = ensure_numerical_stability(X_val, "pre-PCA validation")
-    
-    try:
-        # Sopprimi warning numerici temporaneamente per gestirli noi
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', category=RuntimeWarning)
-            
-            # Prima esecuzione: PCA completa per analizzare la varianza
-            pca_full = PCA()
-            pca_full.fit(X_train_stable)
-            
-            # Controlla se explained_variance_ratio_ contiene valori validi
-            if np.any(np.isnan(pca_full.explained_variance_ratio_)) or np.any(np.isinf(pca_full.explained_variance_ratio_)):
-                raise ValueError("PCA ha prodotto explained_variance_ratio_ non validi")
-            
-            # Calcola varianza cumulativa
-            cumulative_variance = np.cumsum(pca_full.explained_variance_ratio_)
-            
-            # Trova il numero di componenti necessarie per raggiungere la soglia
-            n_components_selected = np.argmax(cumulative_variance >= variance_threshold) + 1
-            
-            # Assicurati che il numero di componenti sia valido e ragionevole
-            n_components_selected = min(n_components_selected, original_features, len(X_train_stable))
-            n_components_selected = max(n_components_selected, min(10, original_features))
-            
-            print(f"  - Componenti selezionate: {n_components_selected}")
-            print(f"  - Varianza spiegata: {cumulative_variance[n_components_selected-1]*100:.2f}%")
-            print(f"  - Riduzione dimensionalità: {original_features} → {n_components_selected}")
-            
-            # Seconda esecuzione: PCA con numero ottimale di componenti
-            pca_optimal = PCA(n_components=n_components_selected)
-            
-            # Fit e transform con controllo degli output
-            X_train_pca = pca_optimal.fit_transform(X_train_stable)
-            X_val_pca = pca_optimal.transform(X_val_stable)
-            
-            # Controllo finale degli output PCA
-            if np.any(np.isnan(X_train_pca)) or np.any(np.isinf(X_train_pca)):
-                raise ValueError("PCA ha prodotto output con NaN o inf")
-            
-            if np.any(np.isnan(X_val_pca)) or np.any(np.isinf(X_val_pca)):
-                raise ValueError("PCA ha prodotto output validation con NaN o inf")
-            
-            print(f"  - PCA applicato con successo")
-            return X_train_pca, X_val_pca, n_components_selected
-            
-    except Exception as e:
-        print(f"  - Errore PCA: {e}")
-        print(f"  - Fallback: riduzione semplice alle prime {min(50, original_features)} feature")
-        
-        # Fallback: usa solo le prime N feature più stabili
-        n_components_fallback = min(50, original_features)
-        
-        # Seleziona feature con varianza più alta (più stabili numericamente)
-        feature_vars = np.var(X_train_stable, axis=0)
-        # Sostituisci eventuali NaN nelle varianze con 0
-        feature_vars = np.where(np.isnan(feature_vars), 0, feature_vars)
-        
-        top_features = np.argsort(feature_vars)[-n_components_fallback:]
-        
-        X_train_fallback = X_train_stable[:, top_features]
-        X_val_fallback = X_val_stable[:, top_features]
-        
-        print(f"  - Fallback applicato: {n_components_fallback} feature selezionate")
-        return X_train_fallback, X_val_fallback, n_components_fallback
-
 def create_smartgrid_client_dnn_model(input_shape):
     """
-    CORREZIONE PROBLEMA 2: Crea il modello DNN SmartGrid per il client.
-    Architettura FISSA e IDENTICA al server per garantire compatibilità federata.
+    Crea il modello DNN SmartGrid per il client.
+    Identico al modello centralizzato per garantire compatibilità federata.
     
     Args:
         input_shape: Numero di feature in input (dopo PCA)
@@ -315,57 +173,56 @@ def create_smartgrid_client_dnn_model(input_shape):
     """
     print(f"=== CREAZIONE MODELLO DNN CLIENT ===")
     
-    # Configurazione FISSA per compatibilità federata
-    dropout_rate = 0.2
-    l2_reg = 0.0001
+    # Configurazione identica al modello centralizzato
+    dropout_rate = 0.3
+    l2_reg = 0.001
     
-    # CORREZIONE PROBLEMA 2: Architettura IDENTICA al server (no Input layer esplicito)
+    # Architettura DNN identica per compatibilità federata
     model = keras.Sequential([
-        # Primo blocco - usa input_shape nel primo Dense invece di Input layer separato
-        layers.Dense(128, 
-                    activation='relu',
-                    input_shape=(input_shape,),  # CORREZIONE: usa input_shape invece di Input layer
+        # Layer di input
+        layers.Input(shape=(input_shape,), name='input_layer'),
+        
+        # Primo blocco: Estrazione feature di alto livello
+        layers.Dense(256, activation='relu', 
                     kernel_regularizer=regularizers.l2(l2_reg),
-                    kernel_initializer='he_normal',
                     name='dense_1'),
         layers.BatchNormalization(name='batch_norm_1'),
         layers.Dropout(dropout_rate, name='dropout_1'),
         
-        # Secondo blocco
-        layers.Dense(64, 
-                    activation='relu',
+        # Secondo blocco: Raffinamento pattern
+        layers.Dense(128, activation='relu',
                     kernel_regularizer=regularizers.l2(l2_reg),
-                    kernel_initializer='he_normal',
                     name='dense_2'),
         layers.BatchNormalization(name='batch_norm_2'),
         layers.Dropout(dropout_rate, name='dropout_2'),
         
-        # Terzo blocco
-        layers.Dense(32, 
-                    activation='relu',
+        # Terzo blocco: Specializzazione per sicurezza
+        layers.Dense(64, activation='relu',
                     kernel_regularizer=regularizers.l2(l2_reg),
-                    kernel_initializer='he_normal',
                     name='dense_3'),
         layers.BatchNormalization(name='batch_norm_3'),
-        layers.Dropout(dropout_rate / 2, name='dropout_3'),
+        layers.Dropout(dropout_rate, name='dropout_3'),
         
-        # Layer finale
-        layers.Dense(1, 
-                    activation='sigmoid',
-                    kernel_initializer='glorot_uniform',
-                    name='output_layer')
+        # Quarto blocco: Consolidamento pattern
+        layers.Dense(32, activation='relu',
+                    kernel_regularizer=regularizers.l2(l2_reg),
+                    name='dense_4'),
+        layers.BatchNormalization(name='batch_norm_4'),
+        layers.Dropout(dropout_rate / 2, name='dropout_4'),
+        
+        # Layer finale: Classificazione binaria
+        layers.Dense(1, activation='sigmoid', name='output_layer')
     ])
     
-    # Ottimizzatore IDENTICO al server
+    # Ottimizzatore identico al centralizzato
     optimizer = keras.optimizers.Adam(
-        learning_rate=0.0001,
+        learning_rate=0.001,
         beta_1=0.9,
         beta_2=0.999,
-        epsilon=1e-7,
-        clipnorm=1.0
+        epsilon=1e-7
     )
     
-    # Compila il modello
+    # Compila il modello con le stesse metriche
     model.compile(
         optimizer=optimizer,
         loss=tf.keras.losses.BinaryCrossentropy(),
@@ -377,21 +234,10 @@ def create_smartgrid_client_dnn_model(input_shape):
         ]
     )
     
-    # CORREZIONE PROBLEMA 2: Logging per verificare compatibilità
     print(f"  - Modello DNN client creato")
     print(f"  - Input shape: {input_shape}")
-    print(f"  - Architettura: Dense(128) → Dense(64) → Dense(32) → Dense(1)")
-    print(f"  - Numero di pesi: {len(model.get_weights())}")
+    print(f"  - Architettura: 4 layer nascosti (256→128→64→32)")
     print(f"  - Parametri totali: {model.count_params():,}")
-    
-    # Debug: stampa info sui layer per verifica compatibilità
-    print(f"  - Layer del modello:")
-    for i, layer in enumerate(model.layers):
-        if hasattr(layer, 'units'):
-            print(f"    - {i}: {layer.name} - {layer.units} unità")
-        else:
-            print(f"    - {i}: {layer.name}")
-    
     print("=" * 60)
     
     return model
@@ -415,88 +261,57 @@ class SmartGridDNNClient(fl.client.NumPyClient):
         """
         Restituisce i pesi attuali del modello DNN locale.
         """
-        weights = model.get_weights()
-        # CORREZIONE PROBLEMA 2: Log per debugging compatibilità
-        print(f"[Client {client_id}] Invio {len(weights)} pesi al server")
-        return weights
+        return model.get_weights()
 
     def fit(self, parameters, config):
         """
-        Addestra il modello DNN sui dati locali del client con configurazione ottimizzata.
+        Addestra il modello DNN sui dati locali del client (con pipeline completa).
         """
         global model, X_train, y_train, dataset_info
         
         print(f"[Client {client_id}] === ROUND DI ADDESTRAMENTO DNN ===")
-        print(f"[Client {client_id}] Ricevuti {len(parameters)} pesi dal server")
+        print(f"[Client {client_id}] Ricevuti parametri dal server, avvio addestramento locale...")
         sys.stdout.flush()
         
-        # CORREZIONE PROBLEMA 2: Verifica compatibilità pesi prima di impostarli
-        current_weights = model.get_weights()
-        if len(parameters) != len(current_weights):
-            print(f"[Client {client_id}] ERRORE: Incompatibilità numero pesi!")
-            print(f"[Client {client_id}] Ricevuti: {len(parameters)}, Attesi: {len(current_weights)}")
-            
-            # Debug dettagliato delle forme
-            print(f"[Client {client_id}] Forme pesi ricevuti:")
-            for i, w in enumerate(parameters):
-                print(f"  {i}: {w.shape}")
-            print(f"[Client {client_id}] Forme pesi modello:")
-            for i, w in enumerate(current_weights):
-                print(f"  {i}: {w.shape}")
-                
-            return model.get_weights(), 0, {'error': 'weight_shape_mismatch'}
-        
         # Imposta i pesi ricevuti dal server
-        try:
-            model.set_weights(parameters)
-            print(f"[Client {client_id}] Pesi impostati con successo")
-        except Exception as e:
-            print(f"[Client {client_id}] Errore nell'impostazione pesi: {e}")
-            return model.get_weights(), 0, {'error': f'set_weights_failed: {str(e)}'}
+        model.set_weights(parameters)
         
         # Verifica che ci siano dati di training
         if len(X_train) == 0:
             print(f"[Client {client_id}] ATTENZIONE: Nessun dato di training disponibile!")
             return model.get_weights(), 0, {}
         
-        # Configurazione addestramento locale
-        local_epochs = 3
-        batch_size = 16
+        # Addestra il modello DNN localmente per più epoche (federato necessita più training locale)
+        local_epochs = 5  # Più epoche per DNN in contesto federato
         
         print(f"[Client {client_id}] Addestramento DNN su {len(X_train)} campioni per {local_epochs} epoche...")
-        print(f"[Client {client_id}] Feature utilizzate: {X_train.shape[1]}")
-        print(f"[Client {client_id}] Batch size: {batch_size}")
+        print(f"[Client {client_id}] Feature utilizzate (post-pipeline): {X_train.shape[1]}")
         
-        try:
-            history = model.fit(
-                X_train, y_train,
-                epochs=local_epochs,
-                batch_size=batch_size,
-                verbose=0,
-                shuffle=True
-            )
-            
-            # Estrai le metriche
-            train_loss = history.history['loss'][-1]
-            train_accuracy = history.history['accuracy'][-1]
-            train_precision = history.history.get('precision', [0])[-1]
-            train_recall = history.history.get('recall', [0])[-1]
-            train_auc = history.history.get('auc', [0])[-1]
-            
-            # Calcola F1-score
-            train_f1 = 2 * (train_precision * train_recall) / (train_precision + train_recall) if (train_precision + train_recall) > 0 else 0
-            
-            print(f"[Client {client_id}] Addestramento DNN completato:")
-            print(f"[Client {client_id}]   - Loss: {train_loss:.4f}")
-            print(f"[Client {client_id}]   - Accuracy: {train_accuracy:.4f}")
-            print(f"[Client {client_id}]   - Precision: {train_precision:.4f}")
-            print(f"[Client {client_id}]   - Recall: {train_recall:.4f}")
-            print(f"[Client {client_id}]   - F1-Score: {train_f1:.4f}")
-            print(f"[Client {client_id}]   - AUC: {train_auc:.4f}")
-            
-        except Exception as e:
-            print(f"[Client {client_id}] Errore durante addestramento: {e}")
-            return model.get_weights(), 0, {'error': f'training_failed: {str(e)}'}
+        history = model.fit(
+            X_train, y_train,
+            epochs=local_epochs,
+            batch_size=32,      # Batch size più piccolo per client
+            verbose=0,
+            shuffle=True
+        )
+        
+        # Estrai le metriche dall'addestramento (ultima epoca)
+        train_loss = history.history['loss'][-1]
+        train_accuracy = history.history['accuracy'][-1]
+        train_precision = history.history.get('precision', [0])[-1]
+        train_recall = history.history.get('recall', [0])[-1]
+        train_auc = history.history.get('auc', [0])[-1]
+        
+        # Calcola F1-score
+        train_f1 = 2 * (train_precision * train_recall) / (train_precision + train_recall) if (train_precision + train_recall) > 0 else 0
+        
+        print(f"[Client {client_id}] Addestramento DNN completato:")
+        print(f"[Client {client_id}]   - Loss: {train_loss:.4f}")
+        print(f"[Client {client_id}]   - Accuracy: {train_accuracy:.4f}")
+        print(f"[Client {client_id}]   - Precision: {train_precision:.4f}")
+        print(f"[Client {client_id}]   - Recall: {train_recall:.4f}")
+        print(f"[Client {client_id}]   - F1-Score: {train_f1:.4f}")
+        print(f"[Client {client_id}]   - AUC: {train_auc:.4f}")
         
         # Metriche da inviare al server
         metrics = {
@@ -507,7 +322,6 @@ class SmartGridDNNClient(fl.client.NumPyClient):
             'train_f1_score': float(train_f1),
             'train_auc': float(train_auc),
             'local_epochs': int(local_epochs),
-            'batch_size': int(batch_size),
             'client_id': int(dataset_info['client_id']),
             'total_samples': int(dataset_info['total_samples']),
             'train_samples': int(dataset_info['train_samples']),
@@ -518,79 +332,63 @@ class SmartGridDNNClient(fl.client.NumPyClient):
             'original_features': int(dataset_info['original_features']),
             'pca_features': int(dataset_info['pca_features']),
             'pca_reduction': float(dataset_info['pca_reduction']),
-            'pipeline_applied': 'split_impute_scale_smote_stable_pca',
-            'model_type': 'DNN_Stable_Compatible',
-            'weights_count': len(model.get_weights())  # CORREZIONE PROBLEMA 2: traccia numero pesi
+            'pipeline_applied': 'split_impute_scale_smote_pca',
+            'model_type': 'DNN'
         }
         
-        print(f"[Client {client_id}] Invio {len(model.get_weights())} pesi aggiornati al server...")
+        print(f"[Client {client_id}] Invio pesi DNN aggiornati al server...")
         sys.stdout.flush()
         
         return model.get_weights(), len(X_train), metrics
 
     def evaluate(self, parameters, config):
         """
-        Valuta il modello DNN sui dati di validation locali del client.
+        Valuta il modello DNN sui dati di validation locali del client (post-pipeline).
         """
         global model, X_val, y_val
         
         print(f"[Client {client_id}] === VALUTAZIONE LOCALE DNN ===")
         
-        # CORREZIONE PROBLEMA 2: Verifica compatibilità pesi in valutazione
-        current_weights = model.get_weights()
-        if len(parameters) != len(current_weights):
-            print(f"[Client {client_id}] ERRORE: Incompatibilità pesi in valutazione!")
-            return 1.0, 0, {"accuracy": 0.0, "error": "weight_mismatch_eval"}
-        
         # Imposta i pesi da valutare
-        try:
-            model.set_weights(parameters)
-        except Exception as e:
-            print(f"[Client {client_id}] Errore nell'impostazione pesi per valutazione: {e}")
-            return 1.0, 0, {"accuracy": 0.0, "error": f"set_weights_eval_failed: {str(e)}"}
+        model.set_weights(parameters)
         
         # Verifica che ci siano dati di validation
         if len(X_val) == 0:
             print(f"[Client {client_id}] ATTENZIONE: Nessun dato di validation disponibile!")
             return 0.0, 0, {"accuracy": 0.0}
         
-        try:
-            # Valuta sui dati di validation locali
-            results = model.evaluate(X_val, y_val, verbose=0)
-            loss, accuracy, precision, recall, auc = results
-            
-            # Calcola F1-score
-            f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-            
-            print(f"[Client {client_id}] Valutazione DNN locale completata:")
-            print(f"[Client {client_id}]   - Loss: {loss:.4f}")
-            print(f"[Client {client_id}]   - Accuracy: {accuracy:.4f}")
-            print(f"[Client {client_id}]   - Precision: {precision:.4f}")
-            print(f"[Client {client_id}]   - Recall: {recall:.4f}")
-            print(f"[Client {client_id}]   - F1-Score: {f1_score:.4f}")
-            print(f"[Client {client_id}]   - AUC: {auc:.4f}")
-            print(f"[Client {client_id}]   - Campioni validation: {len(X_val)}")
-            print(f"[Client {client_id}]   - Feature utilizzate: {X_val.shape[1]}")
-            
-            # Metriche da restituire
-            metrics = {
-                "accuracy": accuracy,
-                "precision": precision,
-                "recall": recall,
-                "f1_score": f1_score,
-                "auc": auc,
-                "val_samples": len(X_val)
-            }
-            
-            return loss, len(X_val), metrics
-            
-        except Exception as e:
-            print(f"[Client {client_id}] Errore durante valutazione: {e}")
-            return 1.0, len(X_val), {"accuracy": 0.0, "error": f"evaluation_failed: {str(e)}"}
+        # Valuta sui dati di validation locali
+        results = model.evaluate(X_val, y_val, verbose=0)
+        loss, accuracy, precision, recall, auc = results
+        
+        # Calcola F1-score
+        f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+        
+        print(f"[Client {client_id}] Valutazione DNN locale completata:")
+        print(f"[Client {client_id}]   - Loss: {loss:.4f}")
+        print(f"[Client {client_id}]   - Accuracy: {accuracy:.4f}")
+        print(f"[Client {client_id}]   - Precision: {precision:.4f}")
+        print(f"[Client {client_id}]   - Recall: {recall:.4f}")
+        print(f"[Client {client_id}]   - F1-Score: {f1_score:.4f}")
+        print(f"[Client {client_id}]   - AUC: {auc:.4f}")
+        print(f"[Client {client_id}]   - Campioni validation: {len(X_val)}")
+        print(f"[Client {client_id}]   - Feature utilizzate (post-pipeline): {X_val.shape[1]}")
+        
+        # Metriche da restituire
+        metrics = {
+            "accuracy": accuracy,
+            "precision": precision,
+            "recall": recall,
+            "f1_score": f1_score,
+            "auc": auc,
+            "val_samples": len(X_val)
+        }
+        
+        return loss, len(X_val), metrics
 
 def main():
     """
-    Funzione principale per avviare il client SmartGrid DNN con correzioni per stabilità numerica e compatibilità.
+    Funzione principale per avviare il client SmartGrid DNN con pipeline corretta.
     """
     global client_id, model, X_train, y_train, X_val, y_val, dataset_info
     
@@ -610,25 +408,23 @@ def main():
         print(f"Errore: Client ID non valido. {e}")
         sys.exit(1)
     
-    print(f"AVVIO CLIENT SMARTGRID DNN CON CORREZIONI {client_id}")
-    print("Correzioni applicate:")
-    print("  - Problema 1: Stabilità numerica PCA (pulizia dati, clipping, fallback)")
-    print("  - Problema 2: Compatibilità architettura (modello identico server-client)")
-    print("Pipeline: Split → Imputazione → Normalizzazione → SMOTE → PCA Stabile")
-    print("Modello: DNN compatibile (architettura fissa) con controlli pesi")
-    print("=" * 80)
+    print(f"AVVIO CLIENT SMARTGRID DNN {client_id} CON PIPELINE CORRETTA")
+    print("Pipeline: Split → Imputazione → Normalizzazione → SMOTE → PCA")
+    print("Modello: Deep Neural Network (4 layer nascosti) con regolarizzazione")
+    print("Configurazione: train (70%) + validation locale (30%)")
+    print("=" * 70)
     
     try:
-        # 1. Carica i dati locali del client con pipeline corretta e correzioni
+        # 1. Carica i dati locali del client con pipeline completa
         X_train, y_train, X_val, y_val, dataset_info = load_client_smartgrid_data(client_id)
         
-        # 2. Crea il modello DNN compatibile
-        print(f"[Client {client_id}] Creazione modello DNN compatibile...")
+        # 2. Crea il modello DNN locale (con input shape delle feature ridotte)
+        print(f"[Client {client_id}] Creazione modello DNN locale...")
         model = create_smartgrid_client_dnn_model(X_train.shape[1])
-        print(f"[Client {client_id}] Modello DNN creato con {X_train.shape[1]} feature di input")
+        print(f"[Client {client_id}] Modello DNN creato con {X_train.shape[1]} feature di input (post-pipeline)")
         
         # 3. Stampa riassunto del client
-        print(f"[Client {client_id}] === RIASSUNTO CLIENT DNN CON CORREZIONI ===")
+        print(f"[Client {client_id}] === RIASSUNTO CLIENT DNN ===")
         print(f"[Client {client_id}] Dataset info:")
         for key, value in dataset_info.items():
             if key == 'pca_reduction':
@@ -636,10 +432,9 @@ def main():
             else:
                 print(f"[Client {client_id}]   - {key}: {value}")
         
-        print(f"[Client {client_id}] Modello: DNN con architettura fissa per compatibilità")
+        print(f"[Client {client_id}] Modello: DNN con 4 layer nascosti (256→128→64→32)")
         print(f"[Client {client_id}] Parametri totali: {model.count_params():,}")
-        print(f"[Client {client_id}] Numero pesi: {len(model.get_weights())}")
-        print(f"[Client {client_id}] Correzioni: Stabilità numerica + Compatibilità architettura")
+        print(f"[Client {client_id}] Pipeline applicata: Split → Imputazione → Normalizzazione → SMOTE → PCA")
         print(f"[Client {client_id}] Tentativo di connessione al server su localhost:8080...")
         sys.stdout.flush()
         
