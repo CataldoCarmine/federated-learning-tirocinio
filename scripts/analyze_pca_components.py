@@ -452,28 +452,9 @@ def main():
     print("   RIGA DA CERCARE: PCA_COMPONENTS = ")
     print(f"   VALORE DA IMPOSTARE: PCA_COMPONENTS = {recommendation['recommended_components']}")
     print()
-    print("💡 ARCHITETTURA DNN SUGGERITA:")
-    
-    # Suggerisci architettura in base al numero di componenti
-    pca_comp = recommendation['recommended_components']
-    if pca_comp <= 20:
-        layer_sizes = [24, 16, 8]
-        arch_type = "compatta"
-    elif pca_comp <= 40:
-        layer_sizes = [32, 20, 12]
-        arch_type = "media"
-    elif pca_comp <= 60:
-        layer_sizes = [48, 32, 16]
-        arch_type = "standard"
-    else:
-        layer_sizes = [64, 40, 20]
-        arch_type = "estesa"
-    
-    print(f"   Architettura {arch_type} per {pca_comp} componenti PCA:")
-    print(f"   {pca_comp} → {layer_sizes[0]} → {layer_sizes[1]} → {layer_sizes[2]} → 1")
-    print()
-    print("   Questa architettura è già implementata automaticamente nei file")
-    print("   in base al valore di PCA_COMPONENTS che imposterai.")
+    print("💡 ARCHITETTURA DNN RISULTANTE:")
+    print(f"   Con PCA_COMPONENTS = {recommendation['recommended_components']}, l'architettura sarà:")
+    print(f"   {recommendation['recommended_components']} → 32 → 20 → 12 → 1 (STATICA)")
     print()
     print("🔧 DOPO AVER MODIFICATO I FILE:")
     print("   1. Salva entrambi i file")

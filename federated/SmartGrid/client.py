@@ -15,7 +15,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score
 
-# CONFIGURAZIONE PCA MANUALE
+# CONFIGURAZIONE PCA STATICA
 # MODIFICA QUESTO VALORE DOPO AVER ESEGUITO L'ANALISI PCA
 PCA_COMPONENTS = 35  # <-- MODIFICA QUESTO VALORE CON IL RISULTATO DELL'ANALISI
 PCA_RANDOM_STATE = 42
@@ -271,47 +271,32 @@ def load_client_smartgrid_data_with_fixed_pca(client_id):
     
     return X_train_final, y_train, X_val_final, y_val, dataset_info
 
-def create_smartgrid_dnn_model_fixed_architecture():
+def create_smartgrid_dnn_model_static_architecture():
     """
-    Crea il modello DNN SmartGrid con architettura FISSA ottimizzata per PCA_COMPONENTS.
-    Architettura automatica basata sul numero fisso di componenti PCA.
+    Crea il modello DNN SmartGrid con architettura STATICA ottimizzata per 35 componenti PCA.
+    RIMOSSA la logica dinamica - ora architettura completamente fissa.
     
     Returns:
         Modello Keras compilato per dataset sbilanciati
     """
-    print(f"[Client] === CREAZIONE DNN ARCHITETTURA FISSA (SENZA SMOTE) ===")
-    print(f"[Client] Input features fisse: {PCA_COMPONENTS}")
+    print(f"[Client] === CREAZIONE DNN ARCHITETTURA STATICA (SENZA SMOTE) ===")
+    print(f"[Client] Input features: {PCA_COMPONENTS} (FISSO)")
     
     # Parametri ottimizzati per dataset sbilanciati
     dropout_rate = 0.3  # Aumentato per prevenire overfitting
     l2_reg = 0.001      # Aumentato per maggiore regolarizzazione
     
-    # ARCHITETTURA FISSA ottimizzata automaticamente per PCA_COMPONENTS
-    if PCA_COMPONENTS <= 20:
-        # Architettura compatta per poche feature
-        layer_sizes = [24, 16, 8]
-        arch_type = "compatta"
-    elif PCA_COMPONENTS <= 40:
-        # Architettura media per feature medie
-        layer_sizes = [32, 20, 12]
-        arch_type = "media"
-    elif PCA_COMPONENTS <= 60:
-        # Architettura standard per molte feature
-        layer_sizes = [48, 32, 16]
-        arch_type = "standard"
-    else:
-        # Architettura estesa per moltissime feature
-        layer_sizes = [64, 40, 20]
-        arch_type = "estesa"
+    # ARCHITETTURA STATICA OTTIMIZZATA PER 35 COMPONENTI PCA
+    # 35 → 32 → 20 → 12 → 1 (architettura media fissa)
     
-    print(f"[Client] Architettura {arch_type}: {PCA_COMPONENTS} → {layer_sizes[0]} → {layer_sizes[1]} → {layer_sizes[2]} → 1")
+    print(f"[Client] Architettura STATICA: {PCA_COMPONENTS} → 32 → 20 → 12 → 1")
     
     model = keras.Sequential([
         # Input layer esplicito con dimensione FISSA
         layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
         
-        # Layer 1: Dimensione ottimizzata automaticamente per PCA_COMPONENTS
-        layers.Dense(layer_sizes[0], 
+        # Layer 1: 32 neuroni (ottimizzato per 35 input)
+        layers.Dense(32, 
                     activation='relu',
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer='he_normal',
@@ -319,8 +304,8 @@ def create_smartgrid_dnn_model_fixed_architecture():
         layers.BatchNormalization(name='batch_norm_1'),
         layers.Dropout(dropout_rate, name='dropout_1'),
         
-        # Layer 2: Feature extraction
-        layers.Dense(layer_sizes[1], 
+        # Layer 2: 20 neuroni (feature extraction)
+        layers.Dense(20, 
                     activation='relu',
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer='he_normal',
@@ -328,8 +313,8 @@ def create_smartgrid_dnn_model_fixed_architecture():
         layers.BatchNormalization(name='batch_norm_2'),
         layers.Dropout(dropout_rate, name='dropout_2'),
         
-        # Layer 3: Pattern recognition
-        layers.Dense(layer_sizes[2], 
+        # Layer 3: 12 neuroni (pattern recognition)
+        layers.Dense(12, 
                     activation='relu',
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer='he_normal',
@@ -337,7 +322,7 @@ def create_smartgrid_dnn_model_fixed_architecture():
         layers.BatchNormalization(name='batch_norm_3'),
         layers.Dropout(dropout_rate / 2, name='dropout_3'),
         
-        # Output layer
+        # Output layer: 1 neurone (classificazione binaria)
         layers.Dense(1, 
                     activation='sigmoid',
                     kernel_initializer='glorot_uniform',
@@ -369,10 +354,10 @@ def create_smartgrid_dnn_model_fixed_architecture():
     total_params = model.count_params()
     params_per_feature = total_params / PCA_COMPONENTS
     
-    print(f"[Client] === DNN ARCHITETTURA FISSA CREATA ===")
+    print(f"[Client] === DNN ARCHITETTURA STATICA CREATA ===")
     print(f"[Client]   - Parametri totali: {total_params:,}")
     print(f"[Client]   - Parametri per feature: {params_per_feature:.1f}")
-    print(f"[Client]   - Architettura: {arch_type} per {PCA_COMPONENTS} feature PCA")
+    print(f"[Client]   - Architettura: STATICA per {PCA_COMPONENTS} feature PCA")
     print(f"[Client]   - Dropout: {dropout_rate}")
     print(f"[Client]   - L2 regularization: {l2_reg}")
     print(f"[Client]   - Learning rate: {optimizer.learning_rate}")
@@ -488,7 +473,7 @@ dataset_info = None
 
 class SmartGridDNNClientFixed(fl.client.NumPyClient):
     """
-    Client Flower per SmartGrid con DNN a architettura fissa e PCA fissa SENZA SMOTE.
+    Client Flower per SmartGrid con DNN a architettura STATICA e PCA fissa SENZA SMOTE.
     Configurazione manuale semplificata per scopi didattici.
     """
     
@@ -537,7 +522,7 @@ class SmartGridDNNClientFixed(fl.client.NumPyClient):
         
         try:
             print(f"[Client {client_id}] Training con class weights: {class_weights}")
-            print(f"[Client {client_id}] Architettura fissa per {dataset_info['pca_features']} feature PCA")
+            print(f"[Client {client_id}] Architettura STATICA per {dataset_info['pca_features']} feature PCA")
             
             history = model.fit(
                 X_train, y_train,
@@ -607,8 +592,8 @@ class SmartGridDNNClientFixed(fl.client.NumPyClient):
             # Metodologia
             'preprocessing_method': dataset_info['preprocessing_method'],
             'pca_method': dataset_info['pca_method'],
-            'model_type': 'dnn_fixed_architecture_manual_pca',
-            'architecture_type': 'fixed_optimized'
+            'model_type': 'dnn_static_architecture_manual_pca',
+            'architecture_type': 'static_optimized'
         }
         
         return model.get_weights(), len(X_train), metrics
@@ -661,7 +646,7 @@ class SmartGridDNNClientFixed(fl.client.NumPyClient):
                 "val_samples": len(X_val),
                 "pca_features": dataset_info['pca_features'],
                 "pca_components_configured": dataset_info['pca_components_configured'],
-                "model_type": "dnn_fixed_architecture_manual_pca"
+                "model_type": "dnn_static_architecture_manual_pca"
             }
             
             return loss, len(X_val), metrics
@@ -689,21 +674,20 @@ def main():
         print(f"Errore: Client ID non valido. {e}")
         sys.exit(1)
     
-    print(f"=== AVVIO CLIENT SMARTGRID DNN CON PCA FISSA {client_id} (SENZA SMOTE) ===")
-    print("CONFIGURAZIONE MANUALE:")
+    print(f"=== AVVIO CLIENT SMARTGRID DNN CON ARCHITETTURA STATICA {client_id} (SENZA SMOTE) ===")
+    print("CONFIGURAZIONE FINALE:")
     print("  ✅ SMOTE RIMOSSO per attacchi inference/extraction realistici")
-    print(f"  ✅ PCA FISSA configurata manualmente: {PCA_COMPONENTS} componenti")
-    print("  ✅ Architettura DNN FISSA ottimizzata automaticamente")
+    print(f"  ✅ PCA FISSA configurata: {PCA_COMPONENTS} componenti")
+    print("  ✅ Architettura DNN STATICA: 35 → 32 → 20 → 12 → 1")
     print("  ✅ Distribuzione naturale mantenuta per fedeltà al mondo reale")
     print("  ✅ Class weights automatici per compensare sbilanciamento")
     print("  ✅ Metriche bilanciate: F1-Score, Balanced Accuracy, AUC")
     print("  ✅ Normalizzazione LOCALE per ogni client")
-    print("  ✅ Codice semplificato per scopi didattici")
+    print("  ✅ Codice ottimizzato per scopi didattici")
     print("")
-    print("VANTAGGI CONFIGURAZIONE MANUALE:")
-    print(f"  🎯 Numero fisso di componenti PCA: {PCA_COMPONENTS}")
-    print("  🎯 Architettura DNN ottimizzata automaticamente")
-    print("  🎯 Nessuna variabilità tra esecuzioni")
+    print("VANTAGGI ARCHITETTURA STATICA:")
+    print(f"  🎯 Architettura fissa: {PCA_COMPONENTS} → 32 → 20 → 12 → 1")
+    print("  🎯 Nessuna logica dinamica")
     print("  🎯 Performance consistenti e prevedibili")
     print("  🎯 Facilità di debugging e manutenzione")
     print("  🎯 Controllo completo sui parametri")
@@ -719,16 +703,16 @@ def main():
         print(f"[Client {client_id}] Caricamento dati con PCA fissa SENZA SMOTE...")
         X_train, y_train, X_val, y_val, dataset_info = load_client_smartgrid_data_with_fixed_pca(client_id)
         
-        # Crea il modello DNN con architettura fissa
-        model = create_smartgrid_dnn_model_fixed_architecture()
+        # Crea il modello DNN con architettura STATICA
+        model = create_smartgrid_dnn_model_static_architecture()
         
-        print(f"[Client {client_id}] === RIASSUNTO CLIENT PCA FISSA ===")
+        print(f"[Client {client_id}] === RIASSUNTO CLIENT ARCHITETTURA STATICA ===")
         print(f"[Client {client_id}] Dataset: {dataset_info['train_samples']} train, {dataset_info['val_samples']} val")
         print(f"[Client {client_id}] Distribuzione naturale: {dataset_info['attack_ratio']*100:.1f}% attacchi")
         print(f"[Client {client_id}] Feature: {dataset_info['original_features']} → {dataset_info['pca_features']}")
         print(f"[Client {client_id}] PCA configurata: {dataset_info['pca_components_configured']} componenti")
         print(f"[Client {client_id}] Varianza spiegata: {dataset_info['variance_explained']:.2f}%")
-        print(f"[Client {client_id}] Modello: {model.count_params():,} parametri (architettura fissa)")
+        print(f"[Client {client_id}] Modello: {model.count_params():,} parametri (architettura STATICA)")
         print(f"[Client {client_id}] Class weights: {dataset_info['class_weights']}")
         print(f"[Client {client_id}] Preprocessing: {dataset_info['preprocessing_method']}")
         print(f"[Client {client_id}] PCA: {dataset_info['pca_method']}")
