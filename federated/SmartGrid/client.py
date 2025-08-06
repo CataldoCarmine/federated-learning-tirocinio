@@ -2,6 +2,7 @@ import flwr as fl
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers, regularizers
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 import pandas as pd
 import numpy as np
 import sys
@@ -274,29 +275,31 @@ def load_client_smartgrid_data_with_fixed_pca(client_id):
 def create_smartgrid_dnn_model_static_architecture():
     """
     Crea il modello DNN SmartGrid con architettura STATICA ottimizzata per 35 componenti PCA.
-    RIMOSSA la logica dinamica - ora architettura completamente fissa.
+    INCLUDE TUTTE LE TECNICHE DI REGOLARIZZAZIONE per prevenire overfitting.
     
     Returns:
         Modello Keras compilato per dataset sbilanciati
     """
-    print(f"[Client] === CREAZIONE DNN ARCHITETTURA STATICA (SENZA SMOTE) ===")
+    print(f"[Client] === CREAZIONE DNN ARCHITETTURA STATICA CON REGOLARIZZAZIONE COMPLETA ===")
     print(f"[Client] Input features: {PCA_COMPONENTS} (FISSO)")
     
-    # Parametri ottimizzati per dataset sbilanciati
-    dropout_rate = 0.3  # Aumentato per prevenire overfitting
-    l2_reg = 0.001      # Aumentato per maggiore regolarizzazione
+    # PARAMETRI DI REGOLARIZZAZIONE OTTIMIZZATI per PCA ridotta
+    dropout_rate = 0.4          # AUMENTATO da 0.3 per maggiore regolarizzazione
+    l2_reg = 0.0015             # AUMENTATO da 0.001 per PCA ridotta
     
     # ARCHITETTURA STATICA OTTIMIZZATA PER 35 COMPONENTI PCA
-    # 35 → 32 → 20 → 12 → 1 (architettura media fissa)
+    # Ridotta ulteriormente per prevenire overfitting con PCA
+    # 35 → 28 → 16 → 8 → 1 (architettura più conservativa)
     
-    print(f"[Client] Architettura STATICA: {PCA_COMPONENTS} → 32 → 20 → 12 → 1")
+    print(f"[Client] Architettura STATICA ANTI-OVERFITTING: {PCA_COMPONENTS} → 28 → 16 → 8 → 1")
+    print(f"[Client] Regolarizzazione: Dropout {dropout_rate}, L2 {l2_reg}, BatchNorm, EarlyStopping")
     
     model = keras.Sequential([
         # Input layer esplicito con dimensione FISSA
         layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
         
-        # Layer 1: 32 neuroni (ottimizzato per 35 input)
-        layers.Dense(32, 
+        # Layer 1: 28 neuroni (ridotto da 32 per meno parametri)
+        layers.Dense(28, 
                     activation='relu',
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer='he_normal',
@@ -304,8 +307,8 @@ def create_smartgrid_dnn_model_static_architecture():
         layers.BatchNormalization(name='batch_norm_1'),
         layers.Dropout(dropout_rate, name='dropout_1'),
         
-        # Layer 2: 20 neuroni (feature extraction)
-        layers.Dense(20, 
+        # Layer 2: 16 neuroni (ridotto da 20 per meno parametri)
+        layers.Dense(16, 
                     activation='relu',
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer='he_normal',
@@ -313,14 +316,14 @@ def create_smartgrid_dnn_model_static_architecture():
         layers.BatchNormalization(name='batch_norm_2'),
         layers.Dropout(dropout_rate, name='dropout_2'),
         
-        # Layer 3: 12 neuroni (pattern recognition)
-        layers.Dense(12, 
+        # Layer 3: 8 neuroni (ridotto da 12 per meno parametri)
+        layers.Dense(8, 
                     activation='relu',
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer='he_normal',
                     name='dense_3'),
         layers.BatchNormalization(name='batch_norm_3'),
-        layers.Dropout(dropout_rate / 2, name='dropout_3'),
+        layers.Dropout(dropout_rate * 0.75, name='dropout_3'),  # Dropout leggermente ridotto
         
         # Output layer: 1 neurone (classificazione binaria)
         layers.Dense(1, 
@@ -329,13 +332,13 @@ def create_smartgrid_dnn_model_static_architecture():
                     name='output_layer')
     ])
     
-    # Ottimizzatore con learning rate adattivo
+    # Ottimizzatore con learning rate più basso per stabilità
     optimizer = keras.optimizers.Adam(
-        learning_rate=0.001,    # Learning rate standard
+        learning_rate=0.0008,    # RIDOTTO da 0.001 per convergenza più stabile
         beta_1=0.9,
         beta_2=0.999,
         epsilon=1e-7,
-        clipnorm=1.0
+        clipnorm=1.0             # Gradient clipping per stabilità
     )
     
     # Compila il modello con Binary Crossentropy standard
@@ -354,23 +357,64 @@ def create_smartgrid_dnn_model_static_architecture():
     total_params = model.count_params()
     params_per_feature = total_params / PCA_COMPONENTS
     
-    print(f"[Client] === DNN ARCHITETTURA STATICA CREATA ===")
+    print(f"[Client] === DNN ARCHITETTURA STATICA ANTI-OVERFITTING CREATA ===")
     print(f"[Client]   - Parametri totali: {total_params:,}")
     print(f"[Client]   - Parametri per feature: {params_per_feature:.1f}")
-    print(f"[Client]   - Architettura: STATICA per {PCA_COMPONENTS} feature PCA")
-    print(f"[Client]   - Dropout: {dropout_rate}")
-    print(f"[Client]   - L2 regularization: {l2_reg}")
-    print(f"[Client]   - Learning rate: {optimizer.learning_rate}")
+    print(f"[Client]   - Architettura: STATICA CONSERVATIVA per {PCA_COMPONENTS} feature PCA")
+    print(f"[Client]   - Dropout: {dropout_rate} (AUMENTATO)")
+    print(f"[Client]   - L2 regularization: {l2_reg} (AUMENTATO)")
+    print(f"[Client]   - Learning rate: {optimizer.learning_rate} (RIDOTTO)")
+    print(f"[Client]   - BatchNormalization: ATTIVA")
+    print(f"[Client]   - Gradient clipping: {optimizer.clipnorm}")
     print(f"[Client]   - Loss: Binary Crossentropy + Class Weights")
-    print(f"[Client]   - Ottimizzato per: dati naturalmente sbilanciati")
+    print(f"[Client]   - Ottimizzato per: dati sbilanciati + prevenzione overfitting")
     
-    # Valutazione ottimizzazione
-    if params_per_feature > 100:
-        print(f"[Client]   ⚠️  ATTENZIONE: Alto rapporto parametri/feature")
+    # Valutazione rischio overfitting
+    if params_per_feature > 50:
+        print(f"[Client]   ⚠️  ATTENZIONE: Alto rapporto parametri/feature ({params_per_feature:.1f})")
+        print(f"[Client]   🔧 Regolarizzazione AUMENTATA per compensare")
     else:
-        print(f"[Client]   ✅ Rapporto parametri/feature ottimale")
+        print(f"[Client]   ✅ Rapporto parametri/feature ottimale ({params_per_feature:.1f})")
     
     return model
+
+def create_training_callbacks_for_client():
+    """
+    Crea i callback di training ottimizzati per prevenire overfitting nei client federati.
+    NUOVA FUNZIONE per aggiungere EarlyStopping e ReduceLROnPlateau.
+    
+    Returns:
+        Lista di callback Keras
+    """
+    print(f"[Client] === CREAZIONE CALLBACK ANTI-OVERFITTING ===")
+    
+    callbacks = [
+        # EarlyStopping per prevenire overfitting
+        EarlyStopping(
+            monitor='loss',                # Monitora la loss di training (non abbiamo validation nei client)
+            patience=3,                    # Ferma dopo 3 epoche senza miglioramento
+            restore_best_weights=True,     # Ripristina i pesi migliori
+            verbose=0,                     # Silenziato per non confondere i log federati
+            mode='min',
+            min_delta=0.001               # Soglia minima di miglioramento
+        ),
+        
+        # ReduceLROnPlateau per adattare il learning rate
+        ReduceLROnPlateau(
+            monitor='loss',                # Monitora la loss di training
+            factor=0.7,                   # Riduce LR del 30%
+            patience=2,                   # Riduce dopo 2 epoche senza miglioramento
+            min_lr=1e-6,                 # Learning rate minimo
+            verbose=0,                    # Silenziato per non confondere i log federati
+            mode='min'
+        )
+    ]
+    
+    print(f"[Client]   - EarlyStopping: patience=3, monitor=loss")
+    print(f"[Client]   - ReduceLROnPlateau: factor=0.7, patience=2")
+    print(f"[Client]   - Callback configurati per training federato")
+    
+    return callbacks
 
 def safe_extract_parameters(parameters):
     """
@@ -474,7 +518,7 @@ dataset_info = None
 class SmartGridDNNClientFixed(fl.client.NumPyClient):
     """
     Client Flower per SmartGrid con DNN a architettura STATICA e PCA fissa SENZA SMOTE.
-    Configurazione manuale semplificata per scopi didattici.
+    INCLUDE REGOLARIZZAZIONE COMPLETA per prevenire overfitting.
     """
     
     def get_parameters(self, config):
@@ -496,11 +540,11 @@ class SmartGridDNNClientFixed(fl.client.NumPyClient):
 
     def fit(self, parameters, config):
         """
-        Addestra il modello DNN su dati naturalmente sbilanciati con class weights.
+        Addestra il modello DNN con REGOLARIZZAZIONE COMPLETA per prevenire overfitting.
         """
         global model, X_train, y_train, dataset_info
         
-        print(f"[Client {client_id}] Round di addestramento con PCA fissa e dataset naturalmente sbilanciato...")
+        print(f"[Client {client_id}] Round di addestramento con REGOLARIZZAZIONE ANTI-OVERFITTING...")
         
         # Usa funzione sicura per impostare pesi
         success, error_msg = safe_set_model_weights(model, parameters, client_id)
@@ -513,22 +557,30 @@ class SmartGridDNNClientFixed(fl.client.NumPyClient):
             print(f"[Client {client_id}] Nessun dato di training disponibile!")
             return model.get_weights(), 0, {}
         
-        # Configurazione addestramento per dataset sbilanciati
-        local_epochs = 5        
-        batch_size = 32         
+        # Configurazione addestramento ANTI-OVERFITTING
+        local_epochs = 4            # RIDOTTO da 5 per meno overfitting
+        batch_size = 16             # RIDOTTO da 32 per regolarizzazione implicita
         
         # Usa class weights per compensare sbilanciamento
         class_weights = dataset_info['class_weights']
         
+        # Crea callback anti-overfitting
+        callbacks = create_training_callbacks_for_client()
+        
         try:
-            print(f"[Client {client_id}] Training con class weights: {class_weights}")
-            print(f"[Client {client_id}] Architettura STATICA per {dataset_info['pca_features']} feature PCA")
+            print(f"[Client {client_id}] Training ANTI-OVERFITTING:")
+            print(f"[Client {client_id}]   - Epoche: {local_epochs} (ridotte)")
+            print(f"[Client {client_id}]   - Batch size: {batch_size} (ridotto)")
+            print(f"[Client {client_id}]   - Class weights: {class_weights}")
+            print(f"[Client {client_id}]   - Callback: EarlyStopping + ReduceLROnPlateau")
+            print(f"[Client {client_id}]   - Architettura CONSERVATIVA: {dataset_info['pca_features']} → 28 → 16 → 8 → 1")
             
             history = model.fit(
                 X_train, y_train,
                 epochs=local_epochs,
                 batch_size=batch_size,
                 class_weight=class_weights,  # Compensa sbilanciamento
+                callbacks=callbacks,         # AGGIUNTO: callback anti-overfitting
                 verbose=0,
                 shuffle=True
             )
@@ -548,8 +600,15 @@ class SmartGridDNNClientFixed(fl.client.NumPyClient):
             y_pred_binary = (y_pred_prob > 0.5).astype(int)
             train_balanced_acc = balanced_accuracy_score(y_train, y_pred_binary)
             
+            # Informazioni sui callback
+            actual_epochs = len(history.history['loss'])
+            early_stopped = actual_epochs < local_epochs
+            
             print(f"[Client {client_id}] Loss: {train_loss:.4f}, Accuracy: {train_accuracy:.4f}")
             print(f"[Client {client_id}] F1-Score: {train_f1:.4f}, Balanced Acc: {train_balanced_acc:.4f}")
+            print(f"[Client {client_id}] Epoche effettive: {actual_epochs}/{local_epochs}")
+            if early_stopped:
+                print(f"[Client {client_id}] ✅ EarlyStopping attivato (prevenzione overfitting)")
             
         except Exception as e:
             print(f"[Client {client_id}] Errore durante addestramento: {e}")
@@ -568,12 +627,16 @@ class SmartGridDNNClientFixed(fl.client.NumPyClient):
             'train_f1_score': float(train_f1),
             'train_balanced_accuracy': float(train_balanced_acc),
             
-            # Configurazione addestramento
-            'local_epochs': int(local_epochs),
+            # Configurazione addestramento ANTI-OVERFITTING
+            'local_epochs_planned': int(local_epochs),
+            'local_epochs_actual': int(actual_epochs),
+            'early_stopped': bool(early_stopped),
             'batch_size': int(batch_size),
             'used_class_weights': True,
             'class_weight_0': float(class_weights[0]),
             'class_weight_1': float(class_weights[1]),
+            'used_callbacks': True,
+            'regularization_level': 'high',
             
             # Informazioni dataset essenziali
             'client_id': int(dataset_info['client_id']),
@@ -588,12 +651,13 @@ class SmartGridDNNClientFixed(fl.client.NumPyClient):
             'pca_reduction': float(dataset_info['pca_reduction']),
             'variance_explained': float(dataset_info['variance_explained']),
             'total_params': int(model.count_params()),
+            'params_per_feature': float(model.count_params() / dataset_info['pca_features']),
             
             # Metodologia
             'preprocessing_method': dataset_info['preprocessing_method'],
             'pca_method': dataset_info['pca_method'],
-            'model_type': 'dnn_static_architecture_manual_pca',
-            'architecture_type': 'static_optimized'
+            'model_type': 'dnn_static_architecture_anti_overfitting',
+            'architecture_type': 'static_conservative_regularized'
         }
         
         return model.get_weights(), len(X_train), metrics
@@ -646,7 +710,8 @@ class SmartGridDNNClientFixed(fl.client.NumPyClient):
                 "val_samples": len(X_val),
                 "pca_features": dataset_info['pca_features'],
                 "pca_components_configured": dataset_info['pca_components_configured'],
-                "model_type": "dnn_static_architecture_manual_pca"
+                "model_type": "dnn_static_architecture_anti_overfitting",
+                "regularization_level": "high"
             }
             
             return loss, len(X_val), metrics
@@ -657,7 +722,7 @@ class SmartGridDNNClientFixed(fl.client.NumPyClient):
 
 def main():
     """
-    Funzione principale per avviare il client SmartGrid DNN con PCA fissa SENZA SMOTE.
+    Funzione principale per avviare il client SmartGrid DNN con REGOLARIZZAZIONE COMPLETA.
     """
     global client_id, model, X_train, y_train, X_val, y_val, dataset_info
     
@@ -674,46 +739,41 @@ def main():
         print(f"Errore: Client ID non valido. {e}")
         sys.exit(1)
     
-    print(f"=== AVVIO CLIENT SMARTGRID DNN CON ARCHITETTURA STATICA {client_id} (SENZA SMOTE) ===")
-    print("CONFIGURAZIONE FINALE:")
+    print(f"=== AVVIO CLIENT SMARTGRID DNN CON REGOLARIZZAZIONE COMPLETA {client_id} ===")
+    print("CONFIGURAZIONE ANTI-OVERFITTING:")
     print("  ✅ SMOTE RIMOSSO per attacchi inference/extraction realistici")
     print(f"  ✅ PCA FISSA configurata: {PCA_COMPONENTS} componenti")
-    print("  ✅ Architettura DNN STATICA: 35 → 32 → 20 → 12 → 1")
-    print("  ✅ Distribuzione naturale mantenuta per fedeltà al mondo reale")
+    print("  ✅ Architettura DNN CONSERVATIVA: 35 → 28 → 16 → 8 → 1")
+    print("  ✅ Dropout AUMENTATO: 0.4")
+    print("  ✅ L2 Regularization AUMENTATO: 0.0015")
+    print("  ✅ BatchNormalization: ATTIVA")
+    print("  ✅ EarlyStopping: patience=3")
+    print("  ✅ ReduceLROnPlateau: factor=0.7, patience=2")
+    print("  ✅ Learning Rate RIDOTTO: 0.0008")
+    print("  ✅ Batch Size RIDOTTO: 16")
+    print("  ✅ Epoche RIDOTTE: 4")
+    print("  ✅ Gradient Clipping: 1.0")
     print("  ✅ Class weights automatici per compensare sbilanciamento")
-    print("  ✅ Metriche bilanciate: F1-Score, Balanced Accuracy, AUC")
-    print("  ✅ Normalizzazione LOCALE per ogni client")
-    print("  ✅ Codice ottimizzato per scopi didattici")
-    print("")
-    print("VANTAGGI ARCHITETTURA STATICA:")
-    print(f"  🎯 Architettura fissa: {PCA_COMPONENTS} → 32 → 20 → 12 → 1")
-    print("  🎯 Nessuna logica dinamica")
-    print("  🎯 Performance consistenti e prevedibili")
-    print("  🎯 Facilità di debugging e manutenzione")
-    print("  🎯 Controllo completo sui parametri")
-    print("")
-    print("VANTAGGI PER ATTACCHI:")
-    print("  🎯 Dati di training naturalmente distribuiti")
-    print("  🎯 Nessun dato sintetico che confonde gli attacchi")
-    print("  🎯 Scenario federato completamente realistico")
-    print("  🎯 Architettura prevedibile per test di sicurezza")
+    print("  ✅ Distribuzione naturale mantenuta per fedeltà al mondo reale")
     
     try:
         # Carica i dati locali del client con PCA fissa
         print(f"[Client {client_id}] Caricamento dati con PCA fissa SENZA SMOTE...")
         X_train, y_train, X_val, y_val, dataset_info = load_client_smartgrid_data_with_fixed_pca(client_id)
         
-        # Crea il modello DNN con architettura STATICA
+        # Crea il modello DNN con architettura STATICA e REGOLARIZZAZIONE COMPLETA
         model = create_smartgrid_dnn_model_static_architecture()
         
-        print(f"[Client {client_id}] === RIASSUNTO CLIENT ARCHITETTURA STATICA ===")
+        print(f"[Client {client_id}] === RIASSUNTO CLIENT ANTI-OVERFITTING ===")
         print(f"[Client {client_id}] Dataset: {dataset_info['train_samples']} train, {dataset_info['val_samples']} val")
         print(f"[Client {client_id}] Distribuzione naturale: {dataset_info['attack_ratio']*100:.1f}% attacchi")
         print(f"[Client {client_id}] Feature: {dataset_info['original_features']} → {dataset_info['pca_features']}")
         print(f"[Client {client_id}] PCA configurata: {dataset_info['pca_components_configured']} componenti")
         print(f"[Client {client_id}] Varianza spiegata: {dataset_info['variance_explained']:.2f}%")
-        print(f"[Client {client_id}] Modello: {model.count_params():,} parametri (architettura STATICA)")
+        print(f"[Client {client_id}] Modello: {model.count_params():,} parametri (CONSERVATIVO)")
+        print(f"[Client {client_id}] Parametri/feature: {model.count_params()/dataset_info['pca_features']:.1f}")
         print(f"[Client {client_id}] Class weights: {dataset_info['class_weights']}")
+        print(f"[Client {client_id}] Regolarizzazione: MASSIMA (Dropout, L2, BatchNorm, EarlyStopping, ReduceLR)")
         print(f"[Client {client_id}] Preprocessing: {dataset_info['preprocessing_method']}")
         print(f"[Client {client_id}] PCA: {dataset_info['pca_method']}")
         print(f"[Client {client_id}] Connessione al server su localhost:8080...")

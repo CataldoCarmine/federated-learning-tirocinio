@@ -3,6 +3,7 @@ from flwr.server.strategy import FedAvg
 from flwr.common import Parameters
 import tensorflow as tf
 from tensorflow.keras import layers, regularizers
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 import sys
 import pandas as pd
 import numpy as np
@@ -190,30 +191,31 @@ def compute_class_weights_server_simple(y_global):
 
 def create_server_dnn_model_static_architecture():
     """
-    Crea il modello DNN per il server IDENTICO ai client con architettura STATICA.
-    Usa PCA_COMPONENTS fisso per architettura statica.
+    Crea il modello DNN per il server IDENTICO ai client con regolarizzazione completa.
+    INCLUDE TUTTE LE TECNICHE DI REGOLARIZZAZIONE per prevenire overfitting.
     
     Returns:
         Modello Keras compilato per dataset sbilanciati
     """
-    print(f"[Server] === CREAZIONE DNN ARCHITETTURA STATICA SERVER (SENZA SMOTE) ===")
+    print(f"[Server] === CREAZIONE DNN ARCHITETTURA STATICA SERVER CON REGOLARIZZAZIONE ===")
     print(f"[Server] Input features fisse: {PCA_COMPONENTS}")
     
-    # Parametri IDENTICI ai client
-    dropout_rate = 0.3
-    l2_reg = 0.001
+    # Parametri IDENTICI ai client per REGOLARIZZAZIONE MASSIMA
+    dropout_rate = 0.4          # AUMENTATO da 0.3 per maggiore regolarizzazione
+    l2_reg = 0.0015             # AUMENTATO da 0.001 per PCA ridotta
     
-    # ARCHITETTURA STATICA IDENTICA ai client
-    # 35 → 32 → 20 → 12 → 1 (architettura media fissa)
+    # ARCHITETTURA STATICA IDENTICA ai client - CONSERVATIVA ANTI-OVERFITTING
+    # 35 → 28 → 16 → 8 → 1 (architettura conservativa anti-overfitting)
     
-    print(f"[Server] Architettura STATICA: {PCA_COMPONENTS} → 32 → 20 → 12 → 1")
+    print(f"[Server] Architettura STATICA ANTI-OVERFITTING: {PCA_COMPONENTS} → 28 → 16 → 8 → 1")
+    print(f"[Server] Regolarizzazione: Dropout {dropout_rate}, L2 {l2_reg}, BatchNorm")
     
     model = tf.keras.Sequential([
         # Input layer esplicito con dimensione FISSA IDENTICA ai client
         layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
         
-        # Layer 1: 32 neuroni (ottimizzato per 35 input)
-        layers.Dense(32, 
+        # Layer 1: 28 neuroni (ridotto da 32 per meno parametri)
+        layers.Dense(28, 
                     activation='relu',
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer='he_normal',
@@ -221,8 +223,8 @@ def create_server_dnn_model_static_architecture():
         layers.BatchNormalization(name='batch_norm_1'),
         layers.Dropout(dropout_rate, name='dropout_1'),
         
-        # Layer 2: 20 neuroni (feature extraction)
-        layers.Dense(20, 
+        # Layer 2: 16 neuroni (ridotto da 20 per meno parametri)
+        layers.Dense(16, 
                     activation='relu',
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer='he_normal',
@@ -230,14 +232,14 @@ def create_server_dnn_model_static_architecture():
         layers.BatchNormalization(name='batch_norm_2'),
         layers.Dropout(dropout_rate, name='dropout_2'),
         
-        # Layer 3: 12 neuroni (pattern recognition)
-        layers.Dense(12, 
+        # Layer 3: 8 neuroni (ridotto da 12 per meno parametri)
+        layers.Dense(8, 
                     activation='relu',
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer='he_normal',
                     name='dense_3'),
         layers.BatchNormalization(name='batch_norm_3'),
-        layers.Dropout(dropout_rate / 2, name='dropout_3'),
+        layers.Dropout(dropout_rate * 0.75, name='dropout_3'),  # Dropout leggermente ridotto
         
         # Output layer IDENTICO ai client
         layers.Dense(1, 
@@ -248,11 +250,11 @@ def create_server_dnn_model_static_architecture():
     
     # Ottimizzatore IDENTICO ai client
     optimizer = tf.keras.optimizers.Adam(
-        learning_rate=0.001,
+        learning_rate=0.0008,    # RIDOTTO da 0.001 per convergenza più stabile
         beta_1=0.9,
         beta_2=0.999,
         epsilon=1e-7,
-        clipnorm=1.0
+        clipnorm=1.0             # Gradient clipping per stabilità
     )
     
     # Compila il modello IDENTICO ai client
@@ -271,21 +273,24 @@ def create_server_dnn_model_static_architecture():
     total_params = model.count_params()
     params_per_feature = total_params / PCA_COMPONENTS
     
-    print(f"[Server] === DNN ARCHITETTURA STATICA SERVER CREATA ===")
+    print(f"[Server] === DNN ARCHITETTURA STATICA ANTI-OVERFITTING SERVER CREATA ===")
     print(f"[Server]   - Parametri totali: {total_params:,}")
     print(f"[Server]   - Parametri per feature: {params_per_feature:.1f}")
-    print(f"[Server]   - Architettura: STATICA per {PCA_COMPONENTS} feature PCA")
-    print(f"[Server]   - Dropout: {dropout_rate}")
-    print(f"[Server]   - L2 regularization: {l2_reg}")
-    print(f"[Server]   - Learning rate: {optimizer.learning_rate}")
+    print(f"[Server]   - Architettura: CONSERVATIVA per {PCA_COMPONENTS} feature PCA")
+    print(f"[Server]   - Dropout: {dropout_rate} (AUMENTATO)")
+    print(f"[Server]   - L2 regularization: {l2_reg} (AUMENTATO)")
+    print(f"[Server]   - Learning rate: {optimizer.learning_rate} (RIDOTTO)")
+    print(f"[Server]   - BatchNormalization: ATTIVA")
+    print(f"[Server]   - Gradient clipping: {optimizer.clipnorm}")
     print(f"[Server]   - Loss: Binary Crossentropy + Class Weights")
-    print(f"[Server]   - IDENTICO ai client per compatibilità")
+    print(f"[Server]   - IDENTICO ai client per compatibilità + ANTI-OVERFITTING")
     
-    # Valutazione ottimizzazione
-    if params_per_feature > 100:
-        print(f"[Server]   ⚠️  ATTENZIONE: Alto rapporto parametri/feature")
+    # Valutazione rischio overfitting
+    if params_per_feature > 50:
+        print(f"[Server]   ⚠️  ATTENZIONE: Alto rapporto parametri/feature ({params_per_feature:.1f})")
+        print(f"[Server]   🔧 Regolarizzazione MASSIMA per compensare")
     else:
-        print(f"[Server]   ✅ Rapporto parametri/feature ottimale")
+        print(f"[Server]   ✅ Rapporto parametri/feature ottimale ({params_per_feature:.1f})")
     
     return model
 
@@ -489,6 +494,7 @@ def get_smartgrid_evaluate_fn_fixed():
         print(f"\n=== VALUTAZIONE GLOBALE DNN CON PCA FISSA - ROUND {server_round} ===")
         print(f"Dataset naturalmente sbilanciato per attacchi realistici")
         print(f"PCA fissa: {input_shape} componenti (configurata: {PCA_COMPONENTS})")
+        print(f"Regolarizzazione: MASSIMA per prevenzione overfitting")
         
         try:
             # Crea il modello DNN con architettura fissa per la valutazione (identico ai client)
@@ -505,7 +511,7 @@ def get_smartgrid_evaluate_fn_fixed():
                     "global_test_samples": 0
                 }
             
-            print(f"✅ Pesi aggregati impostati su modello server con architettura fissa")
+            print(f"✅ Pesi aggregati impostati su modello server con architettura fissa anti-overfitting")
             
             # Valutazione sul dataset test globale naturalmente sbilanciato
             results = model.evaluate(X_global, y_global, verbose=0)
@@ -519,7 +525,7 @@ def get_smartgrid_evaluate_fn_fixed():
             y_pred_binary = (y_pred_prob > 0.5).astype(int)
             balanced_acc = balanced_accuracy_score(y_global, y_pred_binary)
             
-            print(f"RISULTATI VALUTAZIONE CON PCA FISSA:")
+            print(f"RISULTATI VALUTAZIONE CON REGOLARIZZAZIONE COMPLETA:")
             print(f"  Loss: {loss:.4f}")
             print(f"  Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
             print(f"  F1-Score: {f1_score_val:.4f} ({f1_score_val*100:.2f}%)")
@@ -538,6 +544,7 @@ def get_smartgrid_evaluate_fn_fixed():
             
             # Informazioni distribuzione
             print(f"  Distribuzione naturale: {dataset_info.get('attack_ratio', 0)*100:.1f}% attacchi")
+            print(f"  Regolarizzazione: MASSIMA (Dropout 0.4, L2 0.0015, BatchNorm)")
             print(f"  Adatto per attacchi: ✅")
             
             return float(loss), {
@@ -568,31 +575,41 @@ def get_smartgrid_evaluate_fn_fixed():
                 "variance_explained_server": float(variance_explained),
                 "pca_method_server": "fixed_manual_configuration",
                 
+                # Informazioni regolarizzazione
+                "regularization_level": "maximum",
+                "dropout_rate": 0.4,
+                "l2_reg": 0.0015,
+                "learning_rate": 0.0008,
+                "architecture_type": "static_conservative_anti_overfitting",
+                
                 # Metodologia
-                "model_type": "dnn_static_architecture_manual_pca",
+                "model_type": "dnn_static_architecture_anti_overfitting",
                 "preprocessing_method": "no_smote_fixed_pca",
-                "architecture_type": "static_optimized"
+                "overfitting_prevention": "complete"
             }
             
         except Exception as e:
-            print(f"Errore durante la valutazione globale con PCA fissa: {e}")
+            print(f"Errore durante la valutazione globale con regolarizzazione: {e}")
+            import traceback
+            traceback.print_exc()
             return 1.0, {
                 "accuracy": 0.0, 
                 "error": str(e), 
                 "global_test_samples": 0,
-                "pca_method_server": "error_fallback"
+                "pca_method_server": "error_fallback",
+                "regularization_level": "error"
             }
     
     return evaluate
 
 def print_client_metrics_fixed(fit_results):
     """
-    Stampa le metriche dei client dopo ogni round con focus su PCA fissa.
+    Stampa le metriche dei client dopo ogni round con focus su regolarizzazione.
     """
     if not fit_results:
         return
     
-    print(f"\n=== METRICHE CLIENT DNN CON PCA FISSA (SENZA SMOTE) ===")
+    print(f"\n=== METRICHE CLIENT DNN CON REGOLARIZZAZIONE COMPLETA ===")
     
     total_samples = 0
     total_weighted_accuracy = 0
@@ -603,6 +620,8 @@ def print_client_metrics_fixed(fit_results):
     loss_list = []
     attack_ratio_list = []
     variance_explained_list = []
+    early_stopped_count = 0
+    total_params_list = []
     
     for i, (client_proxy, fit_res) in enumerate(fit_results):
         client_samples = fit_res.num_examples
@@ -640,6 +659,22 @@ def print_client_metrics_fixed(fit_results):
             balanced_acc = client_metrics['train_balanced_accuracy']
             print(f"  Balanced Accuracy: {balanced_acc:.4f}")
         
+        # Informazioni regolarizzazione
+        if 'early_stopped' in client_metrics:
+            early_stopped = client_metrics['early_stopped']
+            if early_stopped:
+                early_stopped_count += 1
+                print(f"  ✅ EarlyStopping attivato (prevenzione overfitting)")
+        
+        if 'local_epochs_actual' in client_metrics and 'local_epochs_planned' in client_metrics:
+            actual = client_metrics['local_epochs_actual']
+            planned = client_metrics['local_epochs_planned']
+            print(f"  Epoche: {actual}/{planned}")
+        
+        if 'regularization_level' in client_metrics:
+            reg_level = client_metrics['regularization_level']
+            print(f"  Regolarizzazione: {reg_level}")
+        
         # Informazioni distribuzione dataset
         if 'attack_ratio' in client_metrics:
             attack_ratio = client_metrics['attack_ratio']
@@ -659,20 +694,21 @@ def print_client_metrics_fixed(fit_results):
             variance_explained_list.append(variance_explained)
             print(f"  Varianza spiegata: {variance_explained:.2f}%")
         
-        if 'pca_method' in client_metrics:
-            pca_method = client_metrics['pca_method']
-            print(f"  Metodo PCA: {pca_method}")
+        # Informazioni modello e parametri
+        if 'total_params' in client_metrics:
+            total_params = client_metrics['total_params']
+            total_params_list.append(total_params)
+            print(f"  Parametri DNN: {total_params:,}")
+        
+        if 'params_per_feature' in client_metrics:
+            params_per_feature = client_metrics['params_per_feature']
+            print(f"  Parametri/feature: {params_per_feature:.1f}")
         
         # Class weights utilizzati
         if 'used_class_weights' in client_metrics and client_metrics['used_class_weights']:
             weight_0 = client_metrics.get('class_weight_0', 1.0)
             weight_1 = client_metrics.get('class_weight_1', 1.0)
             print(f"  Class weights: {{0: {weight_0:.3f}, 1: {weight_1:.3f}}}")
-        
-        # Informazioni modello fisso
-        if 'total_params' in client_metrics:
-            total_params = client_metrics['total_params']
-            print(f"  Parametri DNN: {total_params:,}")
         
         if 'architecture_type' in client_metrics:
             arch_type = client_metrics['architecture_type']
@@ -690,20 +726,28 @@ def print_client_metrics_fixed(fit_results):
         avg_loss = np.mean(loss_list) if loss_list else 0
         avg_attack_ratio = np.mean(attack_ratio_list) if attack_ratio_list else 0
         avg_variance_explained = np.mean(variance_explained_list) if variance_explained_list else 0
+        avg_total_params = np.mean(total_params_list) if total_params_list else 0
         
-        print(f"\nRIASSUNTO DNN CON PCA FISSA (SENZA SMOTE):")
+        print(f"\nRIASSUNTO DNN CON REGOLARIZZAZIONE COMPLETA:")
         print(f"  Media accuracy: {avg_weighted_accuracy:.4f}")
         print(f"  Media F1-Score: {avg_weighted_f1:.4f}")
         print(f"  Media loss: {avg_loss:.4f}")
         print(f"  Media distribuzione attacchi: {avg_attack_ratio*100:.1f}%")
         print(f"  Media varianza spiegata: {avg_variance_explained:.2f}%")
+        print(f"  Media parametri DNN: {avg_total_params:,.0f}")
         print(f"  Totale campioni: {total_samples}")
         print(f"  Client con errori: {len(error_clients)}")
+        print(f"  Client con EarlyStopping: {early_stopped_count}/{len(fit_results)}")
         
-        # Valutazioni specifiche PCA fissa
+        # Valutazioni specifiche regolarizzazione
         print(f"  ✅ PCA fissa: {PCA_COMPONENTS} componenti fissi per tutti i client")
-        print(f"  ✅ Architettura STATICA: DNN ottimizzata per {PCA_COMPONENTS} feature")
-        print(f"  ✅ Nessuna variabilità dimensionale tra client")
+        print(f"  ✅ Architettura CONSERVATIVA: DNN {PCA_COMPONENTS} → 28 → 16 → 8 → 1")
+        print(f"  ✅ Regolarizzazione MASSIMA: Dropout 0.4, L2 0.0015, BatchNorm, EarlyStopping")
+        print(f"  ✅ Parametri ottimizzati: LR 0.0008, Batch 16, Epoche 4")
+        
+        # Valutazione prevenzione overfitting
+        if early_stopped_count > 0:
+            print(f"  ✅ EarlyStopping attivo: {early_stopped_count} client fermati per prevenire overfitting")
         
         # Valutazione sbilanciamento
         if avg_attack_ratio < 0.3 or avg_attack_ratio > 0.7:
@@ -714,19 +758,20 @@ def print_client_metrics_fixed(fit_results):
 
 class SmartGridDNNFedAvgFixed(FedAvg):
     """
-    Strategia FedAvg personalizzata per SmartGrid DNN con PCA fissa SENZA SMOTE.
+    Strategia FedAvg personalizzata per SmartGrid DNN con regolarizzazione completa.
     """
     
     def aggregate_fit(self, server_round, results, failures):
         """
-        Aggrega i risultati dell'addestramento DNN con PCA fissa.
+        Aggrega i risultati dell'addestramento DNN con regolarizzazione completa.
         """
-        print(f"\n=== AGGREGAZIONE TRAINING DNN CON PCA FISSA (SENZA SMOTE) - ROUND {server_round} ===")
+        print(f"\n=== AGGREGAZIONE TRAINING DNN CON REGOLARIZZAZIONE COMPLETA - ROUND {server_round} ===")
         print(f"Client partecipanti: {len(results)}")
         print(f"Client falliti: {len(failures)}")
         print(f"Dataset naturalmente sbilanciati per attacchi realistici")
         print(f"PCA fissa: {PCA_COMPONENTS} componenti fissi")
-        print(f"Architettura DNN: STATICA e ottimizzata")
+        print(f"Architettura DNN: CONSERVATIVA ANTI-OVERFITTING (35 → 28 → 16 → 8 → 1)")
+        print(f"Regolarizzazione: MASSIMA (Dropout 0.4, L2 0.0015, BatchNorm, EarlyStopping)")
         
         if failures:
             print("Fallimenti:")
@@ -737,7 +782,7 @@ class SmartGridDNNFedAvgFixed(FedAvg):
             print("ERRORE: Nessun client ha fornito risultati validi")
             return None
         
-        # Stampa metriche dei client con focus su PCA fissa
+        # Stampa metriche dei client con focus su regolarizzazione
         print_client_metrics_fixed(results)
         
         # Chiama l'aggregazione standard
@@ -745,23 +790,26 @@ class SmartGridDNNFedAvgFixed(FedAvg):
             aggregated_result = super().aggregate_fit(server_round, results, failures)
             
             if aggregated_result is not None:
-                print(f"✅ Aggregazione DNN con PCA fissa completata per round {server_round}")
+                print(f"✅ Aggregazione DNN con regolarizzazione completa completata per round {server_round}")
                 print(f"✅ Pesi di {len(results)} client DNN aggregati con successo")
-                print(f"✅ Architetture STATICHE perfettamente compatibili")
+                print(f"✅ Architetture STATICHE ANTI-OVERFITTING perfettamente compatibili")
+                print(f"✅ Regolarizzazione massima applicata con successo")
             else:
                 print(f"❌ ATTENZIONE: Aggregazione fallita per round {server_round}")
                 
         except Exception as e:
             print(f"❌ ERRORE durante aggregazione: {e}")
+            import traceback
+            traceback.print_exc()
             return None
         
         return aggregated_result
 
     def aggregate_evaluate(self, server_round, results, failures):
         """
-        Aggrega i risultati della valutazione DNN con PCA fissa.
+        Aggrega i risultati della valutazione DNN con regolarizzazione completa.
         """
-        print(f"\n=== AGGREGAZIONE VALUTAZIONE DNN CON PCA FISSA ROUND {server_round} ===")
+        print(f"\n=== AGGREGAZIONE VALUTAZIONE DNN CON REGOLARIZZAZIONE ROUND {server_round} ===")
         print(f"Client che hanno valutato: {len(results)}")
         
         if failures:
@@ -773,39 +821,50 @@ class SmartGridDNNFedAvgFixed(FedAvg):
             aggregated_result = super().aggregate_evaluate(server_round, results, failures)
             
             if aggregated_result is not None:
-                print(f"✅ Aggregazione valutazione DNN con PCA fissa completata per round {server_round}")
+                print(f"✅ Aggregazione valutazione DNN con regolarizzazione completata per round {server_round}")
             else:
                 print(f"Aggregazione valutazione non riuscita per round {server_round}")
                 
         except Exception as e:
             print(f"ERRORE durante aggregazione valutazione: {e}")
+            import traceback
+            traceback.print_exc()
             return None
         
         return aggregated_result
 
 def main():
     """
-    Funzione principale per avviare il server SmartGrid federato DNN con PCA fissa SENZA SMOTE.
+    Funzione principale per avviare il server SmartGrid federato DNN con regolarizzazione completa.
     """
-    print("=== SERVER FEDERATO SMARTGRID DNN CON ARCHITETTURA STATICA (SENZA SMOTE) ===")
-    print("CONFIGURAZIONE FINALE:")
+    print("=== SERVER FEDERATO SMARTGRID DNN CON REGOLARIZZAZIONE COMPLETA ===")
+    print("CONFIGURAZIONE ANTI-OVERFITTING FINALE:")
     print("  ✅ SMOTE COMPLETAMENTE RIMOSSO per attacchi inference/extraction realistici")
     print(f"  ✅ PCA FISSA configurata manualmente: {PCA_COMPONENTS} componenti")
-    print("  ✅ Architettura DNN STATICA: 35 → 32 → 20 → 12 → 1")
+    print("  ✅ Architettura DNN CONSERVATIVA: 35 → 28 → 16 → 8 → 1")
+    print("  ✅ Dropout AUMENTATO: 0.4 (da 0.3)")
+    print("  ✅ L2 Regularization AUMENTATO: 0.0015 (da 0.001)")
+    print("  ✅ BatchNormalization: ATTIVA su tutti i layer")
+    print("  ✅ Learning Rate RIDOTTO: 0.0008 (da 0.001)")
+    print("  ✅ Gradient Clipping: 1.0")
+    print("  ✅ EarlyStopping: patience=3 sui client")
+    print("  ✅ ReduceLROnPlateau: factor=0.7, patience=2 sui client")
+    print("  ✅ Batch Size RIDOTTO: 16 (da 32)")
+    print("  ✅ Epoche RIDOTTE: 4 (da 5)")
     print("  ✅ Distribuzione naturale mantenuta per fedeltà al mondo reale")
     print("  ✅ Class weights automatici per compensare sbilanciamento")
     print("  ✅ Metriche bilanciate: F1-Score, Balanced Accuracy, AUC")
     print("  ✅ Normalizzazione LOCALE per ogni client (preserva privacy)")
     print("  ✅ Codice ottimizzato per scopi didattici")
     print("")
-    print("VANTAGGI ARCHITETTURA STATICA:")
-    print(f"  🎯 Numero fisso di componenti PCA: {PCA_COMPONENTS}")
-    print("  🎯 Architettura DNN STATICA ottimizzata")
-    print("  🎯 Nessuna variabilità tra esecuzioni")
-    print("  🎯 Performance consistenti e prevedibili")
-    print("  🎯 Facilità di debugging e manutenzione")
-    print("  🎯 Controllo completo sui parametri")
-    print("  🎯 Compatibilità perfetta client-server")
+    print("VANTAGGI REGOLARIZZAZIONE COMPLETA:")
+    print(f"  🎯 Prevenzione overfitting: 10 tecniche simultanee")
+    print(f"  🎯 Architettura CONSERVATIVA: ridotti parametri per feature")
+    print(f"  🎯 Training adattivo: EarlyStopping + ReduceLROnPlateau")
+    print(f"  🎯 Stabilità numerica: Gradient clipping + BatchNorm")
+    print(f"  🎯 Generalizzazione: Dropout elevato + L2 forte")
+    print(f"  🎯 Performance consistenti e stabili")
+    print(f"  🎯 Compatibilità perfetta client-server")
     print("")
     print("VANTAGGI PER ATTACCHI DI INFERENCE/EXTRACTION:")
     print("  🎯 Dati di training naturalmente distribuiti (nessun dato sintetico)")
@@ -814,23 +873,24 @@ def main():
     print("  🎯 Model extraction su comportamento naturale del modello")
     print("  🎯 Scenario federato completamente realistico")
     print("  🎯 Dimensionalità fissa e prevedibile")
+    print("  🎯 Modelli ben regolarizzati per attacchi robusti")
     print("")
     print("Configurazione:")
     print(f"  - PCA Components: {PCA_COMPONENTS} (configurato manualmente)")
     print("  - Rounds: 5")
     print("  - Client minimi: 2")
-    print("  - Strategia: FedAvg personalizzata con DNN a architettura STATICA")
+    print("  - Strategia: FedAvg personalizzata con DNN anti-overfitting")
     print("  - Valutazione: Dataset globale con PCA fissa (client 14-15)")
     print("  - Pipeline: Pulizia → Imputazione → Normalizzazione → PCA fissa (NO SMOTE)")
-    print("  - Architettura: STATICA e ottimizzata per numero feature PCA")
+    print("  - Architettura: CONSERVATIVA e ottimizzata con regolarizzazione massima")
     print("  - Class weights: Automatici per compensare sbilanciamento")
-    print("  - Batch size: 32 (ottimizzato per stabilità)")
-    print("  - Epoche locali: 5 (bilanciate per convergenza)")
+    print("  - Regolarizzazione: 10 tecniche simultanee")
+    print("  - Callback: EarlyStopping + ReduceLROnPlateau sui client")
     
     # Configurazione del server
     config = fl.server.ServerConfig(num_rounds=5)
     
-    # Strategia Federated Averaging personalizzata con PCA fissa
+    # Strategia Federated Averaging personalizzata con regolarizzazione completa
     strategy = SmartGridDNNFedAvgFixed(
         fraction_fit=1.0,
         fraction_evaluate=1.0,
@@ -840,7 +900,7 @@ def main():
         evaluate_fn=get_smartgrid_evaluate_fn_fixed()
     )
     
-    print("\nServer DNN con architettura STATICA in attesa di client...")
+    print(f"\nServer DNN con REGOLARIZZAZIONE COMPLETA in attesa di client su localhost:8080...")
     print("Per connettere i client, esegui:")
     print("  python client.py 1")
     print("  python client.py 2")
@@ -849,23 +909,25 @@ def main():
     print("\nClient 14-15 riservati per valutazione globale")
     print("Training inizierà quando almeno 2 client saranno connessi.")
     print("")
-    print("VANTAGGI FINALI ARCHITETTURA STATICA SENZA SMOTE:")
-    print("  ✅ Performance realistiche su dati sbilanciati del mondo reale")
+    print("VANTAGGI FINALI REGOLARIZZAZIONE COMPLETA:")
+    print("  ✅ Prevenzione overfitting MASSIMA con 10 tecniche simultanee")
     print(f"  ✅ Numero fisso di componenti configurato manualmente: {PCA_COMPONENTS}")
-    print("  ✅ Architettura DNN completamente STATICA e ottimizzata")
-    print("  ✅ Attacchi di inference più rappresentativi")
-    print("  ✅ Model extraction su comportamento autentico")
+    print("  ✅ Architettura DNN CONSERVATIVA e completamente regolarizzata")
+    print("  ✅ Attacchi di inference più rappresentativi su modelli ben regolarizzati")
+    print("  ✅ Model extraction su comportamento autentico e stabile")
     print("  ✅ Riduzione dimensionalità controllata manualmente")
     print("  ✅ Metriche significative per sistemi di sicurezza")
     print("  ✅ Class weights compensano automaticamente sbilanciamento")
-    print("  ✅ Prevenzione overfitting con architettura proporzionale")
+    print("  ✅ Training adattivo con EarlyStopping e ReduceLROnPlateau")
     print("  ✅ Compatibilità completa con letteratura FL su attacchi")
     print("  ✅ Semplicità di implementazione e manutenzione")
     print("  ✅ Configurazione manuale trasparente e controllabile")
-    print("  ✅ Nessuna variabilità indesiderata tra esperimenti")
-    print("  ✅ Nessuna logica dinamica superflua")
+    print("  ✅ Stabilità numerica garantita")
+    print("  ✅ Generalizzazione ottimale")
+    print("  ✅ Performance robuste e riproducibili")
     
     try:
+        # QUESTA È L'UNICA CHIAMATA AL SERVIZIO FLOWER PER IL SERVER
         fl.server.start_server(
             server_address="localhost:8080",
             config=config,
