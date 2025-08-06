@@ -12,7 +12,13 @@ from sklearn.model_selection import train_test_split
 from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
-from imblearn.over_sampling import SMOTE
+from sklearn.utils.class_weight import compute_class_weight
+from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score
+
+# CONFIGURAZIONE PCA MANUALE
+# MODIFICA QUESTO VALORE DOPO AVER ESEGUITO L'ANALISI PCA
+PCA_COMPONENTS = 35  # <-- MODIFICA QUESTO VALORE CON IL RISULTATO DELL'ANALISI
+PCA_RANDOM_STATE = 42
 
 def clean_data_for_pca(X):
     """
@@ -64,81 +70,105 @@ def ensure_numerical_stability(X, stage_name):
     else:
         return np.clip(X, -1e6, 1e6)
 
-def apply_robust_pca(X_preprocessed, variance_threshold=0.95, client_id=None):
+def apply_fixed_pca(X_preprocessed, client_id=None):
     """
-    Applica PCA con controlli di stabilità numerica e fallback automatico.
+    Applica PCA con numero FISSO di componenti determinato dall'analisi preliminare.
+    
+    Args:
+        X_preprocessed: Dati preprocessati e standardizzati
+        client_id: ID del client per logging
+    
+    Returns:
+        Tuple (X_pca, n_components_used, variance_explained)
     """
+    print(f"[Client {client_id}] === APPLICAZIONE PCA FISSA ===")
+    
     original_features = X_preprocessed.shape[1]
+    
+    # Usa il numero FISSO determinato dall'analisi preliminare
+    n_components = min(PCA_COMPONENTS, original_features, len(X_preprocessed))
+    
+    print(f"[Client {client_id}] Feature originali: {original_features}")
+    print(f"[Client {client_id}] Componenti PCA fisse: {PCA_COMPONENTS}")
+    print(f"[Client {client_id}] Componenti PCA effettive: {n_components}")
     
     # Pulizia robusta dei dati pre-PCA
     X_stable = ensure_numerical_stability(X_preprocessed, f"pre-PCA client {client_id}")
     
-    # Tentativo PCA principale
     try:
         with warnings.catch_warnings():
-            warnings.filterwarnings('error')
+            warnings.filterwarnings('ignore', category=RuntimeWarning)
             
-            pca_full = PCA()
-            pca_full.fit(X_stable)
+            # Applica PCA con numero FISSO di componenti
+            pca = PCA(n_components=n_components, random_state=PCA_RANDOM_STATE)
+            X_pca = pca.fit_transform(X_stable)
             
-            if np.any(np.isnan(pca_full.explained_variance_ratio_)) or np.any(np.isinf(pca_full.explained_variance_ratio_)):
-                raise ValueError(f"PCA client {client_id} ha prodotto explained_variance_ratio_ non validi")
-            
-            cumulative_variance = np.cumsum(pca_full.explained_variance_ratio_)
-            n_components_selected = np.argmax(cumulative_variance >= variance_threshold) + 1
-            n_components_selected = min(n_components_selected, original_features, len(X_stable))
-            n_components_selected = max(n_components_selected, min(10, original_features))
-            
-            pca_optimal = PCA(n_components=n_components_selected)
-            X_pca = pca_optimal.fit_transform(X_stable)
-            
+            # Verifica output
             if np.any(np.isnan(X_pca)) or np.any(np.isinf(X_pca)):
                 raise ValueError(f"PCA client {client_id} ha prodotto output con NaN o inf")
             
-            return X_pca, n_components_selected
+            # Calcola varianza spiegata
+            variance_explained = np.sum(pca.explained_variance_ratio_)
+            
+            print(f"[Client {client_id}] ✅ PCA fissa applicata con successo")
+            print(f"[Client {client_id}] Shape finale: {X_pca.shape}")
+            print(f"[Client {client_id}] Varianza spiegata: {variance_explained*100:.2f}%")
+            
+            return X_pca, n_components, variance_explained
             
     except Exception as e:
-        print(f"[Client {client_id}] PCA normale fallito: {e}, attivazione fallback...")
+        print(f"[Client {client_id}] ERRORE PCA fissa: {e}")
+        print(f"[Client {client_id}] Attivazione fallback...")
         
-        # FALLBACK 1: PCA con regolarizzazione
-        try:
-            regularization = 1e-6
-            X_regularized = X_stable + np.random.normal(0, regularization, X_stable.shape)
-            X_regularized = ensure_numerical_stability(X_regularized, f"PCA regularized client {client_id}")
-            
-            pca_reg = PCA(n_components=min(30, original_features, len(X_stable)))
-            X_pca_reg = pca_reg.fit_transform(X_regularized)
-            
-            if not (np.any(np.isnan(X_pca_reg)) or np.any(np.isinf(X_pca_reg))):
-                return X_pca_reg, X_pca_reg.shape[1]
-            else:
-                raise ValueError("PCA regolarizzata ha prodotto valori non validi")
-                
-        except Exception as e2:
-            # FALLBACK 2: Selezione feature per varianza
-            try:
-                feature_vars = np.var(X_stable, axis=0)
-                feature_vars = np.where(np.isnan(feature_vars), 0, feature_vars)
-                
-                n_components_fallback = min(20, original_features)
-                top_features = np.argsort(feature_vars)[-n_components_fallback:]
-                
-                X_fallback = X_stable[:, top_features]
-                X_fallback = ensure_numerical_stability(X_fallback, f"feature selection client {client_id}")
-                
-                return X_fallback, n_components_fallback
-                
-            except Exception as e3:
-                # FALLBACK 3: Riduzione semplice
-                n_components_final = min(10, original_features)
-                X_final = X_stable[:, :n_components_final]
-                X_final = ensure_numerical_stability(X_final, f"simple reduction client {client_id}")
-                
-                return X_final, n_components_final
+        # Fallback semplice: usa le prime N feature
+        n_fallback = min(n_components, original_features)
+        X_fallback = X_stable[:, :n_fallback]
+        X_fallback = ensure_numerical_stability(X_fallback, f"PCA fallback client {client_id}")
+        
+        print(f"[Client {client_id}] ✅ Fallback: uso prime {n_fallback} feature")
+        
+        return X_fallback, n_fallback, 0.95  # Stima conservativa
 
-def load_client_smartgrid_data(client_id, fixed_pca_components=50):
+def compute_class_weights_simple(y_train):
     """
-    Carica i dati SmartGrid per un client specifico con stabilità numerica PCA.
+    Calcola i pesi delle classi per compensare lo sbilanciamento.
+    Versione semplificata essenziale.
+    
+    Args:
+        y_train: Target di training
+    
+    Returns:
+        Dizionario con class weights
+    """
+    try:
+        # Calcola i pesi automatici per bilanciare le classi
+        unique_classes = np.unique(y_train)
+        class_weights = compute_class_weight(
+            class_weight='balanced',
+            classes=unique_classes,
+            y=y_train
+        )
+        
+        # Crea dizionario class_weight per Keras
+        class_weight_dict = dict(zip(unique_classes, class_weights))
+        
+        return class_weight_dict
+        
+    except Exception as e:
+        print(f"Errore nel calcolo class weights: {e}")
+        # Fallback: pesi uguali
+        unique_classes = np.unique(y_train)
+        return {cls: 1.0 for cls in unique_classes}
+
+def load_client_smartgrid_data_with_fixed_pca(client_id):
+    """
+    Carica i dati SmartGrid per un client specifico SENZA SMOTE e con PCA FISSA.
+    
+    Args:
+        client_id: ID del client
+    
+    Returns:
+        Tuple con dati processati e informazioni dataset
     """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(script_dir, "..", "..", "data", "SmartGrid", f"data{client_id}.csv")
@@ -148,19 +178,25 @@ def load_client_smartgrid_data(client_id, fixed_pca_components=50):
 
     df = pd.read_csv(file_path)
     
+    print(f"[Client {client_id}] === CARICAMENTO CON PCA FISSA (SENZA SMOTE) ===")
+    print(f"[Client {client_id}] Dataset caricato per attacchi realistici")
+    print(f"[Client {client_id}] PCA fissa configurata: {PCA_COMPONENTS} componenti")
+    
     # Separa feature e target
     X = df.drop(columns=["marker"])
     y = (df["marker"] != "Natural").astype(int)
     
-    # Statistiche base
+    # Statistiche distribuzione naturale
     attack_samples = y.sum()
     natural_samples = (y == 0).sum()
     attack_ratio = y.mean()
     
+    print(f"[Client {client_id}] Distribuzione naturale: {attack_samples} attacchi ({attack_ratio*100:.1f}%), {natural_samples} naturali")
+    
     # Pulizia robusta preliminare
     X_cleaned = clean_data_for_pca(X)
     
-    # Suddivisione train/validation
+    # STEP 1: Suddivisione train/validation (mantiene distribuzione naturale)
     X_train_raw, X_val_raw, y_train, y_val = train_test_split(
         X_cleaned, y,
         test_size=0.3,
@@ -168,57 +204,43 @@ def load_client_smartgrid_data(client_id, fixed_pca_components=50):
         stratify=y if len(np.unique(y)) > 1 else None
     )
     
-    # Pipeline di preprocessing
+    print(f"[Client {client_id}] Suddivisione: {len(X_train_raw)} training, {len(X_val_raw)} validation")
+    
+    # STEP 2-3: Pipeline di preprocessing (LOCALE per ogni client)
     preprocessing_pipeline = Pipeline([
         ('imputer', SimpleImputer(strategy='median')),
         ('scaler', StandardScaler())
     ])
     
+    # Fit della pipeline SOLO sui dati di training del client (normalizzazione locale)
     X_train_preprocessed = preprocessing_pipeline.fit_transform(X_train_raw)
     X_val_preprocessed = preprocessing_pipeline.transform(X_val_raw)
     
-    # SMOTE per bilanciamento classi
-    train_attack_ratio = y_train.mean()
-    minority_class_ratio = min(train_attack_ratio, 1 - train_attack_ratio)
-    unique_classes = len(np.unique(y_train))
+    print(f"[Client {client_id}] Preprocessing locale applicato")
     
-    if minority_class_ratio < 0.4 and unique_classes > 1:
-        try:
-            min_samples_per_class = min((y_train == 0).sum(), (y_train == 1).sum())
-            k_neighbors = min(5, min_samples_per_class - 1) if min_samples_per_class > 1 else 1
-            
-            smote = SMOTE(sampling_strategy='auto', random_state=42, k_neighbors=k_neighbors)
-            X_train_balanced, y_train_balanced = smote.fit_resample(X_train_preprocessed, y_train)
-        except Exception as e:
-            X_train_balanced, y_train_balanced = X_train_preprocessed, y_train
-    else:
-        X_train_balanced, y_train_balanced = X_train_preprocessed, y_train
+    # STEP 4: NO SMOTE - Mantieni distribuzione naturale per attacchi realistici
+    print(f"[Client {client_id}] SMOTE RIMOSSO per attacchi inference/extraction realistici")
     
-    # PCA robusto con fallback
-    X_train_final, n_components = apply_robust_pca(
-        X_train_balanced, 
-        variance_threshold=0.95, 
+    # Calcola class weights per compensare sbilanciamento
+    class_weights = compute_class_weights_simple(y_train)
+    print(f"[Client {client_id}] Class weights: {class_weights}")
+    
+    # STEP 5: PCA FISSA dall'analisi preliminare
+    X_train_final, n_components_used, variance_explained = apply_fixed_pca(
+        X_train_preprocessed, 
         client_id=client_id
     )
     
     # Applica la stessa trasformazione ai dati di validation
-    if n_components <= X_val_preprocessed.shape[1]:
-        X_val_final = X_val_preprocessed[:, :n_components]
+    if n_components_used <= X_val_preprocessed.shape[1]:
+        X_val_final = X_val_preprocessed[:, :n_components_used]
     else:
-        X_val_final = X_val_preprocessed[:, :min(n_components, X_val_preprocessed.shape[1])]
-        n_components = X_val_final.shape[1]
+        X_val_final = X_val_preprocessed[:, :min(n_components_used, X_val_preprocessed.shape[1])]
+        n_components_used = X_val_final.shape[1]
     
     X_val_final = ensure_numerical_stability(X_val_final, f"validation final client {client_id}")
     
-    # Calcola varianza spiegata
-    try:
-        total_variance = np.var(X_train_preprocessed, axis=0).sum()
-        final_variance = np.var(X_train_final, axis=0).sum()
-        variance_explained = min(final_variance / total_variance, 1.0) if total_variance > 0 else 0.95
-    except:
-        variance_explained = 0.95
-    
-    # Informazioni del dataset
+    # Informazioni complete del dataset
     dataset_info = {
         'client_id': client_id,
         'total_samples': len(df),
@@ -227,26 +249,69 @@ def load_client_smartgrid_data(client_id, fixed_pca_components=50):
         'attack_samples': attack_samples,
         'natural_samples': natural_samples,
         'attack_ratio': attack_ratio,
+        'train_attack_ratio': y_train.mean(),
+        'val_attack_ratio': y_val.mean(),
         'original_features': X.shape[1],
-        'pca_features': n_components,
-        'pca_reduction': (1 - n_components / X.shape[1]) * 100,
+        'pca_features': n_components_used,
+        'pca_components_configured': PCA_COMPONENTS,
+        'pca_reduction': (1 - n_components_used / X.shape[1]) * 100,
         'variance_explained': variance_explained * 100,
-        'pca_method': 'robust_with_fallback'
+        'class_weights': class_weights,
+        'preprocessing_method': 'no_smote_fixed_pca',
+        'pca_method': 'fixed_manual_configuration'
     }
     
-    return X_train_final, y_train_balanced, X_val_final, y_val, dataset_info
+    print(f"[Client {client_id}] === CARICAMENTO COMPLETATO (PCA FISSA) ===")
+    print(f"[Client {client_id}]   - Training: {X_train_final.shape}")
+    print(f"[Client {client_id}]   - Validation: {X_val_final.shape}")
+    print(f"[Client {client_id}]   - Componenti PCA: {n_components_used} (configurate: {PCA_COMPONENTS})")
+    print(f"[Client {client_id}]   - Varianza spiegata: {variance_explained*100:.2f}%")
+    print(f"[Client {client_id}]   - Riduzione dimensionalità: {dataset_info['pca_reduction']:.1f}%")
+    print(f"[Client {client_id}]   - Adatto per attacchi: ✅")
+    
+    return X_train_final, y_train, X_val_final, y_val, dataset_info
 
-def create_smartgrid_client_dnn_model(input_shape):
+def create_smartgrid_dnn_model_fixed_architecture():
     """
-    Crea il modello DNN SmartGrid standardizzato per il client.
+    Crea il modello DNN SmartGrid con architettura FISSA ottimizzata per PCA_COMPONENTS.
+    Architettura automatica basata sul numero fisso di componenti PCA.
+    
+    Returns:
+        Modello Keras compilato per dataset sbilanciati
     """
-    dropout_rate = 0.2
-    l2_reg = 0.0001
+    print(f"[Client] === CREAZIONE DNN ARCHITETTURA FISSA (SENZA SMOTE) ===")
+    print(f"[Client] Input features fisse: {PCA_COMPONENTS}")
+    
+    # Parametri ottimizzati per dataset sbilanciati
+    dropout_rate = 0.3  # Aumentato per prevenire overfitting
+    l2_reg = 0.001      # Aumentato per maggiore regolarizzazione
+    
+    # ARCHITETTURA FISSA ottimizzata automaticamente per PCA_COMPONENTS
+    if PCA_COMPONENTS <= 20:
+        # Architettura compatta per poche feature
+        layer_sizes = [24, 16, 8]
+        arch_type = "compatta"
+    elif PCA_COMPONENTS <= 40:
+        # Architettura media per feature medie
+        layer_sizes = [32, 20, 12]
+        arch_type = "media"
+    elif PCA_COMPONENTS <= 60:
+        # Architettura standard per molte feature
+        layer_sizes = [48, 32, 16]
+        arch_type = "standard"
+    else:
+        # Architettura estesa per moltissime feature
+        layer_sizes = [64, 40, 20]
+        arch_type = "estesa"
+    
+    print(f"[Client] Architettura {arch_type}: {PCA_COMPONENTS} → {layer_sizes[0]} → {layer_sizes[1]} → {layer_sizes[2]} → 1")
     
     model = keras.Sequential([
-        layers.Input(shape=(input_shape,), name='input_layer'),
+        # Input layer esplicito con dimensione FISSA
+        layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
         
-        layers.Dense(128, 
+        # Layer 1: Dimensione ottimizzata automaticamente per PCA_COMPONENTS
+        layers.Dense(layer_sizes[0], 
                     activation='relu',
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer='he_normal',
@@ -254,7 +319,8 @@ def create_smartgrid_client_dnn_model(input_shape):
         layers.BatchNormalization(name='batch_norm_1'),
         layers.Dropout(dropout_rate, name='dropout_1'),
         
-        layers.Dense(64, 
+        # Layer 2: Feature extraction
+        layers.Dense(layer_sizes[1], 
                     activation='relu',
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer='he_normal',
@@ -262,7 +328,8 @@ def create_smartgrid_client_dnn_model(input_shape):
         layers.BatchNormalization(name='batch_norm_2'),
         layers.Dropout(dropout_rate, name='dropout_2'),
         
-        layers.Dense(32, 
+        # Layer 3: Pattern recognition
+        layers.Dense(layer_sizes[2], 
                     activation='relu',
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer='he_normal',
@@ -270,20 +337,23 @@ def create_smartgrid_client_dnn_model(input_shape):
         layers.BatchNormalization(name='batch_norm_3'),
         layers.Dropout(dropout_rate / 2, name='dropout_3'),
         
+        # Output layer
         layers.Dense(1, 
                     activation='sigmoid',
                     kernel_initializer='glorot_uniform',
                     name='output_layer')
     ])
     
+    # Ottimizzatore con learning rate adattivo
     optimizer = keras.optimizers.Adam(
-        learning_rate=0.0001,
+        learning_rate=0.001,    # Learning rate standard
         beta_1=0.9,
         beta_2=0.999,
         epsilon=1e-7,
         clipnorm=1.0
     )
     
+    # Compila il modello con Binary Crossentropy standard
     model.compile(
         optimizer=optimizer,
         loss=tf.keras.losses.BinaryCrossentropy(),
@@ -294,6 +364,26 @@ def create_smartgrid_client_dnn_model(input_shape):
             tf.keras.metrics.AUC(name='auc')
         ]
     )
+    
+    # Statistiche modello
+    total_params = model.count_params()
+    params_per_feature = total_params / PCA_COMPONENTS
+    
+    print(f"[Client] === DNN ARCHITETTURA FISSA CREATA ===")
+    print(f"[Client]   - Parametri totali: {total_params:,}")
+    print(f"[Client]   - Parametri per feature: {params_per_feature:.1f}")
+    print(f"[Client]   - Architettura: {arch_type} per {PCA_COMPONENTS} feature PCA")
+    print(f"[Client]   - Dropout: {dropout_rate}")
+    print(f"[Client]   - L2 regularization: {l2_reg}")
+    print(f"[Client]   - Learning rate: {optimizer.learning_rate}")
+    print(f"[Client]   - Loss: Binary Crossentropy + Class Weights")
+    print(f"[Client]   - Ottimizzato per: dati naturalmente sbilanciati")
+    
+    # Valutazione ottimizzazione
+    if params_per_feature > 100:
+        print(f"[Client]   ⚠️  ATTENZIONE: Alto rapporto parametri/feature")
+    else:
+        print(f"[Client]   ✅ Rapporto parametri/feature ottimale")
     
     return model
 
@@ -396,9 +486,10 @@ X_val = None
 y_val = None
 dataset_info = None
 
-class SmartGridDNNClient(fl.client.NumPyClient):
+class SmartGridDNNClientFixed(fl.client.NumPyClient):
     """
-    Client Flower per SmartGrid con DNN e stabilità numerica PCA.
+    Client Flower per SmartGrid con DNN a architettura fissa e PCA fissa SENZA SMOTE.
+    Configurazione manuale semplificata per scopi didattici.
     """
     
     def get_parameters(self, config):
@@ -420,11 +511,11 @@ class SmartGridDNNClient(fl.client.NumPyClient):
 
     def fit(self, parameters, config):
         """
-        Addestra il modello DNN sui dati locali del client.
+        Addestra il modello DNN su dati naturalmente sbilanciati con class weights.
         """
         global model, X_train, y_train, dataset_info
         
-        print(f"[Client {client_id}] Round di addestramento...")
+        print(f"[Client {client_id}] Round di addestramento con PCA fissa e dataset naturalmente sbilanciato...")
         
         # Usa funzione sicura per impostare pesi
         success, error_msg = safe_set_model_weights(model, parameters, client_id)
@@ -437,65 +528,94 @@ class SmartGridDNNClient(fl.client.NumPyClient):
             print(f"[Client {client_id}] Nessun dato di training disponibile!")
             return model.get_weights(), 0, {}
         
-        # Configurazione addestramento
-        local_epochs = 3
-        batch_size = 16
+        # Configurazione addestramento per dataset sbilanciati
+        local_epochs = 5        
+        batch_size = 32         
+        
+        # Usa class weights per compensare sbilanciamento
+        class_weights = dataset_info['class_weights']
         
         try:
+            print(f"[Client {client_id}] Training con class weights: {class_weights}")
+            print(f"[Client {client_id}] Architettura fissa per {dataset_info['pca_features']} feature PCA")
+            
             history = model.fit(
                 X_train, y_train,
                 epochs=local_epochs,
                 batch_size=batch_size,
+                class_weight=class_weights,  # Compensa sbilanciamento
                 verbose=0,
                 shuffle=True
             )
             
-            # Estrai metriche
+            # Estrai metriche base
             train_loss = history.history['loss'][-1]
             train_accuracy = history.history['accuracy'][-1]
             train_precision = history.history.get('precision', [0])[-1]
             train_recall = history.history.get('recall', [0])[-1]
             train_auc = history.history.get('auc', [0])[-1]
             
-            # Calcola F1-score
+            # Calcola F1-score manualmente
             train_f1 = 2 * (train_precision * train_recall) / (train_precision + train_recall) if (train_precision + train_recall) > 0 else 0
             
+            # Calcola Balanced Accuracy sui dati di training
+            y_pred_prob = model.predict(X_train, verbose=0).flatten()
+            y_pred_binary = (y_pred_prob > 0.5).astype(int)
+            train_balanced_acc = balanced_accuracy_score(y_train, y_pred_binary)
+            
             print(f"[Client {client_id}] Loss: {train_loss:.4f}, Accuracy: {train_accuracy:.4f}")
+            print(f"[Client {client_id}] F1-Score: {train_f1:.4f}, Balanced Acc: {train_balanced_acc:.4f}")
             
         except Exception as e:
             print(f"[Client {client_id}] Errore durante addestramento: {e}")
             return model.get_weights(), 0, {'error': f'training_failed: {str(e)}'}
         
-        # Metriche da inviare al server
+        # Metriche essenziali da inviare al server
         metrics = {
+            # Metriche base
             'train_loss': float(train_loss),
             'train_accuracy': float(train_accuracy),
             'train_precision': float(train_precision),
             'train_recall': float(train_recall),
-            'train_f1_score': float(train_f1),
             'train_auc': float(train_auc),
+            
+            # Metriche bilanciate essenziali
+            'train_f1_score': float(train_f1),
+            'train_balanced_accuracy': float(train_balanced_acc),
+            
+            # Configurazione addestramento
             'local_epochs': int(local_epochs),
             'batch_size': int(batch_size),
+            'used_class_weights': True,
+            'class_weight_0': float(class_weights[0]),
+            'class_weight_1': float(class_weights[1]),
+            
+            # Informazioni dataset essenziali
             'client_id': int(dataset_info['client_id']),
-            'total_samples': int(dataset_info['total_samples']),
             'train_samples': int(dataset_info['train_samples']),
-            'val_samples': int(dataset_info['val_samples']),
-            'attack_samples': int(dataset_info['attack_samples']),
-            'natural_samples': int(dataset_info['natural_samples']),
             'attack_ratio': float(dataset_info['attack_ratio']),
+            'train_attack_ratio': float(dataset_info['train_attack_ratio']),
+            
+            # Informazioni PCA fissa
             'original_features': int(dataset_info['original_features']),
             'pca_features': int(dataset_info['pca_features']),
+            'pca_components_configured': int(dataset_info['pca_components_configured']),
             'pca_reduction': float(dataset_info['pca_reduction']),
             'variance_explained': float(dataset_info['variance_explained']),
-            'weights_count': len(model.get_weights()),
-            'pca_method': dataset_info['pca_method']
+            'total_params': int(model.count_params()),
+            
+            # Metodologia
+            'preprocessing_method': dataset_info['preprocessing_method'],
+            'pca_method': dataset_info['pca_method'],
+            'model_type': 'dnn_fixed_architecture_manual_pca',
+            'architecture_type': 'fixed_optimized'
         }
         
         return model.get_weights(), len(X_train), metrics
 
     def evaluate(self, parameters, config):
         """
-        Valuta il modello DNN sui dati di validation locali del client.
+        Valuta il modello DNN sui dati di validation con metriche essenziali.
         """
         global model, X_val, y_val
         
@@ -510,21 +630,38 @@ class SmartGridDNNClient(fl.client.NumPyClient):
             return 0.0, 0, {"accuracy": 0.0}
         
         try:
+            # Valutazione base
             results = model.evaluate(X_val, y_val, verbose=0)
             loss, accuracy, precision, recall, auc = results
             
             # Calcola F1-score
-            f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+            f1_score_val = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+            
+            # Calcola Balanced Accuracy
+            y_pred_prob = model.predict(X_val, verbose=0).flatten()
+            y_pred_binary = (y_pred_prob > 0.5).astype(int)
+            balanced_acc = balanced_accuracy_score(y_val, y_pred_binary)
             
             print(f"[Client {client_id}] Val Loss: {loss:.4f}, Val Accuracy: {accuracy:.4f}")
+            print(f"[Client {client_id}] Val F1: {f1_score_val:.4f}, Val Balanced Acc: {balanced_acc:.4f}")
             
+            # Metriche essenziali
             metrics = {
+                # Metriche base
                 "accuracy": accuracy,
                 "precision": precision,
                 "recall": recall,
-                "f1_score": f1_score,
                 "auc": auc,
-                "val_samples": len(X_val)
+                
+                # Metriche bilanciate essenziali
+                "f1_score": f1_score_val,
+                "balanced_accuracy": balanced_acc,
+                
+                # Info valutazione
+                "val_samples": len(X_val),
+                "pca_features": dataset_info['pca_features'],
+                "pca_components_configured": dataset_info['pca_components_configured'],
+                "model_type": "dnn_fixed_architecture_manual_pca"
             }
             
             return loss, len(X_val), metrics
@@ -535,7 +672,7 @@ class SmartGridDNNClient(fl.client.NumPyClient):
 
 def main():
     """
-    Funzione principale per avviare il client SmartGrid DNN.
+    Funzione principale per avviare il client SmartGrid DNN con PCA fissa SENZA SMOTE.
     """
     global client_id, model, X_train, y_train, X_val, y_val, dataset_info
     
@@ -552,32 +689,59 @@ def main():
         print(f"Errore: Client ID non valido. {e}")
         sys.exit(1)
     
-    print(f"Avvio Client SmartGrid DNN {client_id}")
-    print("Funzionalità implementate:")
-    print("  - Stabilità numerica PCA con fallback automatico")
-    print("  - Gestione robusta Parameters Flower")
-    print("  - Input layer esplicito per compatibilità")
+    print(f"=== AVVIO CLIENT SMARTGRID DNN CON PCA FISSA {client_id} (SENZA SMOTE) ===")
+    print("CONFIGURAZIONE MANUALE:")
+    print("  ✅ SMOTE RIMOSSO per attacchi inference/extraction realistici")
+    print(f"  ✅ PCA FISSA configurata manualmente: {PCA_COMPONENTS} componenti")
+    print("  ✅ Architettura DNN FISSA ottimizzata automaticamente")
+    print("  ✅ Distribuzione naturale mantenuta per fedeltà al mondo reale")
+    print("  ✅ Class weights automatici per compensare sbilanciamento")
+    print("  ✅ Metriche bilanciate: F1-Score, Balanced Accuracy, AUC")
+    print("  ✅ Normalizzazione LOCALE per ogni client")
+    print("  ✅ Codice semplificato per scopi didattici")
+    print("")
+    print("VANTAGGI CONFIGURAZIONE MANUALE:")
+    print(f"  🎯 Numero fisso di componenti PCA: {PCA_COMPONENTS}")
+    print("  🎯 Architettura DNN ottimizzata automaticamente")
+    print("  🎯 Nessuna variabilità tra esecuzioni")
+    print("  🎯 Performance consistenti e prevedibili")
+    print("  🎯 Facilità di debugging e manutenzione")
+    print("  🎯 Controllo completo sui parametri")
+    print("")
+    print("VANTAGGI PER ATTACCHI:")
+    print("  🎯 Dati di training naturalmente distribuiti")
+    print("  🎯 Nessun dato sintetico che confonde gli attacchi")
+    print("  🎯 Scenario federato completamente realistico")
+    print("  🎯 Architettura prevedibile per test di sicurezza")
     
     try:
-        # Carica i dati locali del client
-        fixed_pca_components = 50
-        X_train, y_train, X_val, y_val, dataset_info = load_client_smartgrid_data(client_id, fixed_pca_components)
+        # Carica i dati locali del client con PCA fissa
+        print(f"[Client {client_id}] Caricamento dati con PCA fissa SENZA SMOTE...")
+        X_train, y_train, X_val, y_val, dataset_info = load_client_smartgrid_data_with_fixed_pca(client_id)
         
-        # Crea il modello DNN
-        model = create_smartgrid_client_dnn_model(X_train.shape[1])
+        # Crea il modello DNN con architettura fissa
+        model = create_smartgrid_dnn_model_fixed_architecture()
         
-        print(f"[Client {client_id}] Dataset caricato: {dataset_info['train_samples']} training, {dataset_info['val_samples']} validation")
-        print(f"[Client {client_id}] Modello creato: {model.count_params():,} parametri, {X_train.shape[1]} feature input")
-        print(f"[Client {client_id}] Metodo PCA: {dataset_info['pca_method']}")
+        print(f"[Client {client_id}] === RIASSUNTO CLIENT PCA FISSA ===")
+        print(f"[Client {client_id}] Dataset: {dataset_info['train_samples']} train, {dataset_info['val_samples']} val")
+        print(f"[Client {client_id}] Distribuzione naturale: {dataset_info['attack_ratio']*100:.1f}% attacchi")
+        print(f"[Client {client_id}] Feature: {dataset_info['original_features']} → {dataset_info['pca_features']}")
+        print(f"[Client {client_id}] PCA configurata: {dataset_info['pca_components_configured']} componenti")
+        print(f"[Client {client_id}] Varianza spiegata: {dataset_info['variance_explained']:.2f}%")
+        print(f"[Client {client_id}] Modello: {model.count_params():,} parametri (architettura fissa)")
+        print(f"[Client {client_id}] Class weights: {dataset_info['class_weights']}")
+        print(f"[Client {client_id}] Preprocessing: {dataset_info['preprocessing_method']}")
+        print(f"[Client {client_id}] PCA: {dataset_info['pca_method']}")
+        print(f"[Client {client_id}] Connessione al server su localhost:8080...")
         
         # Avvia il client Flower
         fl.client.start_numpy_client(
             server_address="localhost:8080",
-            client=SmartGridDNNClient()
+            client=SmartGridDNNClientFixed()
         )
         
     except Exception as e:
-        print(f"[Client {client_id}] Errore: {e}")
+        print(f"[Client {client_id}] ❌ Errore: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

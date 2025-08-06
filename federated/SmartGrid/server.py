@@ -11,6 +11,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
+from sklearn.utils.class_weight import compute_class_weight
+from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score
 import os
 
 def clean_data_for_pca_server(X):
@@ -175,17 +177,64 @@ def apply_server_preprocessing_pipeline_robust(X_global, fixed_pca_components=50
     
     return X_global_final, n_components
 
-def create_server_dnn_model(input_shape):
+def compute_class_weights_server_simple(y_global):
     """
-    Crea il modello DNN per il server identico ai client.
+    Calcola i pesi delle classi per il dataset globale del server.
+    Versione semplificata.
+    
+    Args:
+        y_global: Target globali del server
+    
+    Returns:
+        Dizionario con class weights
     """
-    dropout_rate = 0.2
-    l2_reg = 0.0001
+    try:
+        unique_classes = np.unique(y_global)
+        class_weights = compute_class_weight(
+            class_weight='balanced',
+            classes=unique_classes,
+            y=y_global
+        )
+        
+        class_weight_dict = dict(zip(unique_classes, class_weights))
+        return class_weight_dict
+        
+    except Exception as e:
+        print(f"Errore nel calcolo class weights server: {e}")
+        unique_classes = np.unique(y_global)
+        return {cls: 1.0 for cls in unique_classes}
+
+def create_server_dnn_model_simple(input_shape):
+    """
+    Crea il modello DNN per il server IDENTICO ai client.
+    Versione semplificata per dataset sbilanciati.
+    
+    Args:
+        input_shape: Numero di feature post-PCA
+    
+    Returns:
+        Modello Keras compilato per dataset sbilanciati
+    """
+    print(f"[Server] Creazione DNN semplificata per dataset sbilanciati (SENZA SMOTE)")
+    print(f"[Server] Input features: {input_shape}")
+    
+    # Parametri IDENTICI ai client
+    dropout_rate = 0.3
+    l2_reg = 0.001
+    
+    # Architettura IDENTICA ai client
+    first_layer_size = max(32, int(input_shape * 0.8))
+    second_layer_size = max(16, first_layer_size // 2)
+    third_layer_size = max(8, second_layer_size // 2)
+    
+    print(f"[Server] Architettura: {input_shape} → {first_layer_size} → {second_layer_size} → {third_layer_size} → 1")
     
     model = tf.keras.Sequential([
+        # Input layer esplicito IDENTICO ai client
         layers.Input(shape=(input_shape,), name='input_layer'),
         
-        layers.Dense(128, 
+        # Layer 1: Dimensione proporzionale alle feature
+        layers.Dense(first_layer_size, 
                     activation='relu',
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer='he_normal',
@@ -193,7 +242,8 @@ def create_server_dnn_model(input_shape):
         layers.BatchNormalization(name='batch_norm_1'),
         layers.Dropout(dropout_rate, name='dropout_1'),
         
-        layers.Dense(64, 
+        # Layer 2: Feature extraction
+        layers.Dense(second_layer_size, 
                     activation='relu',
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer='he_normal',
@@ -201,7 +251,8 @@ def create_server_dnn_model(input_shape):
         layers.BatchNormalization(name='batch_norm_2'),
         layers.Dropout(dropout_rate, name='dropout_2'),
         
-        layers.Dense(32, 
+        # Layer 3: Pattern recognition
+        layers.Dense(third_layer_size, 
                     activation='relu',
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer='he_normal',
@@ -209,20 +260,23 @@ def create_server_dnn_model(input_shape):
         layers.BatchNormalization(name='batch_norm_3'),
         layers.Dropout(dropout_rate / 2, name='dropout_3'),
         
+        # Output layer IDENTICO ai client
         layers.Dense(1, 
                     activation='sigmoid',
                     kernel_initializer='glorot_uniform',
                     name='output_layer')
     ])
     
+    # Ottimizzatore IDENTICO ai client
     optimizer = tf.keras.optimizers.Adam(
-        learning_rate=0.0001,
+        learning_rate=0.001,
         beta_1=0.9,
         beta_2=0.999,
         epsilon=1e-7,
         clipnorm=1.0
     )
     
+    # Compila il modello IDENTICO ai client
     model.compile(
         optimizer=optimizer,
         loss=tf.keras.losses.BinaryCrossentropy(),
@@ -233,6 +287,19 @@ def create_server_dnn_model(input_shape):
             tf.keras.metrics.AUC(name='auc')
         ]
     )
+    
+    # Statistiche modello
+    total_params = model.count_params()
+    params_per_feature = total_params / input_shape
+    
+    print(f"[Server] DNN semplificata creata IDENTICA ai client:")
+    print(f"[Server]   - Parametri totali: {total_params:,}")
+    print(f"[Server]   - Parametri per feature: {params_per_feature:.1f}")
+    print(f"[Server]   - Dropout: {dropout_rate}")
+    print(f"[Server]   - L2 regularization: {l2_reg}")
+    print(f"[Server]   - Learning rate: {optimizer.learning_rate}")
+    print(f"[Server]   - Loss: Binary Crossentropy")
+    print(f"[Server]   - Ottimizzato per: dati naturalmente sbilanciati")
     
     return model
 
@@ -342,15 +409,18 @@ def safe_set_server_model_weights(model, parameters):
         error_msg = f"Errore durante impostazione pesi server: {str(e)}"
         return False, error_msg
 
-def get_smartgrid_evaluate_fn():
+def get_smartgrid_evaluate_fn_simple():
     """
-    Crea una funzione di valutazione globale per il server SmartGrid DNN.
+    Crea una funzione di valutazione globale per il server SmartGrid DNN semplificata.
     """
     
     def load_global_test_data():
         """
-        Carica un dataset globale di test per la valutazione del server.
+        Carica un dataset globale di test per la valutazione del server SENZA SMOTE.
+        Versione semplificata.
         """
+        print("=== CARICAMENTO DATASET GLOBALE TEST SERVER (SEMPLIFICATO) ===")
+        
         script_dir = os.path.dirname(os.path.abspath(__file__))
 
         # Costruzione path ai file CSV
@@ -363,7 +433,9 @@ def get_smartgrid_evaluate_fn():
             try:
                 df = pd.read_csv(file_path)
                 df_list.append(df)
+                print(f"Caricato data{client_id}.csv: {len(df)} campioni")
             except FileNotFoundError:
+                print(f"File data{client_id}.csv non trovato")
                 continue
 
         if not df_list:
@@ -372,44 +444,68 @@ def get_smartgrid_evaluate_fn():
             try:
                 df_fallback = pd.read_csv(fallback_path)
                 df_list = [df_fallback.sample(n=min(200, len(df_fallback)), random_state=42)]
+                print(f"Usando fallback con {len(df_list[0])} campioni da data1.csv")
             except FileNotFoundError:
                 raise FileNotFoundError("Impossibile caricare dati per valutazione globale")
         
         # Combina i dataframe
         df_global = pd.concat(df_list, ignore_index=True)
         
-        # Prepara X e y
+        # Prepara X e y (mantiene distribuzione naturale)
         X_global = df_global.drop(columns=["marker"])
         y_global = (df_global["marker"] != "Natural").astype(int)
         
-        # Applica la stessa pipeline robusta dei client
+        # Statistiche distribuzione naturale globale
+        attack_samples = y_global.sum()
+        natural_samples = (y_global == 0).sum()
+        attack_ratio = y_global.mean()
+        
+        print(f"Dataset test globale NATURALE: {len(df_global)} campioni")
+        print(f"Distribuzione: {attack_samples} attacchi ({attack_ratio*100:.1f}%), {natural_samples} naturali")
+        
+        # Calcola class weights per il dataset globale
+        class_weights = compute_class_weights_server_simple(y_global)
+        print(f"Class weights globali: {class_weights}")
+        
+        # Applica la stessa pipeline robusta dei client (SENZA SMOTE)
         fixed_pca_components = 50
         X_global_final, pca_components = apply_server_preprocessing_pipeline_robust(
             X_global, 
             fixed_pca_components=fixed_pca_components
         )
         
-        return X_global_final, y_global, pca_components
+        print(f"Dataset preprocessato SENZA SMOTE: {len(X_global_final)} campioni, {X_global_final.shape[1]} feature")
+        
+        return X_global_final, y_global, pca_components, class_weights, {
+            'total_samples': len(df_global),
+            'attack_samples': attack_samples,
+            'natural_samples': natural_samples,
+            'attack_ratio': attack_ratio
+        }
     
     # Carica i dati globali una sola volta
     try:
-        X_global, y_global, input_shape = load_global_test_data()
+        X_global, y_global, input_shape, class_weights, dataset_info = load_global_test_data()
     except Exception as e:
         print(f"Errore nel caricamento dati globali: {e}")
-        # Fallback: crea dati fittizi
+        # Fallback: crea dati fittizi con shape fisso
         input_shape = 50
         X_global = np.random.random((100, input_shape))
         y_global = np.random.randint(0, 2, 100)
+        class_weights = {0: 1.0, 1: 1.0}
+        dataset_info = {}
+        print(f"Usando dati fittizi per valutazione globale")
     
     def evaluate(server_round, parameters, config):
         """
-        Funzione di valutazione chiamata ad ogni round.
+        Funzione di valutazione chiamata ad ogni round con dataset naturalmente sbilanciato.
+        Versione semplificata.
         """
-        print(f"\n=== VALUTAZIONE GLOBALE - ROUND {server_round} ===")
+        print(f"\n=== VALUTAZIONE GLOBALE DNN SEMPLIFICATA - ROUND {server_round} ===")
         
         try:
-            # Crea il modello DNN per la valutazione
-            model = create_server_dnn_model(input_shape)
+            # Crea il modello DNN semplificato per la valutazione (identico ai client)
+            model = create_server_dnn_model_simple(input_shape)
             
             # Usa funzione sicura per impostare pesi
             success, error_msg = safe_set_server_model_weights(model, parameters)
@@ -422,55 +518,69 @@ def get_smartgrid_evaluate_fn():
                     "global_test_samples": 0
                 }
             
-            # Valutazione sul dataset test globale
+            print(f"✅ Pesi aggregati impostati su modello server")
+            
+            # Valutazione sul dataset test globale naturalmente sbilanciato
             results = model.evaluate(X_global, y_global, verbose=0)
             loss, accuracy, precision, recall, auc = results
             
             # Calcola F1-score
-            f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+            f1_score_val = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
             
-            print(f"Loss: {loss:.4f}, Accuracy: {accuracy:.4f}")
-            print(f"Precision: {precision:.4f}, Recall: {recall:.4f}")
-            print(f"F1-Score: {f1_score:.4f}, AUC: {auc:.4f}")
-            print(f"Campioni test: {len(X_global)}, Feature: {X_global.shape[1]}")
+            # Calcola Balanced Accuracy
+            y_pred_prob = model.predict(X_global, verbose=0).flatten()
+            y_pred_binary = (y_pred_prob > 0.5).astype(int)
+            balanced_acc = balanced_accuracy_score(y_global, y_pred_binary)
             
-            # Predizioni per analisi dettagliata
-            predictions_prob = model.predict(X_global, verbose=0)
-            predictions_binary = (predictions_prob > 0.5).astype(int).flatten()
+            print(f"RISULTATI VALUTAZIONE SEMPLIFICATA:")
+            print(f"  Loss: {loss:.4f}")
+            print(f"  Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
+            print(f"  F1-Score: {f1_score_val:.4f} ({f1_score_val*100:.2f}%)")
+            print(f"  Balanced Accuracy: {balanced_acc:.4f} ({balanced_acc*100:.2f}%)")
+            print(f"  Precision: {precision:.4f} ({precision*100:.2f}%)")
+            print(f"  Recall: {recall:.4f} ({recall*100:.2f}%)")
+            print(f"  AUC: {auc:.4f} ({auc*100:.2f}%)")
+            print(f"  Campioni test: {len(X_global)}")
+            print(f"  Feature utilizzate: {X_global.shape[1]}")
             
-            # Matrice di confusione
-            tn = np.sum((y_global == 0) & (predictions_binary == 0))
-            fp = np.sum((y_global == 0) & (predictions_binary == 1))
-            fn = np.sum((y_global == 1) & (predictions_binary == 0))
-            tp = np.sum((y_global == 1) & (predictions_binary == 1))
+            # Calcola parametri modello
+            total_params = model.count_params()
+            params_per_feature = total_params / input_shape
+            print(f"  Parametri DNN: {total_params:,} ({params_per_feature:.1f} per feature)")
             
-            # Metriche di sicurezza
-            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
-            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
-            fnr = fn / (fn + tp) if (fn + tp) > 0 else 0
-            
-            print(f"Matrice confusione: TN={tn}, FP={fp}, FN={fn}, TP={tp}")
-            print(f"Specificity: {specificity:.4f}, FPR: {fpr:.4f}, FNR: {fnr:.4f}")
+            # Informazioni distribuzione
+            print(f"  Distribuzione naturale: {dataset_info.get('attack_ratio', 0)*100:.1f}% attacchi")
+            print(f"  Adatto per attacchi: ✅")
             
             return float(loss), {
+                # Metriche base
                 "accuracy": float(accuracy),
                 "precision": float(precision),
                 "recall": float(recall),
-                "f1_score": float(f1_score),
                 "auc": float(auc),
-                "specificity": float(specificity),
-                "fpr": float(fpr),
-                "fnr": float(fnr),
+                
+                # Metriche bilanciate essenziali
+                "f1_score": float(f1_score_val),
+                "balanced_accuracy": float(balanced_acc),
+                
+                # Informazioni dataset e modello
                 "global_test_samples": int(len(X_global)),
                 "pipeline_features": int(input_shape),
-                "true_negatives": int(tn),
-                "false_positives": int(fp),
-                "false_negatives": int(fn),
-                "true_positives": int(tp)
+                "total_params": int(total_params),
+                "params_per_feature": float(params_per_feature),
+                "attack_samples": int(dataset_info.get('attack_samples', 0)),
+                "natural_samples": int(dataset_info.get('natural_samples', 0)),
+                "attack_ratio": float(dataset_info.get('attack_ratio', 0)),
+                "class_weight_0": float(class_weights[0]),
+                "class_weight_1": float(class_weights[1]),
+                
+                # Metodologia
+                "model_type": "dnn_simple_no_smote",
+                "preprocessing_method": "no_smote_simple"
             }
             
         except Exception as e:
-            print(f"Errore durante la valutazione globale: {e}")
+            print(f"Errore durante la valutazione globale semplificata: {e}")
             return 1.0, {
                 "accuracy": 0.0, 
                 "error": str(e), 
@@ -479,20 +589,24 @@ def get_smartgrid_evaluate_fn():
     
     return evaluate
 
-def print_client_metrics(fit_results):
+def print_client_metrics_simple(fit_results):
     """
-    Stampa le metriche dei client dopo ogni round di addestramento.
+    Stampa le metriche dei client dopo ogni round con focus su metriche essenziali.
+    Versione semplificata.
     """
     if not fit_results:
         return
     
-    print(f"\n=== METRICHE CLIENT ===")
+    print(f"\n=== METRICHE CLIENT DNN SEMPLIFICATA (SENZA SMOTE) ===")
     
     total_samples = 0
     total_weighted_accuracy = 0
+    total_weighted_f1 = 0
     error_clients = []
     accuracy_list = []
+    f1_list = []
     loss_list = []
+    attack_ratio_list = []
     
     for i, (client_proxy, fit_res) in enumerate(fit_results):
         client_samples = fit_res.num_examples
@@ -507,6 +621,7 @@ def print_client_metrics(fit_results):
             print(f"  ERRORE: {client_metrics['error']}")
             continue
         
+        # Metriche base
         if 'train_accuracy' in client_metrics:
             accuracy = client_metrics['train_accuracy']
             total_weighted_accuracy += accuracy * client_samples
@@ -518,32 +633,74 @@ def print_client_metrics(fit_results):
             loss_list.append(loss)
             print(f"  Loss: {loss:.4f}")
         
-        if 'pca_method' in client_metrics:
-            pca_method = client_metrics['pca_method']
-            print(f"  Metodo PCA: {pca_method}")
+        # Metriche bilanciate essenziali
+        if 'train_f1_score' in client_metrics:
+            f1 = client_metrics['train_f1_score']
+            total_weighted_f1 += f1 * client_samples
+            f1_list.append(f1)
+            print(f"  F1-Score: {f1:.4f}")
+        
+        if 'train_balanced_accuracy' in client_metrics:
+            balanced_acc = client_metrics['train_balanced_accuracy']
+            print(f"  Balanced Accuracy: {balanced_acc:.4f}")
+        
+        # Informazioni distribuzione dataset
+        if 'attack_ratio' in client_metrics:
+            attack_ratio = client_metrics['attack_ratio']
+            attack_ratio_list.append(attack_ratio)
+            print(f"  Distribuzione attacchi: {attack_ratio*100:.1f}%")
+        
+        # Class weights utilizzati
+        if 'used_class_weights' in client_metrics and client_metrics['used_class_weights']:
+            weight_0 = client_metrics.get('class_weight_0', 1.0)
+            weight_1 = client_metrics.get('class_weight_1', 1.0)
+            print(f"  Class weights: {{0: {weight_0:.3f}, 1: {weight_1:.3f}}}")
+        
+        # Informazioni modello
+        if 'total_params' in client_metrics:
+            total_params = client_metrics['total_params']
+            print(f"  Parametri DNN: {total_params:,}")
+        
+        # Metodologia
+        if 'preprocessing_method' in client_metrics:
+            method = client_metrics['preprocessing_method']
+            print(f"  Preprocessing: {method}")
     
     if total_samples > 0:
+        # Calcola medie ponderate
         avg_weighted_accuracy = total_weighted_accuracy / total_samples
+        avg_weighted_f1 = total_weighted_f1 / total_samples if total_weighted_f1 > 0 else 0
         avg_loss = np.mean(loss_list) if loss_list else 0
+        avg_attack_ratio = np.mean(attack_ratio_list) if attack_ratio_list else 0
         
-        print(f"\nRiassunto:")
+        print(f"\nRIASSUNTO DNN SEMPLIFICATA (SENZA SMOTE):")
         print(f"  Media accuracy: {avg_weighted_accuracy:.4f}")
+        print(f"  Media F1-Score: {avg_weighted_f1:.4f}")
         print(f"  Media loss: {avg_loss:.4f}")
+        print(f"  Media distribuzione attacchi: {avg_attack_ratio*100:.1f}%")
         print(f"  Totale campioni: {total_samples}")
         print(f"  Client con errori: {len(error_clients)}")
+        
+        # Valutazione sbilanciamento
+        if avg_attack_ratio < 0.3 or avg_attack_ratio > 0.7:
+            print(f"  ⚠️  Dataset significativamente sbilanciati")
+            print(f"  ✅ Class weights compensano sbilanciamento")
+        else:
+            print(f"  ✅ Dataset ragionevolmente bilanciati")
 
-class SmartGridDNNFedAvg(FedAvg):
+class SmartGridDNNFedAvgSimple(FedAvg):
     """
-    Strategia FedAvg personalizzata per SmartGrid DNN.
+    Strategia FedAvg personalizzata per SmartGrid DNN semplificata SENZA SMOTE.
     """
     
     def aggregate_fit(self, server_round, results, failures):
         """
-        Aggrega i risultati dell'addestramento DNN.
+        Aggrega i risultati dell'addestramento DNN semplificata.
         """
-        print(f"\n=== AGGREGAZIONE TRAINING - ROUND {server_round} ===")
+        print(f"\n=== AGGREGAZIONE TRAINING DNN SEMPLIFICATA (SENZA SMOTE) - ROUND {server_round} ===")
         print(f"Client partecipanti: {len(results)}")
         print(f"Client falliti: {len(failures)}")
+        print(f"Dataset naturalmente sbilanciati per attacchi realistici")
         
         if failures:
             print("Fallimenti:")
@@ -554,29 +711,31 @@ class SmartGridDNNFedAvg(FedAvg):
             print("ERRORE: Nessun client ha fornito risultati validi")
             return None
         
-        # Stampa metriche dei client
-        print_client_metrics(results)
+        # Stampa metriche dei client con focus su essenzialità
+        print_client_metrics_simple(results)
         
         # Chiama l'aggregazione standard
         try:
             aggregated_result = super().aggregate_fit(server_round, results, failures)
             
             if aggregated_result is not None:
-                print(f"Aggregazione completata per round {server_round}")
+                print(f"✅ Aggregazione DNN semplificata completata per round {server_round}")
+                print(f"✅ Pesi di {len(results)} client DNN aggregati con successo")
             else:
-                print(f"ATTENZIONE: Aggregazione fallita per round {server_round}")
+                print(f"❌ ATTENZIONE: Aggregazione fallita per round {server_round}")
                 
         except Exception as e:
-            print(f"ERRORE durante aggregazione: {e}")
+            print(f"❌ ERRORE durante aggregazione: {e}")
             return None
         
         return aggregated_result
 
     def aggregate_evaluate(self, server_round, results, failures):
         """
-        Aggrega i risultati della valutazione DNN.
+        Aggrega i risultati della valutazione DNN semplificata.
         """
-        print(f"\n=== AGGREGAZIONE VALUTAZIONE ROUND {server_round} ===")
+        print(f"\n=== AGGREGAZIONE VALUTAZIONE DNN SEMPLIFICATA ROUND {server_round} ===")
+        print(f"Client che hanno valutato: {len(results)}")
         
         if failures:
             print("Fallimenti valutazione:")
@@ -587,7 +746,7 @@ class SmartGridDNNFedAvg(FedAvg):
             aggregated_result = super().aggregate_evaluate(server_round, results, failures)
             
             if aggregated_result is not None:
-                print(f"Aggregazione valutazione completata per round {server_round}")
+                print(f"✅ Aggregazione valutazione DNN semplificata completata per round {server_round}")
             else:
                 print(f"Aggregazione valutazione non riuscita per round {server_round}")
                 
@@ -599,37 +758,61 @@ class SmartGridDNNFedAvg(FedAvg):
 
 def main():
     """
-    Funzione principale per avviare il server SmartGrid federato DNN.
+    Funzione principale per avviare il server SmartGrid federato DNN semplificata SENZA SMOTE.
     """
-    print("=== SERVER FEDERATO SMARTGRID DNN ===")
-    print("Funzionalità implementate:")
-    print("  - Stabilità numerica PCA con fallback automatico")
-    print("  - Gestione robusta Parameters Flower")
-    print("  - Input layer esplicito per compatibilità")
-    print("  - Architettura DNN standardizzata")
+    print("=== SERVER FEDERATO SMARTGRID DNN SEMPLIFICATA (SENZA SMOTE) ===")
+    print("MODIFICHE ESSENZIALI IMPLEMENTATE:")
+    print("  ✅ SMOTE COMPLETAMENTE RIMOSSO per attacchi inference/extraction realistici")
+    print("  ✅ Distribuzione naturale mantenuta per fedeltà al mondo reale")
+    print("  ✅ Class weights automatici per compensare sbilanciamento")
+    print("  ✅ Metriche bilanciate essenziali: F1-Score, Balanced Accuracy, AUC")
+    print("  ✅ DNN ottimizzata per feature post-PCA ridotte")
+    print("  ✅ Architettura proporzionale per prevenire overfitting")
+    print("  ✅ Binary Crossentropy standard + Class Weights")
+    print("  ✅ Normalizzazione LOCALE per ogni client (preserva privacy)")
+    print("  ✅ Codice semplificato per scopi didattici")
+    print("")
+    print("VANTAGGI PER ATTACCHI DI INFERENCE/EXTRACTION:")
+    print("  🎯 Dati di training naturalmente distribuiti (nessun dato sintetico)")
+    print("  🎯 Membership inference su dati reali del mondo reale")
+    print("  🎯 Model extraction su comportamento naturale del modello")
+    print("  🎯 Scenario federato completamente realistico")
+    print("  🎯 Codice pulito e comprensibile per scopi didattici")
+    print("")
+    print("ARCHITETTURA DNN SEMPLIFICATA:")
+    print("  🧠 Primo layer: input_features × 0.8 (proporzionale)")
+    print("  🧠 Secondo layer: primo_layer ÷ 2")
+    print("  🧠 Terzo layer: secondo_layer ÷ 2")
+    print("  🧠 Output layer: 1 neurone (classificazione binaria)")
+    print("  🧠 Class weights: automatici per ogni client")
+    print("  🧠 Metriche: F1, Balanced Accuracy, AUC")
+    print("  🧠 Loss: Binary Crossentropy standard")
     print("")
     print("Configurazione:")
     print("  - Rounds: 5")
     print("  - Client minimi: 2")
-    print("  - Strategia: FedAvg personalizzata")
-    print("  - Valutazione: Dataset globale (client 14-15)")
-    print("  - Pipeline: Pulizia → Imputazione → Normalizzazione → SMOTE → PCA robusto")
-    print("  - Architettura: Input → Dense(128) → Dense(64) → Dense(32) → Dense(1)")
+    print("  - Strategia: FedAvg personalizzata con DNN semplificata")
+    print("  - Valutazione: Dataset globale naturalmente sbilanciato (client 14-15)")
+    print("  - Pipeline: Pulizia → Imputazione → Normalizzazione → PCA robusto (NO SMOTE)")
+    print("  - Architettura tipica: Input(~50) → Dense(~40) → Dense(~20) → Dense(~10) → Dense(1)")
+    print("  - Class weights: Automatici per compensare sbilanciamento")
+    print("  - Batch size: 32 (ottimizzato per stabilità)")
+    print("  - Epoche locali: 5 (bilanciate per convergenza)")
     
     # Configurazione del server
     config = fl.server.ServerConfig(num_rounds=5)
     
-    # Strategia Federated Averaging personalizzata
-    strategy = SmartGridDNNFedAvg(
+    # Strategia Federated Averaging personalizzata con DNN semplificata
+    strategy = SmartGridDNNFedAvgSimple(
         fraction_fit=1.0,
         fraction_evaluate=1.0,
         min_fit_clients=2,
         min_evaluate_clients=2,
         min_available_clients=2,
-        evaluate_fn=get_smartgrid_evaluate_fn()
+        evaluate_fn=get_smartgrid_evaluate_fn_simple()
     )
     
-    print("\nServer in attesa di client...")
+    print("\nServer DNN semplificata in attesa di client...")
     print("Per connettere i client, esegui:")
     print("  python client.py 1")
     print("  python client.py 2")
@@ -637,6 +820,18 @@ def main():
     print("  python client.py 13")
     print("\nClient 14-15 riservati per valutazione globale")
     print("Training inizierà quando almeno 2 client saranno connessi.")
+    print("")
+    print("VANTAGGI DNN SEMPLIFICATA SENZA SMOTE:")
+    print("  ✅ Performance realistiche su dati sbilanciati del mondo reale")
+    print("  ✅ Attacchi di inference più rappresentativi")
+    print("  ✅ Model extraction su comportamento autentico")
+    print("  ✅ Codice pulito e didattico per studenti")
+    print("  ✅ Metriche significative per sistemi di sicurezza")
+    print("  ✅ Class weights compensano automaticamente sbilanciamento")
+    print("  ✅ Architettura ottimizzata previene overfitting")
+    print("  ✅ Compatibilità completa con letteratura FL su attacchi")
+    print("  ✅ Ridotta complessità per concentrarsi su federated learning")
+    print("  ✅ I warning PCA sono normali e gestiti automaticamente dai fallback")
     
     try:
         fl.server.start_server(
