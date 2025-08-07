@@ -621,7 +621,7 @@ class SmartGridDNNClientFixed(fl.client.NumPyClient):
             print(f"[Client {client_id}]   - Learning rate: 0.0008 (OTTIMIZZATO per PCA ridotta)")
             print(f"[Client {client_id}]   - Class weights: {class_weights}")
             print(f"[Client {client_id}]   - Callback: EarlyStopping + ReduceLROnPlateau")
-            print(f"[Client {client_id}]   - Architettura CONSERVATIVA: {dataset_info['pca_features']} → 28 → 16 → 8 → 1")
+            print(f"[Client {client_id}]   - Architettura MIGLIORATA: {dataset_info['pca_features']} → 64 → 32 → 16 → 8 → 1")
             
             history = model.fit(
                 X_train, y_train,
@@ -707,7 +707,7 @@ class SmartGridDNNClientFixed(fl.client.NumPyClient):
             'preprocessing_method': dataset_info['preprocessing_method'],
             'pca_method': dataset_info['pca_method'],
             'model_type': 'dnn_static_architecture_lr_optimized',
-            'architecture_type': 'static_conservative_regularized'
+            'architecture_type': 'static_improved_4_layers'
         }
         
         return model.get_weights(), len(X_train), metrics
@@ -794,7 +794,7 @@ def main():
     print("CONFIGURAZIONE ANTI-OVERFITTING FINALE:")
     print("  ✅ SMOTE RIMOSSO per attacchi inference/extraction realistici")
     print(f"  ✅ PCA FISSA configurata: {PCA_COMPONENTS} componenti")
-    print("  ✅ Architettura DNN CONSERVATIVA: 35 → 28 → 16 → 8 → 1")
+    print("  ✅ Architettura DNN MIGLIORATA: 35 → 64 → 32 → 16 → 8 → 1")
     print("  ✅ Dropout AUMENTATO: 0.4")
     print("  ✅ L2 Regularization AUMENTATO: 0.0015")
     print("  ✅ BatchNormalization: ATTIVA")
@@ -822,7 +822,7 @@ def main():
         print(f"[Client {client_id}] Feature: {dataset_info['original_features']} → {dataset_info['pca_features']}")
         print(f"[Client {client_id}] PCA configurata: {dataset_info['pca_components_configured']} componenti")
         print(f"[Client {client_id}] Varianza spiegata: {dataset_info['variance_explained']:.2f}%")
-        print(f"[Client {client_id}] Modello: {model.count_params():,} parametri (CONSERVATIVO)")
+        print(f"[Client {client_id}] Modello: {model.count_params():,} parametri (MIGLIORATO)")
         print(f"[Client {client_id}] Parametri/feature: {model.count_params()/dataset_info['pca_features']:.1f}")
         print(f"[Client {client_id}] Class weights: {dataset_info['class_weights']}")
         print(f"[Client {client_id}] Learning rate: 0.0008 (OTTIMIZZATO per PCA ridotta e dataset sbilanciati)")

@@ -633,7 +633,7 @@ def get_smartgrid_evaluate_fn_fixed():
                 "learning_rate_optimized": 0.0008,
                 "gradient_clipping": 1.0,
                 "batch_normalization": True,
-                "architecture_type": "static_conservative_anti_overfitting",
+                "architecture_type": "static_improved_4_layers",
                 
                 # Metodologia
                 "model_type": "dnn_static_architecture_lr_optimized",
@@ -803,7 +803,7 @@ def print_client_metrics_fixed(fit_results):
         
         # Valutazioni specifiche regolarizzazione e learning rate
         print(f"  ✅ PCA fissa: {PCA_COMPONENTS} componenti fissi per tutti i client")
-        print(f"  ✅ Architettura CONSERVATIVA: DNN {PCA_COMPONENTS} → 28 → 16 → 8 → 1")
+        print(f"  ✅ Architettura MIGLIORATA: DNN {PCA_COMPONENTS} → 64 → 32 → 16 → 8 → 1")
         print(f"  ✅ Regolarizzazione MASSIMA: Dropout 0.4, L2 0.0015, BatchNorm, EarlyStopping")
         print(f"  ✅ Learning rate OTTIMIZZATO: 0.0008 (ridotto da 0.001)")
         print(f"  ✅ Parametri ottimizzati: Batch 16, Epoche 4, Gradient Clipping 1.0")
@@ -837,7 +837,7 @@ class SmartGridDNNFedAvgFixed(FedAvg):
         print(f"Client falliti: {len(failures)}")
         print(f"Dataset naturalmente sbilanciati per attacchi realistici")
         print(f"PCA fissa: {PCA_COMPONENTS} componenti fissi")
-        print(f"Architettura DNN: CONSERVATIVA ANTI-OVERFITTING (35 → 28 → 16 → 8 → 1)")
+        print(f"Architettura DNN: MIGLIORATA (35 → 64 → 32 → 16 → 8 → 1)")
         print(f"Regolarizzazione: MASSIMA (Dropout 0.4, L2 0.0015, BatchNorm, EarlyStopping)")
         print(f"Learning rate: 0.0008 (OTTIMIZZATO per PCA ridotta e dataset sbilanciati)")
         
@@ -910,7 +910,7 @@ def main():
     print("CONFIGURAZIONE ANTI-OVERFITTING FINALE + CONVERGENZA STABILE:")
     print("  ✅ SMOTE COMPLETAMENTE RIMOSSO per attacchi inference/extraction realistici")
     print(f"  ✅ PCA FISSA configurata manualmente: {PCA_COMPONENTS} componenti")
-    print("  ✅ Architettura DNN CONSERVATIVA: 35 → 28 → 16 → 8 → 1")
+    print("  ✅ Architettura DNN MIGLIORATA: 35 → 64 → 32 → 16 → 8 → 1")
     print("  ✅ Dropout AUMENTATO: 0.4 (da 0.3)")
     print("  ✅ L2 Regularization AUMENTATO: 0.0015 (da 0.001)")
     print("  ✅ BatchNormalization: ATTIVA su tutti i layer")
@@ -928,7 +928,7 @@ def main():
     print("")
     print("VANTAGGI REGOLARIZZAZIONE COMPLETA + LEARNING RATE OTTIMIZZATO:")
     print(f"  🎯 Prevenzione overfitting: 10 tecniche simultanee + convergenza stabile")
-    print(f"  🎯 Architettura CONSERVATIVA: ridotti parametri per feature")
+    print(f"  🎯 Architettura MIGLIORATA: incrementati parametri per maggiore capacità")
     print(f"  🎯 Training adattivo: EarlyStopping + ReduceLROnPlateau")
     print(f"  🎯 Stabilità numerica: Gradient clipping + BatchNorm")
     print(f"  🎯 Generalizzazione: Dropout elevato + L2 forte")
@@ -954,7 +954,7 @@ def main():
     print("  - Strategia: FedAvg personalizzata con DNN anti-overfitting + LR ottimizzato")
     print("  - Valutazione: Dataset globale con PCA fissa (client 14-15)")
     print("  - Pipeline: Pulizia → Imputazione → Normalizzazione → PCA fissa (NO SMOTE)")
-    print("  - Architettura: CONSERVATIVA e ottimizzata con regolarizzazione massima")
+    print("  - Architettura: MIGLIORATA e ottimizzata con 4 layer nascosti")
     print("  - Class weights: Automatici per compensare sbilanciamento")
     print("  - Regolarizzazione: 10 tecniche simultanee")
     print("  - Callback: EarlyStopping + ReduceLROnPlateau sui client")
@@ -985,7 +985,7 @@ def main():
     print("VANTAGGI FINALI REGOLARIZZAZIONE COMPLETA + LEARNING RATE OTTIMIZZATO:")
     print("  ✅ Prevenzione overfitting MASSIMA con 10 tecniche simultanee")
     print(f"  ✅ Numero fisso di componenti configurato manualmente: {PCA_COMPONENTS}")
-    print("  ✅ Architettura DNN CONSERVATIVA e completamente regolarizzata")
+    print("  ✅ Architettura DNN MIGLIORATA e completamente regolarizzata")
     print("  ✅ Learning rate OTTIMIZZATO per PCA ridotta e dataset sbilanciati")
     print("  ✅ Convergenza federata stabile e consistente")
     print("  ✅ Attacchi di inference più rappresentativi su modelli ben regolarizzati")
