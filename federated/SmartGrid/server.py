@@ -21,6 +21,11 @@ import os
 PCA_COMPONENTS = 35  # <-- MODIFICA QUESTO VALORE CON IL RISULTATO DELL'ANALISI
 PCA_RANDOM_STATE = 42
 
+# CONFIGURAZIONE MODELLO DNN - PARAMETRI CONFIGURABILI (IDENTICI AI CLIENT)
+ACTIVATION_FUNCTION = 'leaky_relu'  # 'leaky_relu', 'selu', 'relu'
+USE_ADAMW = True  # True per AdamW, False per Adam
+EXTENDED_DROPOUT = True  # True per dropout su tutti i layer nascosti
+
 def clean_data_for_pca_server(X):
     """
     Pulizia robusta dei dati per prevenire problemi numerici in PCA (server).
@@ -191,55 +196,82 @@ def compute_class_weights_server_simple(y_global):
 
 def create_server_dnn_model_static_architecture():
     """
-    Crea il modello DNN per il server IDENTICO ai client con regolarizzazione completa.
-    INCLUDE TUTTE LE TECNICHE DI REGOLARIZZAZIONE + LEARNING RATE OTTIMIZZATO per prevenire overfitting.
+    Crea il modello DNN per il server IDENTICO ai client con architettura migliorata.
+    ARCHITETTURA: input_dim → 64 → 32 → 16 → 8 → 1 (4 layer nascosti)
+    ATTIVAZIONE: LeakyReLU/SELU configurabile 
+    OTTIMIZZATORE: AdamW per regolarizzazione robusta
+    DROPOUT: Esteso a tutti i layer nascosti
     
     Returns:
-        Modello Keras compilato per dataset sbilanciati
+        Modello Keras compilato IDENTICO ai client
     """
-    print(f"[Server] === CREAZIONE DNN ARCHITETTURA STATICA SERVER CON REGOLARIZZAZIONE + LR OTTIMIZZATO ===")
-    print(f"[Server] Input features fisse: {PCA_COMPONENTS}")
+    print(f"[Server] === CREAZIONE DNN ARCHITETTURA MIGLIORATA SERVER ===")
+    print(f"[Server] Input features: {PCA_COMPONENTS} (FISSO)")
+    print(f"[Server] Attivazione: {ACTIVATION_FUNCTION}")
+    print(f"[Server] Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'}")
+    print(f"[Server] Dropout esteso: {EXTENDED_DROPOUT}")
     
-    # Parametri IDENTICI ai client per REGOLARIZZAZIONE MASSIMA
-    dropout_rate = 0.4          # AUMENTATO da 0.3 per maggiore regolarizzazione
-    l2_reg = 0.0015             # AUMENTATO da 0.001 per PCA ridotta
+    # Parametri IDENTICI ai client per compatibilità federata
+    dropout_rate = 0.4          # Dropout principale
+    dropout_final = 0.3         # Dropout finale ridotto
+    l2_reg = 0.0015             # L2 regularization
     
-    # ARCHITETTURA STATICA IDENTICA ai client - CONSERVATIVA ANTI-OVERFITTING
-    # 35 → 28 → 16 → 8 → 1 (architettura conservativa anti-overfitting)
-    
-    print(f"[Server] Architettura STATICA ANTI-OVERFITTING: {PCA_COMPONENTS} → 28 → 16 → 8 → 1")
+    # ARCHITETTURA MIGLIORATA IDENTICA AI CLIENT: 35 → 64 → 32 → 16 → 8 → 1
+    print(f"[Server] Architettura MIGLIORATA: {PCA_COMPONENTS} → 64 → 32 → 16 → 8 → 1")
     print(f"[Server] Regolarizzazione: Dropout {dropout_rate}, L2 {l2_reg}, BatchNorm")
+    
+    # Selezione funzione di attivazione (identica ai client)
+    if ACTIVATION_FUNCTION == 'leaky_relu':
+        activation_layer = lambda: layers.LeakyReLU(alpha=0.01)
+        initializer = 'he_normal'
+    elif ACTIVATION_FUNCTION == 'selu':
+        activation_layer = lambda: layers.Activation('selu')
+        initializer = 'lecun_normal'
+    else:  # relu default
+        activation_layer = lambda: layers.Activation('relu')
+        initializer = 'he_normal'
+    
+    print(f"[Server] Funzione attivazione: {ACTIVATION_FUNCTION}, Initializer: {initializer}")
     
     model = tf.keras.Sequential([
         # Input layer esplicito con dimensione FISSA IDENTICA ai client
         layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
         
-        # Layer 1: 28 neuroni (ridotto da 32 per meno parametri)
-        layers.Dense(28, 
-                    activation='relu',
+        # Layer 1: 64 neuroni (NUOVO - identico ai client)
+        layers.Dense(64, 
                     kernel_regularizer=regularizers.l2(l2_reg),
-                    kernel_initializer='he_normal',
+                    kernel_initializer=initializer,
                     name='dense_1'),
+        activation_layer(),
         layers.BatchNormalization(name='batch_norm_1'),
         layers.Dropout(dropout_rate, name='dropout_1'),
         
-        # Layer 2: 16 neuroni (ridotto da 20 per meno parametri)
-        layers.Dense(16, 
-                    activation='relu',
+        # Layer 2: 32 neuroni (NUOVO - identico ai client)
+        layers.Dense(32, 
                     kernel_regularizer=regularizers.l2(l2_reg),
-                    kernel_initializer='he_normal',
+                    kernel_initializer=initializer,
                     name='dense_2'),
+        activation_layer(),
         layers.BatchNormalization(name='batch_norm_2'),
-        layers.Dropout(dropout_rate, name='dropout_2'),
+        layers.Dropout(dropout_rate if EXTENDED_DROPOUT else dropout_rate, name='dropout_2'),
         
-        # Layer 3: 8 neuroni (ridotto da 12 per meno parametri)
-        layers.Dense(8, 
-                    activation='relu',
+        # Layer 3: 16 neuroni (identico ai client)
+        layers.Dense(16, 
                     kernel_regularizer=regularizers.l2(l2_reg),
-                    kernel_initializer='he_normal',
+                    kernel_initializer=initializer,
                     name='dense_3'),
+        activation_layer(),
         layers.BatchNormalization(name='batch_norm_3'),
-        layers.Dropout(dropout_rate * 0.75, name='dropout_3'),  # Dropout leggermente ridotto
+        layers.Dropout(dropout_rate if EXTENDED_DROPOUT else dropout_rate, name='dropout_3'),
+        
+        # Layer 4: 8 neuroni (identico ai client)
+        layers.Dense(8, 
+                    kernel_regularizer=regularizers.l2(l2_reg),
+                    kernel_initializer=initializer,
+                    name='dense_4'),
+        activation_layer(),
+        layers.BatchNormalization(name='batch_norm_4'),
+        layers.Dropout(dropout_final if EXTENDED_DROPOUT else dropout_final, name='dropout_4'),
         
         # Output layer IDENTICO ai client
         layers.Dense(1, 
@@ -248,14 +280,26 @@ def create_server_dnn_model_static_architecture():
                     name='output_layer')
     ])
     
-    # OTTIMIZZATORE IDENTICO ai client con LEARNING RATE OTTIMIZZATO
-    optimizer = tf.keras.optimizers.Adam(
-        learning_rate=0.0008,    # OTTIMIZZATO: ridotto da 0.001 per PCA ridotta e convergenza stabile
-        beta_1=0.9,
-        beta_2=0.999,
-        epsilon=1e-7,
-        clipnorm=1.0             # Gradient clipping per stabilità
-    )
+    # OTTIMIZZATORE IDENTICO ai client - AdamW o Adam
+    if USE_ADAMW:
+        optimizer = tf.keras.optimizers.AdamW(
+            learning_rate=0.0008,
+            weight_decay=0.01,
+            beta_1=0.9,
+            beta_2=0.999,
+            epsilon=1e-7,
+            clipnorm=1.0
+        )
+        print(f"[Server] Ottimizzatore: AdamW (weight_decay=0.01)")
+    else:
+        optimizer = tf.keras.optimizers.Adam(
+            learning_rate=0.0008,
+            beta_1=0.9,
+            beta_2=0.999,
+            epsilon=1e-7,
+            clipnorm=1.0
+        )
+        print(f"[Server] Ottimizzatore: Adam")
     
     # Compila il modello IDENTICO ai client
     model.compile(
@@ -273,26 +317,29 @@ def create_server_dnn_model_static_architecture():
     total_params = model.count_params()
     params_per_feature = total_params / PCA_COMPONENTS
     
-    print(f"[Server] === DNN ARCHITETTURA STATICA ANTI-OVERFITTING + LR OTTIMIZZATO SERVER CREATA ===")
+    print(f"[Server] === DNN ARCHITETTURA MIGLIORATA SERVER CREATA ===")
     print(f"[Server]   - Parametri totali: {total_params:,}")
     print(f"[Server]   - Parametri per feature: {params_per_feature:.1f}")
-    print(f"[Server]   - Architettura: CONSERVATIVA per {PCA_COMPONENTS} feature PCA")
-    print(f"[Server]   - Dropout: {dropout_rate} (AUMENTATO)")
-    print(f"[Server]   - L2 regularization: {l2_reg} (AUMENTATO)")
-    print(f"[Server]   - Learning rate: {optimizer.learning_rate} (OTTIMIZZATO per PCA ridotta)")
+    print(f"[Server]   - Architettura: MIGLIORATA per {PCA_COMPONENTS} feature PCA")
+    print(f"[Server]   - Layer nascosti: 4 (64, 32, 16, 8)")
+    print(f"[Server]   - Attivazione: {ACTIVATION_FUNCTION}")
+    print(f"[Server]   - Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'}")
+    print(f"[Server]   - Dropout: {dropout_rate} (esteso: {EXTENDED_DROPOUT})")
+    print(f"[Server]   - L2 regularization: {l2_reg}")
+    print(f"[Server]   - Learning rate: 0.0008")
     print(f"[Server]   - BatchNormalization: ATTIVA")
-    print(f"[Server]   - Gradient clipping: {optimizer.clipnorm}")
+    print(f"[Server]   - Gradient clipping: 1.0")
     print(f"[Server]   - Loss: Binary Crossentropy + Class Weights")
-    print(f"[Server]   - IDENTICO ai client per compatibilità + ANTI-OVERFITTING + LR OTTIMIZZATO")
+    print(f"[Server]   - IDENTICO ai client per compatibilità federata")
     
-    # Valutazione rischio overfitting
+    # Valutazione architettura
     if params_per_feature > 50:
         print(f"[Server]   ⚠️  ATTENZIONE: Alto rapporto parametri/feature ({params_per_feature:.1f})")
-        print(f"[Server]   🔧 Regolarizzazione MASSIMA per compensare")
+        print(f"[Server]   🔧 Regolarizzazione per compensare")
     else:
         print(f"[Server]   ✅ Rapporto parametri/feature ottimale ({params_per_feature:.1f})")
     
-    print(f"[Server]   🎯 Learning rate ottimizzato per convergenza federata stabile")
+    print(f"[Server]   🎯 Architettura migliorata identica ai client")
     
     return model
 
@@ -586,7 +633,7 @@ def get_smartgrid_evaluate_fn_fixed():
                 "learning_rate_optimized": 0.0008,
                 "gradient_clipping": 1.0,
                 "batch_normalization": True,
-                "architecture_type": "static_conservative_anti_overfitting",
+                "architecture_type": "static_improved_4_layers",
                 
                 # Metodologia
                 "model_type": "dnn_static_architecture_lr_optimized",
@@ -756,7 +803,7 @@ def print_client_metrics_fixed(fit_results):
         
         # Valutazioni specifiche regolarizzazione e learning rate
         print(f"  ✅ PCA fissa: {PCA_COMPONENTS} componenti fissi per tutti i client")
-        print(f"  ✅ Architettura CONSERVATIVA: DNN {PCA_COMPONENTS} → 28 → 16 → 8 → 1")
+        print(f"  ✅ Architettura MIGLIORATA: DNN {PCA_COMPONENTS} → 64 → 32 → 16 → 8 → 1")
         print(f"  ✅ Regolarizzazione MASSIMA: Dropout 0.4, L2 0.0015, BatchNorm, EarlyStopping")
         print(f"  ✅ Learning rate OTTIMIZZATO: 0.0008 (ridotto da 0.001)")
         print(f"  ✅ Parametri ottimizzati: Batch 16, Epoche 4, Gradient Clipping 1.0")
@@ -790,7 +837,7 @@ class SmartGridDNNFedAvgFixed(FedAvg):
         print(f"Client falliti: {len(failures)}")
         print(f"Dataset naturalmente sbilanciati per attacchi realistici")
         print(f"PCA fissa: {PCA_COMPONENTS} componenti fissi")
-        print(f"Architettura DNN: CONSERVATIVA ANTI-OVERFITTING (35 → 28 → 16 → 8 → 1)")
+        print(f"Architettura DNN: MIGLIORATA (35 → 64 → 32 → 16 → 8 → 1)")
         print(f"Regolarizzazione: MASSIMA (Dropout 0.4, L2 0.0015, BatchNorm, EarlyStopping)")
         print(f"Learning rate: 0.0008 (OTTIMIZZATO per PCA ridotta e dataset sbilanciati)")
         
@@ -863,7 +910,7 @@ def main():
     print("CONFIGURAZIONE ANTI-OVERFITTING FINALE + CONVERGENZA STABILE:")
     print("  ✅ SMOTE COMPLETAMENTE RIMOSSO per attacchi inference/extraction realistici")
     print(f"  ✅ PCA FISSA configurata manualmente: {PCA_COMPONENTS} componenti")
-    print("  ✅ Architettura DNN CONSERVATIVA: 35 → 28 → 16 → 8 → 1")
+    print("  ✅ Architettura DNN MIGLIORATA: 35 → 64 → 32 → 16 → 8 → 1")
     print("  ✅ Dropout AUMENTATO: 0.4 (da 0.3)")
     print("  ✅ L2 Regularization AUMENTATO: 0.0015 (da 0.001)")
     print("  ✅ BatchNormalization: ATTIVA su tutti i layer")
@@ -881,7 +928,7 @@ def main():
     print("")
     print("VANTAGGI REGOLARIZZAZIONE COMPLETA + LEARNING RATE OTTIMIZZATO:")
     print(f"  🎯 Prevenzione overfitting: 10 tecniche simultanee + convergenza stabile")
-    print(f"  🎯 Architettura CONSERVATIVA: ridotti parametri per feature")
+    print(f"  🎯 Architettura MIGLIORATA: incrementati parametri per maggiore capacità")
     print(f"  🎯 Training adattivo: EarlyStopping + ReduceLROnPlateau")
     print(f"  🎯 Stabilità numerica: Gradient clipping + BatchNorm")
     print(f"  🎯 Generalizzazione: Dropout elevato + L2 forte")
@@ -907,7 +954,7 @@ def main():
     print("  - Strategia: FedAvg personalizzata con DNN anti-overfitting + LR ottimizzato")
     print("  - Valutazione: Dataset globale con PCA fissa (client 14-15)")
     print("  - Pipeline: Pulizia → Imputazione → Normalizzazione → PCA fissa (NO SMOTE)")
-    print("  - Architettura: CONSERVATIVA e ottimizzata con regolarizzazione massima")
+    print("  - Architettura: MIGLIORATA e ottimizzata con 4 layer nascosti")
     print("  - Class weights: Automatici per compensare sbilanciamento")
     print("  - Regolarizzazione: 10 tecniche simultanee")
     print("  - Callback: EarlyStopping + ReduceLROnPlateau sui client")
@@ -938,7 +985,7 @@ def main():
     print("VANTAGGI FINALI REGOLARIZZAZIONE COMPLETA + LEARNING RATE OTTIMIZZATO:")
     print("  ✅ Prevenzione overfitting MASSIMA con 10 tecniche simultanee")
     print(f"  ✅ Numero fisso di componenti configurato manualmente: {PCA_COMPONENTS}")
-    print("  ✅ Architettura DNN CONSERVATIVA e completamente regolarizzata")
+    print("  ✅ Architettura DNN MIGLIORATA e completamente regolarizzata")
     print("  ✅ Learning rate OTTIMIZZATO per PCA ridotta e dataset sbilanciati")
     print("  ✅ Convergenza federata stabile e consistente")
     print("  ✅ Attacchi di inference più rappresentativi su modelli ben regolarizzati")

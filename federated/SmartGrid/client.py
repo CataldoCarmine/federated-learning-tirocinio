@@ -21,6 +21,11 @@ from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score
 PCA_COMPONENTS = 35  # <-- MODIFICA QUESTO VALORE CON IL RISULTATO DELL'ANALISI
 PCA_RANDOM_STATE = 42
 
+# CONFIGURAZIONE MODELLO DNN - PARAMETRI CONFIGURABILI
+ACTIVATION_FUNCTION = 'leaky_relu'  # 'leaky_relu', 'selu', 'relu'
+USE_ADAMW = True  # True per AdamW, False per Adam
+EXTENDED_DROPOUT = True  # True per dropout su tutti i layer nascosti
+
 def clean_data_for_pca(X):
     """
     Pulizia robusta dei dati per prevenire problemi numerici in PCA.
@@ -274,57 +279,82 @@ def load_client_smartgrid_data_with_fixed_pca(client_id):
 
 def create_smartgrid_dnn_model_static_architecture():
     """
-    Crea il modello DNN SmartGrid con architettura STATICA ottimizzata per 35 componenti PCA.
-    INCLUDE TUTTE LE TECNICHE DI REGOLARIZZAZIONE per prevenire overfitting.
-    LEARNING RATE OTTIMIZZATO per PCA ridotta e dataset sbilanciati.
+    Crea il modello DNN SmartGrid con architettura MIGLIORATA per prestazioni superiori.
+    ARCHITETTURA: input_dim → 64 → 32 → 16 → 8 → 1 (4 layer nascosti)
+    ATTIVAZIONE: LeakyReLU/SELU configurabile 
+    OTTIMIZZATORE: AdamW per regolarizzazione robusta
+    DROPOUT: Esteso a tutti i layer nascosti
     
     Returns:
-        Modello Keras compilato per dataset sbilanciati
+        Modello Keras compilato con architettura migliorata
     """
-    print(f"[Client] === CREAZIONE DNN ARCHITETTURA STATICA CON REGOLARIZZAZIONE COMPLETA ===")
+    print(f"[Client] === CREAZIONE DNN ARCHITETTURA MIGLIORATA ===")
     print(f"[Client] Input features: {PCA_COMPONENTS} (FISSO)")
+    print(f"[Client] Attivazione: {ACTIVATION_FUNCTION}")
+    print(f"[Client] Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'}")
+    print(f"[Client] Dropout esteso: {EXTENDED_DROPOUT}")
     
-    # PARAMETRI DI REGOLARIZZAZIONE OTTIMIZZATI per PCA ridotta
-    dropout_rate = 0.4          # AUMENTATO da 0.3 per maggiore regolarizzazione
-    l2_reg = 0.0015             # AUMENTATO da 0.001 per PCA ridotta
+    # PARAMETRI DI REGOLARIZZAZIONE OTTIMIZZATI
+    dropout_rate = 0.4          # Dropout principale
+    dropout_final = 0.3         # Dropout finale ridotto
+    l2_reg = 0.0015             # L2 regularization
     
-    # ARCHITETTURA STATICA OTTIMIZZATA PER 35 COMPONENTI PCA
-    # Ridotta ulteriormente per prevenire overfitting con PCA
-    # 35 → 28 → 16 → 8 → 1 (architettura più conservativa)
+    # ARCHITETTURA MIGLIORATA: 35 → 64 → 32 → 16 → 8 → 1 (4 layer nascosti)
+    print(f"[Client] Architettura MIGLIORATA: {PCA_COMPONENTS} → 64 → 32 → 16 → 8 → 1")
+    print(f"[Client] Regolarizzazione: Dropout {dropout_rate}, L2 {l2_reg}, BatchNorm")
     
-    print(f"[Client] Architettura STATICA ANTI-OVERFITTING: {PCA_COMPONENTS} → 28 → 16 → 8 → 1")
-    print(f"[Client] Regolarizzazione: Dropout {dropout_rate}, L2 {l2_reg}, BatchNorm, EarlyStopping")
+    # Selezione funzione di attivazione
+    if ACTIVATION_FUNCTION == 'leaky_relu':
+        activation_layer = lambda: layers.LeakyReLU(alpha=0.01)
+        initializer = 'he_normal'
+    elif ACTIVATION_FUNCTION == 'selu':
+        activation_layer = lambda: layers.Activation('selu')
+        initializer = 'lecun_normal'
+    else:  # relu default
+        activation_layer = lambda: layers.Activation('relu')
+        initializer = 'he_normal'
+    
+    print(f"[Client] Funzione attivazione: {ACTIVATION_FUNCTION}, Initializer: {initializer}")
     
     model = keras.Sequential([
         # Input layer esplicito con dimensione FISSA
         layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
         
-        # Layer 1: 28 neuroni (ridotto da 32 per meno parametri)
-        layers.Dense(28, 
-                    activation='relu',
+        # Layer 1: 64 neuroni (NUOVO - ampliato per maggiore capacità)
+        layers.Dense(64, 
                     kernel_regularizer=regularizers.l2(l2_reg),
-                    kernel_initializer='he_normal',
+                    kernel_initializer=initializer,
                     name='dense_1'),
+        activation_layer(),
         layers.BatchNormalization(name='batch_norm_1'),
         layers.Dropout(dropout_rate, name='dropout_1'),
         
-        # Layer 2: 16 neuroni (ridotto da 20 per meno parametri)
-        layers.Dense(16, 
-                    activation='relu',
+        # Layer 2: 32 neuroni (NUOVO - progressione logica)
+        layers.Dense(32, 
                     kernel_regularizer=regularizers.l2(l2_reg),
-                    kernel_initializer='he_normal',
+                    kernel_initializer=initializer,
                     name='dense_2'),
+        activation_layer(),
         layers.BatchNormalization(name='batch_norm_2'),
-        layers.Dropout(dropout_rate, name='dropout_2'),
+        layers.Dropout(dropout_rate if EXTENDED_DROPOUT else dropout_rate, name='dropout_2'),
         
-        # Layer 3: 8 neuroni (ridotto da 12 per meno parametri)
-        layers.Dense(8, 
-                    activation='relu',
+        # Layer 3: 16 neuroni (esistente, migliorato)
+        layers.Dense(16, 
                     kernel_regularizer=regularizers.l2(l2_reg),
-                    kernel_initializer='he_normal',
+                    kernel_initializer=initializer,
                     name='dense_3'),
+        activation_layer(),
         layers.BatchNormalization(name='batch_norm_3'),
-        layers.Dropout(dropout_rate * 0.75, name='dropout_3'),  # Dropout leggermente ridotto
+        layers.Dropout(dropout_rate if EXTENDED_DROPOUT else dropout_rate, name='dropout_3'),
+        
+        # Layer 4: 8 neuroni (esistente, migliorato)
+        layers.Dense(8, 
+                    kernel_regularizer=regularizers.l2(l2_reg),
+                    kernel_initializer=initializer,
+                    name='dense_4'),
+        activation_layer(),
+        layers.BatchNormalization(name='batch_norm_4'),
+        layers.Dropout(dropout_final if EXTENDED_DROPOUT else dropout_final, name='dropout_4'),
         
         # Output layer: 1 neurone (classificazione binaria)
         layers.Dense(1, 
@@ -333,14 +363,26 @@ def create_smartgrid_dnn_model_static_architecture():
                     name='output_layer')
     ])
     
-    # OTTIMIZZATORE CON LEARNING RATE OTTIMIZZATO PER PCA RIDOTTA
-    optimizer = keras.optimizers.Adam(
-        learning_rate=0.0008,    # OTTIMIZZATO: ridotto da 0.001 per PCA ridotta e dataset sbilanciati
-        beta_1=0.9,
-        beta_2=0.999,
-        epsilon=1e-7,
-        clipnorm=1.0             # Gradient clipping per stabilità
-    )
+    # OTTIMIZZATORE CONFIGURABILE - AdamW o Adam
+    if USE_ADAMW:
+        optimizer = tf.keras.optimizers.AdamW(
+            learning_rate=0.0008,
+            weight_decay=0.01,
+            beta_1=0.9,
+            beta_2=0.999,
+            epsilon=1e-7,
+            clipnorm=1.0
+        )
+        print(f"[Client] Ottimizzatore: AdamW (weight_decay=0.01)")
+    else:
+        optimizer = tf.keras.optimizers.Adam(
+            learning_rate=0.0008,
+            beta_1=0.9,
+            beta_2=0.999,
+            epsilon=1e-7,
+            clipnorm=1.0
+        )
+        print(f"[Client] Ottimizzatore: Adam")
     
     # Compila il modello con Binary Crossentropy standard
     model.compile(
@@ -358,26 +400,28 @@ def create_smartgrid_dnn_model_static_architecture():
     total_params = model.count_params()
     params_per_feature = total_params / PCA_COMPONENTS
     
-    print(f"[Client] === DNN ARCHITETTURA STATICA ANTI-OVERFITTING CREATA ===")
+    print(f"[Client] === DNN ARCHITETTURA MIGLIORATA CREATA ===")
     print(f"[Client]   - Parametri totali: {total_params:,}")
     print(f"[Client]   - Parametri per feature: {params_per_feature:.1f}")
-    print(f"[Client]   - Architettura: STATICA CONSERVATIVA per {PCA_COMPONENTS} feature PCA")
-    print(f"[Client]   - Dropout: {dropout_rate} (AUMENTATO)")
-    print(f"[Client]   - L2 regularization: {l2_reg} (AUMENTATO)")
-    print(f"[Client]   - Learning rate: {optimizer.learning_rate} (OTTIMIZZATO per PCA ridotta)")
+    print(f"[Client]   - Architettura: MIGLIORATA per {PCA_COMPONENTS} feature PCA")
+    print(f"[Client]   - Layer nascosti: 4 (64, 32, 16, 8)")
+    print(f"[Client]   - Attivazione: {ACTIVATION_FUNCTION}")
+    print(f"[Client]   - Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'}")
+    print(f"[Client]   - Dropout: {dropout_rate} (esteso: {EXTENDED_DROPOUT})")
+    print(f"[Client]   - L2 regularization: {l2_reg}")
+    print(f"[Client]   - Learning rate: 0.0008")
     print(f"[Client]   - BatchNormalization: ATTIVA")
-    print(f"[Client]   - Gradient clipping: {optimizer.clipnorm}")
+    print(f"[Client]   - Gradient clipping: 1.0")
     print(f"[Client]   - Loss: Binary Crossentropy + Class Weights")
-    print(f"[Client]   - Ottimizzato per: dati sbilanciati + prevenzione overfitting + PCA ridotta")
     
-    # Valutazione rischio overfitting
+    # Valutazione architettura
     if params_per_feature > 50:
         print(f"[Client]   ⚠️  ATTENZIONE: Alto rapporto parametri/feature ({params_per_feature:.1f})")
-        print(f"[Client]   🔧 Regolarizzazione AUMENTATA per compensare")
+        print(f"[Client]   🔧 Regolarizzazione per compensare")
     else:
         print(f"[Client]   ✅ Rapporto parametri/feature ottimale ({params_per_feature:.1f})")
     
-    print(f"[Client]   🎯 Learning rate ottimizzato per convergenza stabile su PCA ridotta")
+    print(f"[Client]   🎯 Architettura migliorata per prestazioni superiori")
     
     return model
 
@@ -577,7 +621,7 @@ class SmartGridDNNClientFixed(fl.client.NumPyClient):
             print(f"[Client {client_id}]   - Learning rate: 0.0008 (OTTIMIZZATO per PCA ridotta)")
             print(f"[Client {client_id}]   - Class weights: {class_weights}")
             print(f"[Client {client_id}]   - Callback: EarlyStopping + ReduceLROnPlateau")
-            print(f"[Client {client_id}]   - Architettura CONSERVATIVA: {dataset_info['pca_features']} → 28 → 16 → 8 → 1")
+            print(f"[Client {client_id}]   - Architettura MIGLIORATA: {dataset_info['pca_features']} → 64 → 32 → 16 → 8 → 1")
             
             history = model.fit(
                 X_train, y_train,
@@ -663,7 +707,7 @@ class SmartGridDNNClientFixed(fl.client.NumPyClient):
             'preprocessing_method': dataset_info['preprocessing_method'],
             'pca_method': dataset_info['pca_method'],
             'model_type': 'dnn_static_architecture_lr_optimized',
-            'architecture_type': 'static_conservative_regularized'
+            'architecture_type': 'static_improved_4_layers'
         }
         
         return model.get_weights(), len(X_train), metrics
@@ -750,7 +794,7 @@ def main():
     print("CONFIGURAZIONE ANTI-OVERFITTING FINALE:")
     print("  ✅ SMOTE RIMOSSO per attacchi inference/extraction realistici")
     print(f"  ✅ PCA FISSA configurata: {PCA_COMPONENTS} componenti")
-    print("  ✅ Architettura DNN CONSERVATIVA: 35 → 28 → 16 → 8 → 1")
+    print("  ✅ Architettura DNN MIGLIORATA: 35 → 64 → 32 → 16 → 8 → 1")
     print("  ✅ Dropout AUMENTATO: 0.4")
     print("  ✅ L2 Regularization AUMENTATO: 0.0015")
     print("  ✅ BatchNormalization: ATTIVA")
@@ -778,7 +822,7 @@ def main():
         print(f"[Client {client_id}] Feature: {dataset_info['original_features']} → {dataset_info['pca_features']}")
         print(f"[Client {client_id}] PCA configurata: {dataset_info['pca_components_configured']} componenti")
         print(f"[Client {client_id}] Varianza spiegata: {dataset_info['variance_explained']:.2f}%")
-        print(f"[Client {client_id}] Modello: {model.count_params():,} parametri (CONSERVATIVO)")
+        print(f"[Client {client_id}] Modello: {model.count_params():,} parametri (MIGLIORATO)")
         print(f"[Client {client_id}] Parametri/feature: {model.count_params()/dataset_info['pca_features']:.1f}")
         print(f"[Client {client_id}] Class weights: {dataset_info['class_weights']}")
         print(f"[Client {client_id}] Learning rate: 0.0008 (OTTIMIZZATO per PCA ridotta e dataset sbilanciati)")
