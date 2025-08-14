@@ -161,7 +161,6 @@ def analyze_all_clients_pca(data_dir, client_range=(1, 16)):
         Lista con risultati analisi per ogni client
     """
     print("=" * 60)
-    print("ANALISI PCA PRELIMINARE DATASET SMARTGRID")
     print("Determinazione numero ottimale di componenti PCA")
     print("=" * 60)
     
@@ -403,7 +402,7 @@ def main():
     data_dir = os.path.join(project_root, "data", "SmartGrid")
     output_dir = os.path.join(project_root, "analysis", "pca")
     
-    print("ANALISI PCA PRELIMINARE PER PROGETTO FEDERATED LEARNING")
+    print("📊 ANALISI PCA PRELIMINARE PER DATASET SMART GRID")
     print("=" * 70)
     print(f"Directory dati: {data_dir}")
     print(f"Directory output: {output_dir}")
@@ -438,30 +437,6 @@ def main():
     print(f"📊 Giustificazione: {recommendation['justification']}")
     print(f"📁 Grafici salvati in: {output_dir}")
     print()
-    print("=" * 70)
-    print("ISTRUZIONI PER IMPLEMENTAZIONE MANUALE")
-    print("=" * 70)
-    print()
-    print("📝 MODIFICA QUESTI VALORI NEI FILE:")
-    print()
-    print("1. FILE: federated/SmartGrid/client.py")
-    print("   RIGA DA CERCARE: PCA_COMPONENTS = ")
-    print(f"   VALORE DA IMPOSTARE: PCA_COMPONENTS = {recommendation['recommended_components']}")
-    print()
-    print("2. FILE: federated/SmartGrid/server.py")  
-    print("   RIGA DA CERCARE: PCA_COMPONENTS = ")
-    print(f"   VALORE DA IMPOSTARE: PCA_COMPONENTS = {recommendation['recommended_components']}")
-    print()
-    print("💡 ARCHITETTURA DNN RISULTANTE:")
-    print(f"   Con PCA_COMPONENTS = {recommendation['recommended_components']}, l'architettura sarà:")
-    print(f"   {recommendation['recommended_components']} → 32 → 20 → 12 → 1 (STATICA)")
-    print()
-    print("🔧 DOPO AVER MODIFICATO I FILE:")
-    print("   1. Salva entrambi i file")
-    print("   2. Avvia il server: python federated/SmartGrid/server.py")  
-    print("   3. Avvia i client: python scripts/run_clients.py")
-    print()
-    print("=" * 70)
-
+    
 if __name__ == "__main__":
     main()

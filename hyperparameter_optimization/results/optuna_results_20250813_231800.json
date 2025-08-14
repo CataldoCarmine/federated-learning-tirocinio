@@ -1,0 +1,20 @@
+{
+  "best_params": {
+    "neurons_layer_1": 96,
+    "neurons_layer_2": 32,
+    "neurons_layer_3": 8,
+    "neurons_layer_4": 16,
+    "dropout_rate": 0.30000000000000004,
+    "l2_reg": 0.004828819882747229,
+    "extended_dropout": true,
+    "activation_function": "leaky_relu",
+    "optimizer_type": "adam",
+    "learning_rate": 0.007140196554614966,
+    "batch_size": 16,
+    "epochs": 10
+  },
+  "best_score": 0.598634263785857,
+  "timestamp": "20250813_231800",
+  "n_trials": 100,
+  "pca_components": 35
+}

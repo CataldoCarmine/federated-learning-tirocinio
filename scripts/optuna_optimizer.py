@@ -1,12 +1,6 @@
 """
-Script di ottimizzazione iperparametri centralizzato con Optuna per SmartGrid.
-Trova i migliori parametri da applicare manualmente al sistema federato.
-
-UTILIZZO:
-    python hyperparameter_optimization/optuna_optimizer.py
-
-OUTPUT:
-    Stampa i migliori iperparametri da copiare manualmente in client.py e server.py
+    Ottimizzatore centralizzato per trovare i migliori iperparametri.
+    Usa subset rappresentativo del dataset e modello DNN identico al federato.
 """
 
 import optuna
@@ -26,6 +20,7 @@ from sklearn.metrics import f1_score, balanced_accuracy_score
 import warnings
 import os
 import json
+import sys
 from datetime import datetime
 
 # Configurazioni fisse (identiche al sistema federato)
@@ -35,29 +30,44 @@ PCA_RANDOM_STATE = 42
 warnings.filterwarnings('ignore')
 
 class SmartGridOptunaOptimizer:
-    """
-    Ottimizzatore centralizzato per trovare i migliori iperparametri.
-    Usa subset rappresentativo del dataset e modello DNN identico al federato.
-    """
-    
-    def __init__(self, data_dir="data/SmartGrid"):
+
+    def __init__(self, data_dir="data/SmartGrid", random_state=42):
         """
         Inizializza l'ottimizzatore.
         
         Args:
             data_dir: Directory contenente i dati SmartGrid
+            random_state: Seed per riproducibilità
         """
         self.data_dir = data_dir
+        self.random_state = random_state
         self.X_train = None
         self.X_val = None
         self.y_train = None
         self.y_val = None
         self.best_params = None
+        self.current_trial_count = 0
         
         print("=== SMARTGRID OPTUNA OPTIMIZER ===")
-        print(f"Directory dati: {data_dir}")
         print(f"PCA components: {PCA_COMPONENTS}")
-        print("Obiettivo: Ottimizzazione iperparametri per sistema federato")
+        print(f"Random state: {random_state}")
+    
+    def verify_data_directory(self):
+        """
+        Verifica che la directory dei dati esista e contenga file CSV validi.
+        """
+        if not os.path.exists(self.data_dir):
+            print(f"❌ ERRORE: Directory {self.data_dir} non trovata!")
+            return False
+        
+        # Verifica che ci siano file CSV nella directory
+        csv_files = [f for f in os.listdir(self.data_dir) if f.startswith('data') and f.endswith('.csv')]
+        if not csv_files:
+            print(f"❌ ERRORE: Nessun file CSV trovato in {self.data_dir}")
+            return False
+        
+        print(f"✅ Directory verificata: {len(csv_files)} file CSV trovati")
+        return True
     
     def load_subset_data(self):
         """
@@ -69,21 +79,32 @@ class SmartGridOptunaOptimizer:
         # Usa subset di client per rappresentatività
         client_files = ['data1.csv', 'data2.csv', 'data3.csv', 'data5.csv', 'data7.csv']
         df_list = []
+        successful_loads = []
         
         for file_name in client_files:
             file_path = os.path.join(self.data_dir, file_name)
             if os.path.exists(file_path):
                 try:
                     df = pd.read_csv(file_path)
-                    df_list.append(df)
-                    print(f"✅ Caricato {file_name}: {len(df)} campioni")
+                    
+                    # Verifica che il dataframe non sia vuoto e abbia colonne necessarie
+                    if len(df) > 0 and 'marker' in df.columns:
+                        df_list.append(df)
+                        successful_loads.append(file_name)
+                        print(f"✅ Caricato {file_name}: {len(df)} campioni")
+                    else:
+                        print(f"⚠️  {file_name} vuoto o senza colonna 'marker', saltato")
+                        
                 except Exception as e:
                     print(f"❌ Errore caricando {file_name}: {e}")
             else:
                 print(f"⚠️  File {file_name} non trovato")
         
         if not df_list:
-            raise FileNotFoundError(f"Nessun file dati trovato in {self.data_dir}")
+            raise FileNotFoundError(f"Nessun file dati valido trovato in {self.data_dir}. "
+                                   f"Verifica che esistano file data1.csv, data2.csv, etc. con colonna 'marker'")
+        
+        print(f"📊 File caricati con successo: {successful_loads}")
         
         # Combina tutti i dataframe
         df_combined = pd.concat(df_list, ignore_index=True)
@@ -92,9 +113,19 @@ class SmartGridOptunaOptimizer:
         X = df_combined.drop(columns=["marker"])
         y = (df_combined["marker"] != "Natural").astype(int)
         
+        # Statistiche dataset
+        attack_samples = y.sum()
+        natural_samples = (y == 0).sum()
+        attack_ratio = y.mean()
+        
         print(f"Dataset combinato: {len(df_combined)} campioni")
-        print(f"Features: {X.shape[1]}")
-        print(f"Distribuzione: {y.sum()} attacchi ({y.mean()*100:.1f}%), {(y==0).sum()} naturali")
+        print(f"Features originali: {X.shape[1]}")
+        print(f"Distribuzione: {attack_samples} attacchi ({attack_ratio*100:.1f}%), {natural_samples} naturali")
+        
+        # Verifica che ci siano campioni di entrambe le classi
+        if attack_samples == 0 or natural_samples == 0:
+            raise ValueError(f"Dataset sbilanciato estremo: {attack_samples} attacchi, {natural_samples} naturali. "
+                           f"Necessari campioni di entrambe le classi per ottimizzazione.")
         
         return X, y
     
@@ -110,10 +141,16 @@ class SmartGridOptunaOptimizer:
             X_train, X_val, y_train, y_val preprocessati
         """
         print("\n=== PREPROCESSING DATI ===")
+        print("Pipeline:")
+        print("  1. Split train/validation (80/20)")
+        print("  2. Pulizia dati (rimozione inf, NaN, valori estremi)")
+        print("  3. Imputazione con mediana")
+        print("  4. Normalizzazione con StandardScaler")
+        print("  5. PCA fissa a 35 componenti")
         
         # Split train/validation (80/20)
         X_train_raw, X_val_raw, y_train, y_val = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y
+            X, y, test_size=0.2, random_state=self.random_state, stratify=y
         )
         
         print(f"Training set: {len(X_train_raw)} campioni")
@@ -136,8 +173,9 @@ class SmartGridOptunaOptimizer:
         X_train_final = self._apply_pca(X_train_preprocessed)
         X_val_final = self._apply_pca(X_val_preprocessed)
         
-        print(f"Dopo preprocessing - Training: {X_train_final.shape}")
-        print(f"Dopo preprocessing - Validation: {X_val_final.shape}")
+        # Verifica finale
+        if X_train_final.shape[1] != PCA_COMPONENTS:
+            raise RuntimeError(f"PCA output inconsistente: {X_train_final.shape[1]} vs {PCA_COMPONENTS}")
         
         return X_train_final, X_val_final, y_train, y_val
     
@@ -306,6 +344,8 @@ class SmartGridOptunaOptimizer:
         Returns:
             Score da massimizzare (F1 + Balanced Accuracy) / 2
         """
+        self.current_trial_count += 1
+        
         # Crea modello con parametri del trial
         model, params = self.create_model(trial)
         
@@ -342,19 +382,20 @@ class SmartGridOptunaOptimizer:
             # Score combinato da massimizzare
             score = (f1 + balanced_acc) / 2
             
-            # Log ogni 10 trial
-            if trial.number % 10 == 0:
-                print(f"Trial {trial.number}: Score = {score:.4f} (F1={f1:.4f}, BalAcc={balanced_acc:.4f})")
+            # Log progresso ogni 10 trial
+            if self.current_trial_count % 10 == 0:
+                print(f"Trial {self.current_trial_count}: Score = {score:.4f} (F1={f1:.4f}, BalAcc={balanced_acc:.4f})")
             
             return score
             
         except Exception as e:
-            print(f"Trial {trial.number} fallito: {e}")
+            if self.current_trial_count % 10 == 0:
+                print(f"Trial {self.current_trial_count} fallito: {e}")
             return 0.0
     
-    def optimize(self, n_trials=100):
+    def optimize(self, n_trials):
         """
-        Esegue l'ottimizzazione Optuna.
+        Esegue l'ottimizzazione Optuna con numero specificato di trial.
         
         Args:
             n_trials: Numero di trial da eseguire
@@ -362,153 +403,182 @@ class SmartGridOptunaOptimizer:
         Returns:
             Migliori parametri trovati
         """
-        print(f"\n=== AVVIO OTTIMIZZAZIONE OPTUNA ===")
-        print(f"Trial da eseguire: {n_trials}")
-        print("Obiettivo: Massimizzare (F1-Score + Balanced Accuracy) / 2")
+        
+        # Reset contatore
+        self.current_trial_count = 0
         
         # Carica e preprocessa dati
         X, y = self.load_subset_data()
         self.X_train, self.X_val, self.y_train, self.y_val = self.preprocess_data(X, y)
         
+        print(f"\n📊 Dataset preparato: {len(self.X_train)} campioni training, {self.X_val.shape[1]} feature")
+        print(f"Distribuzione training: {self.y_train.mean()*100:.1f}% attacchi")
+        
         # Crea studio Optuna
+        study_name = f'smartgrid_hyperparameter_tuning_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+        
         study = optuna.create_study(
             direction='maximize',
-            sampler=optuna.samplers.TPESampler(seed=42)
+            study_name=study_name,
+            sampler=optuna.samplers.TPESampler(
+                seed=self.random_state,
+                n_startup_trials=max(10, n_trials // 10),  # Warm-up trials
+                n_ei_candidates=24,  # Candidati per Expected Improvement
+                multivariate=True   # Considera correlazioni tra parametri
+            )
         )
         
-        print("\nInizio ottimizzazione...")
+        print(f"\n🚀 INIZIO OTTIMIZZAZIONE")
+        print(f"Studio: {study_name}")
+        print(f"Configurazione TPE: startup_trials={max(10, n_trials // 10)}, multivariate=True")
         
-        # Esegui ottimizzazione
-        study.optimize(self.objective, n_trials=n_trials)
+        # Esegui ottimizzazione con progress tracking
+        try:
+            study.optimize(
+                self.objective, 
+                n_trials=n_trials, 
+                show_progress_bar=True,
+                timeout=None
+            )
+        except KeyboardInterrupt:
+            print(f"\n⚠️  Ottimizzazione interrotta dall'utente dopo {len(study.trials)} trial")
+        except Exception as e:
+            print(f"\n❌ Errore durante ottimizzazione: {e}")
+            raise
         
         # Risultati
+        if len(study.trials) == 0:
+            raise RuntimeError("Nessun trial completato con successo")
+        
         self.best_params = study.best_params
         best_score = study.best_value
         
         print(f"\n=== OTTIMIZZAZIONE COMPLETATA ===")
+        print(f"Trial completati: {len(study.trials)}")
+        print(f"Trial riusciti: {len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])}")
+        print(f"Trial falliti: {len([t for t in study.trials if t.state == optuna.trial.TrialState.FAIL])}")
         print(f"Migliore score: {best_score:.4f}")
         print(f"Migliori parametri:")
         
         for param, value in self.best_params.items():
             print(f"  {param}: {value}")
         
+        # Analisi convergenza
+        scores = [t.value for t in study.trials if t.value is not None]
+        if len(scores) > 10:
+            recent_scores = scores[-10:]
+            early_scores = scores[:10]
+            improvement = np.mean(recent_scores) - np.mean(early_scores)
+            print(f"Miglioramento negli ultimi 10 trial: {improvement:+.4f}")
+        
         # Salva risultati
-        self._save_results(study)
+        self._save_results(study, n_trials)
         
         return self.best_params
     
-    def _save_results(self, study):
-        """Salva i risultati in file JSON."""
+    def _save_results(self, study, n_trials_requested):
+        """Salva i risultati in file JSON strutturato."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         # Crea directory se non esiste
-        os.makedirs("hyperparameter_optimization/results", exist_ok=True)
+        results_dir = "hyperparameter_optimization/results"
+        os.makedirs(results_dir, exist_ok=True)
         
-        # Salva risultati
+        # Salva risultati completi
         results = {
             'best_params': self.best_params,
             'best_score': study.best_value,
             'timestamp': timestamp,
-            'n_trials': len(study.trials),
-            'pca_components': PCA_COMPONENTS
+            'n_trials_requested': n_trials_requested,
+            'n_trials_completed': len(study.trials),
+            'n_trials_successful': len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]),
+            'n_trials_failed': len([t for t in study.trials if t.state == optuna.trial.TrialState.FAIL]),
+            'pca_components': PCA_COMPONENTS,
+            'random_state': self.random_state,
+            'study_name': study.study_name,
+            'optimization_info': {
+                'algorithm': 'TPE (Tree-structured Parzen Estimator)',
+                'objective': 'maximize_(f1_score + balanced_accuracy) / 2',
+                'preprocessing': 'identical_to_federated_system'
+            }
         }
         
-        results_file = f"hyperparameter_optimization/results/optuna_results_{timestamp}.json"
+        results_file = os.path.join(results_dir, f"optuna_results_{timestamp}.json")
         with open(results_file, 'w') as f:
             json.dump(results, f, indent=2)
         
-        print(f"\nRisultati salvati in: {results_file}")
-    
-    def print_manual_instructions(self):
-        """
-        Stampa le istruzioni per applicare manualmente i parametri ottimizzati.
-        """
-        if not self.best_params:
-            print("❌ Esegui prima l'ottimizzazione!")
-            return
-        
-        print("\n" + "="*80)
-        print("📋 ISTRUZIONI PER APPLICAZIONE MANUALE")
-        print("="*80)
-        
-        print("\n🔧 PARAMETRI DA COPIARE NEL CODICE FEDERATO:")
-        print("-" * 50)
-        
-        # Stampa parametri in formato facile da copiare
-        for param, value in self.best_params.items():
-            if isinstance(value, str):
-                print(f"{param.upper()} = '{value}'")
-            else:
-                print(f"{param.upper()} = {value}")
-        
-        print(f"\nPCA_COMPONENTS = {PCA_COMPONENTS}  # (non modificare)")
-        
-        print("\n📝 MODIFICHE DA FARE:")
-        print("-" * 30)
-        
-        print("\n1️⃣ FILE: federated/SmartGrid/client.py")
-        print("   TROVA le righe con queste variabili e SOSTITUISCI i valori:")
-        print(f"   - ACTIVATION_FUNCTION = '{self.best_params['activation_function']}'")
-        print(f"   - USE_ADAMW = {self.best_params['optimizer_type'] == 'adamw'}")
-        print(f"   - EXTENDED_DROPOUT = {self.best_params['extended_dropout']}")
-        
-        print("\n   NELLA FUNZIONE create_smartgrid_dnn_model_static_architecture():")
-        print(f"   - dropout_rate = {self.best_params['dropout_rate']}")
-        print(f"   - l2_reg = {self.best_params['l2_reg']}")
-        print(f"   - learning_rate = {self.best_params['learning_rate']}")
-        
-        print("   NELL'ARCHITETTURA del modello, SOSTITUISCI i neuroni:")
-        print(f"   - Layer 1: {self.best_params['neurons_layer_1']} neuroni")
-        print(f"   - Layer 2: {self.best_params['neurons_layer_2']} neuroni")
-        print(f"   - Layer 3: {self.best_params['neurons_layer_3']} neuroni")
-        print(f"   - Layer 4: {self.best_params['neurons_layer_4']} neuroni")
-        
-        print("   NELLA FUNZIONE fit() della classe SmartGridDNNClientFixed:")
-        print(f"   - local_epochs = {self.best_params['epochs']}")
-        print(f"   - batch_size = {self.best_params['batch_size']}")
-        
-        print("\n2️⃣ FILE: federated/SmartGrid/server.py")
-        print("   TROVA le stesse variabili del client.py e applica gli STESSI valori:")
-        print(f"   - ACTIVATION_FUNCTION = '{self.best_params['activation_function']}'")
-        print(f"   - USE_ADAMW = {self.best_params['optimizer_type'] == 'adamw'}")
-        print(f"   - EXTENDED_DROPOUT = {self.best_params['extended_dropout']}")
-        print("   - Stessi neuroni per layer")
-        print("   - Stesso dropout_rate e l2_reg")
-        print("   - Stesso learning_rate")
-        
-        print("\n✅ DOPO LE MODIFICHE:")
-        print("   1. Salva entrambi i file")
-        print("   2. Avvia il server: python federated/SmartGrid/server.py")
-        print("   3. Avvia i client: python federated/SmartGrid/client.py <client_id>")
-        
-        print("\n🎯 Il tuo sistema federato avrà ora iperparametri ottimizzati!")
-        print("="*80)
+        print(f"\n📁 Risultati salvati in: {results_file}")
 
 def main():
-    """Funzione principale per eseguire l'ottimizzazione."""
-    # Verifica directory dati
-    data_dir = "data/SmartGrid"
-    if not os.path.exists(data_dir):
-        print(f"❌ Directory {data_dir} non trovata!")
-        print("Verifica che esista e contenga i file data1.csv, data2.csv, etc.")
-        return
+    """
+    Funzione principale autonoma per eseguire l'ottimizzazione iperparametri.
+    Richiede il numero di trial come argomento da riga di comando.
+    """
+    # Verifica argomenti
+    if len(sys.argv) != 2:
+        print("❌ ERRORE: Numero di argomenti non corretto")
+        print("")
+        print("UTILIZZO:")
+        print("  python scripts/optuna_optimizer.py <numero_trials>")
+        print("")
+        sys.exit(1)
     
-    # Crea ottimizzatore
-    optimizer = SmartGridOptunaOptimizer(data_dir)
+    # Parse numero trial
+    try:
+        n_trials = int(sys.argv[1])
+        if n_trials <= 0:
+            raise ValueError("Il numero di trial deve essere positivo")
+    except ValueError as e:
+        print(f"❌ ERRORE: Numero trial non valido")
+        print(f"Dettagli: {e}")
+        sys.exit(1)
     
-    # Esegui ottimizzazione (50 trial per test, aumenta per risultati migliori)
-    n_trials = 50  # Modifica questo numero se vuoi più trial
+    print("=" * 80)
+    print("🎯 OTTIMIZZAZIONE IPERPARAMETRI SMARTGRID")
+    print("=" * 80)
+    print(f"Trial Optuna: {n_trials}")
+    print(f"Directory dati: data/SmartGrid")
+    print(f"Random seed: 42")
+    print("")
+    print("🎛️  Parametri che verranno ottimizzati:")
+    print("   • Architettura del modello (neuroni per layer)")
+    print("   • Funzioni di attivazione (relu, leaky_relu, selu)")
+    print("   • Ottimizzatori (adam, adamw)")
+    print("   • Parametri di regolarizzazione (dropout, L2)")
+    print("   • Configurazione training (learning rate, batch size, epochs)")
+    print("")
+    print("Obiettivo: Massimizzazione (F1-Score + Balanced Accuracy) / 2")
+    print("Algoritmo: TPE (Tree-structured Parzen Estimator)")
+    print("Preprocessing: Identico al sistema federato esistente")
+    print("")
     
     try:
+        # Crea optimizer
+        optimizer = SmartGridOptunaOptimizer("data/SmartGrid", random_state=42)
+        
+        # Verifica directory dati
+        if not optimizer.verify_data_directory():
+            sys.exit(1)
+        
+        # Esegui ottimizzazione
         best_params = optimizer.optimize(n_trials)
         
-        # Stampa istruzioni per applicazione manuale
-        optimizer.print_manual_instructions()
-        
+    except KeyboardInterrupt:
+        print(f"\n⚠️  Ottimizzazione interrotta dall'utente")
+        sys.exit(1)
     except Exception as e:
-        print(f"❌ Errore durante ottimizzazione: {e}")
+        print(f"\n❌ ERRORE durante ottimizzazione: {e}")
+        print("")
+        print("🔍 Informazioni per debug:")
         import traceback
         traceback.print_exc()
+        print("")
+        print("💡 Possibili soluzioni:")
+        print("   • Verifica che i file CSV contengano la colonna 'marker'")
+        print("   • Controlla che ci siano campioni di entrambe le classi")
+        print("   • Riduci il numero di trial se hai problemi di memoria")
+        print("   • Verifica le dipendenze: pip install optuna tensorflow scikit-learn")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
