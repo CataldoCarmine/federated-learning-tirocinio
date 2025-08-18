@@ -21,8 +21,8 @@ PCA_COMPONENTS = 35  # NUMERO FISSO - garantisce compatibilità automatica
 PCA_RANDOM_STATE = 42
 
 # CONFIGURAZIONE MODELLO DNN - IDENTICA AI CLIENT (ottimizzabile con Optuna)
-ACTIVATION_FUNCTION = 'leaky_relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
-USE_ADAMW = True  # Ottimizzabile: True per AdamW, False per Adam
+ACTIVATION_FUNCTION = 'relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
+USE_ADAMW = False  # Ottimizzabile: True per AdamW, False per Adam
 EXTENDED_DROPOUT = True  # Ottimizzabile: True per dropout esteso
 
 def clean_data_for_pca_server(X):
@@ -216,12 +216,12 @@ def create_server_dnn_model_fixed_architecture():
     print(f"[Server] Dropout esteso: {EXTENDED_DROPOUT}")
     
     # Parametri IDENTICI ai client (ottimizzabili con Optuna)
-    dropout_rate = 0.4          # Ottimizzabile
-    dropout_final = 0.3         # Ottimizzabile
-    l2_reg = 0.0015             # Ottimizzabile
+    dropout_rate = 0.2          # Ottimizzabile
+    dropout_final = 0.15         # Ottimizzabile
+    l2_reg = 0.0002726058480553248             # Ottimizzabile
     
     # ARCHITETTURA FISSA IDENTICA AI CLIENT
-    print(f"[Server] Architettura FISSA IDENTICA AI CLIENT: {PCA_COMPONENTS} → 64 → 32 → 16 → 8 → 1")
+    print(f"[Server] Architettura FISSA IDENTICA AI CLIENT")
     
     # Selezione funzione di attivazione (identica ai client)
     if ACTIVATION_FUNCTION == 'leaky_relu':
@@ -240,36 +240,36 @@ def create_server_dnn_model_fixed_architecture():
     model = tf.keras.Sequential([
         # Input layer esplicito con dimensione FISSA IDENTICA ai client
         layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
-        
-        # Layer 1: 64 neuroni (FISSO - identico ai client)
-        layers.Dense(64, 
+
+        # Layer 1: 112 neuroni (FISSO - identico ai client)
+        layers.Dense(112, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_1'),
         activation_layer(),
         layers.BatchNormalization(name='batch_norm_1'),
         layers.Dropout(dropout_rate, name='dropout_1'),
-        
-        # Layer 2: 32 neuroni (FISSO - identico ai client)
-        layers.Dense(32, 
+
+        # Layer 2: 64 neuroni (FISSO - identico ai client)
+        layers.Dense(64, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_2'),
         activation_layer(),
         layers.BatchNormalization(name='batch_norm_2'),
         layers.Dropout(dropout_rate if EXTENDED_DROPOUT else 0.0, name='dropout_2'),
-        
-        # Layer 3: 16 neuroni (FISSO - identico ai client)
-        layers.Dense(16, 
+
+        # Layer 3: 12 neuroni (FISSO - identico ai client)
+        layers.Dense(12, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_3'),
         activation_layer(),
         layers.BatchNormalization(name='batch_norm_3'),
         layers.Dropout(dropout_rate, name='dropout_3'),
-        
-        # Layer 4: 8 neuroni (FISSO - identico ai client)
-        layers.Dense(8, 
+
+        # Layer 4: 10 neuroni (FISSO - identico ai client)
+        layers.Dense(10, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_4'),
@@ -287,7 +287,7 @@ def create_server_dnn_model_fixed_architecture():
     # OTTIMIZZATORE IDENTICO ai client (ottimizzabile con Optuna)
     if USE_ADAMW:
         optimizer = tf.keras.optimizers.AdamW(
-            learning_rate=0.0008,  # Ottimizzabile
+            learning_rate=0.006025741928842929,  # Ottimizzabile
             weight_decay=0.01,
             beta_1=0.9,
             beta_2=0.999,
@@ -297,7 +297,7 @@ def create_server_dnn_model_fixed_architecture():
         print(f"[Server] Ottimizzatore: AdamW")
     else:
         optimizer = tf.keras.optimizers.Adam(
-            learning_rate=0.0008,  # Ottimizzabile
+            learning_rate=0.006025741928842929,  # Ottimizzabile
             beta_1=0.9,
             beta_2=0.999,
             epsilon=1e-7,
@@ -768,7 +768,7 @@ def main():
     print(f"  - Attivazione: {ACTIVATION_FUNCTION} (ottimizzabile)")
     print(f"  - Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'} (ottimizzabile)")
     print(f"  - Learning Rate: 0.0008 (ottimizzabile)")
-    print("  - Rounds: 200")
+    print("  - Rounds: 100")
     print("  - Client minimi: 2")
     print("  - Strategia: FedAvg personalizzata con architettura fissa")
     print("  - Valutazione: Dataset globale con PCA fissa (client 14-15)")
@@ -779,7 +779,7 @@ def main():
     print("  - Controlli compatibilità: RIMOSSI (architettura fissa)")
     
     # Configurazione del server
-    config = fl.server.ServerConfig(num_rounds=200)
+    config = fl.server.ServerConfig(num_rounds=100)
     
     # Strategia Federated Averaging personalizzata con architettura fissa
     strategy = SmartGridDNNFedAvgFixed(

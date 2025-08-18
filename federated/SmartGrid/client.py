@@ -21,8 +21,8 @@ PCA_COMPONENTS = 35  # NUMERO FISSO - garantisce compatibilità automatica
 PCA_RANDOM_STATE = 42
 
 # CONFIGURAZIONE MODELLO DNN - PARAMETRI OTTIMIZZABILI CON OPTUNA
-ACTIVATION_FUNCTION = 'leaky_relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
-USE_ADAMW = True  # Ottimizzabile: True per AdamW, False per Adam
+ACTIVATION_FUNCTION = 'relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
+USE_ADAMW = False  # Ottimizzabile: True per AdamW, False per Adam
 EXTENDED_DROPOUT = True  # Ottimizzabile: True per dropout esteso
 
 def clean_data_for_pca(X):
@@ -278,12 +278,12 @@ def create_smartgrid_dnn_model_fixed_architecture():
     print(f"[Client] Dropout esteso: {EXTENDED_DROPOUT}")
     
     # PARAMETRI OTTIMIZZABILI CON OPTUNA
-    dropout_rate = 0.4          # Ottimizzabile
-    dropout_final = 0.3         # Ottimizzabile
-    l2_reg = 0.0015             # Ottimizzabile
+    dropout_rate = 0.2         # Ottimizzabile
+    dropout_final = 0.15         # Ottimizzabile
+    l2_reg = 0.0002726058480553248             # Ottimizzabile
     
     # ARCHITETTURA FISSA: garantisce compatibilità automatica
-    # PCA_COMPONENTS → 64 → 32 → 16 → 8 → 1 (sempre uguale)
+    # PCA_COMPONENTS → ... → 1 (sempre uguale)
     
     # Selezione funzione di attivazione (ottimizzabile)
     if ACTIVATION_FUNCTION == 'leaky_relu':
@@ -302,36 +302,36 @@ def create_smartgrid_dnn_model_fixed_architecture():
     model = keras.Sequential([
         # Input layer esplicito con dimensione FISSA
         layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
-        
-        # Layer 1: 64 neuroni (FISSO - ottimizzabile con Optuna)
-        layers.Dense(64, 
+
+        # Layer 1: 112 neuroni (FISSO - ottimizzabile con Optuna)
+        layers.Dense(112, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_1'),
         activation_layer(),
         layers.BatchNormalization(name='batch_norm_1'),
         layers.Dropout(dropout_rate, name='dropout_1'),
-        
-        # Layer 2: 32 neuroni (FISSO - ottimizzabile con Optuna)
-        layers.Dense(32, 
+
+        # Layer 2: 64 neuroni (FISSO - ottimizzabile con Optuna)
+        layers.Dense(64, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_2'),
         activation_layer(),
         layers.BatchNormalization(name='batch_norm_2'),
         layers.Dropout(dropout_rate if EXTENDED_DROPOUT else 0.0, name='dropout_2'),
-        
-        # Layer 3: 16 neuroni (FISSO - ottimizzabile con Optuna)
-        layers.Dense(16, 
+
+        # Layer 3: 12 neuroni (FISSO - ottimizzabile con Optuna)
+        layers.Dense(12, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_3'),
         activation_layer(),
         layers.BatchNormalization(name='batch_norm_3'),
         layers.Dropout(dropout_rate, name='dropout_3'),
-        
-        # Layer 4: 8 neuroni (FISSO - ottimizzabile con Optuna)
-        layers.Dense(8, 
+
+        # Layer 4: 10 neuroni (FISSO - ottimizzabile con Optuna)
+        layers.Dense(10, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_4'),
@@ -349,7 +349,7 @@ def create_smartgrid_dnn_model_fixed_architecture():
     # OTTIMIZZATORE CONFIGURABILE (ottimizzabile con Optuna)
     if USE_ADAMW:
         optimizer = tf.keras.optimizers.AdamW(
-            learning_rate=0.0008,  # Ottimizzabile
+            learning_rate=0.006025741928842929,  # Ottimizzabile
             weight_decay=0.01,
             beta_1=0.9,
             beta_2=0.999,
@@ -359,7 +359,7 @@ def create_smartgrid_dnn_model_fixed_architecture():
         print(f"[Client] Ottimizzatore: AdamW")
     else:
         optimizer = tf.keras.optimizers.Adam(
-            learning_rate=0.0008,  # Ottimizzabile
+            learning_rate=0.006025741928842929,  # Ottimizzabile
             beta_1=0.9,
             beta_2=0.999,
             epsilon=1e-7,
@@ -381,12 +381,6 @@ def create_smartgrid_dnn_model_fixed_architecture():
     
     # Statistiche modello
     total_params = model.count_params()
-    
-    print(f"[Client] === DNN ARCHITETTURA FISSA CREATA ===")
-    print(f"[Client]   - Architettura: FISSA {PCA_COMPONENTS} → 64 → 32 → 16 → 8 → 1")
-    print(f"[Client]   - Parametri totali: {total_params:,}")
-    print(f"[Client]   - Compatibilità: GARANTITA (architettura sempre identica)")
-    print(f"[Client]   - Controlli ridondanti: RIMOSSI")
     
     return model
 
@@ -463,9 +457,9 @@ class SmartGridDNNClientFixed(fl.client.NumPyClient):
             return model.get_weights(), 0, {}
         
         # Configurazione addestramento (ottimizzabile con Optuna)
-        local_epochs = 5            # Ottimizzabile
-        batch_size = 16             # Ottimizzabile
-        
+        local_epochs = 15            # Ottimizzabile
+        batch_size = 32              # Ottimizzabile
+
         # Class weights
         class_weights = dataset_info['class_weights']
         
