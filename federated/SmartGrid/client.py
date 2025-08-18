@@ -47,7 +47,7 @@ def clean_data_for_pca(X):
     
     return X_array
 
-def ensure_numerical_stability(X, stage_name):
+def numerical_stabilization(X, stage_name):
     """
     Assicura stabilità numerica rimuovendo inf, nan e valori estremi.
     """
@@ -75,7 +75,7 @@ def ensure_numerical_stability(X, stage_name):
     else:
         return np.clip(X, -1e6, 1e6)
 
-def apply_fixed_pca(X_preprocessed, client_id=None):
+def apply_pca(X_preprocessed, client_id=None):
     """
     Applica PCA con numero FISSO di componenti.
     GARANZIA: Output sempre con PCA_COMPONENTS dimensioni.
@@ -100,7 +100,7 @@ def apply_fixed_pca(X_preprocessed, client_id=None):
     print(f"[Client {client_id}] Componenti effettive: {n_components}")
     
     # Pulizia robusta dei dati pre-PCA
-    X_stable = ensure_numerical_stability(X_preprocessed, f"pre-PCA client {client_id}")
+    X_stable = numerical_stabilization(X_preprocessed, f"pre-PCA client {client_id}")
     
     try:
         with warnings.catch_warnings():
@@ -133,13 +133,13 @@ def apply_fixed_pca(X_preprocessed, client_id=None):
         # Fallback semplice: usa le prime N feature
         n_fallback = min(n_components, original_features)
         X_fallback = X_stable[:, :n_fallback]
-        X_fallback = ensure_numerical_stability(X_fallback, f"PCA fallback client {client_id}")
+        X_fallback = numerical_stabilization(X_fallback, f"PCA fallback client {client_id}")
         
         print(f"[Client {client_id}] ✅ Fallback: {X_fallback.shape}")
         
         return X_fallback
 
-def compute_class_weights_simple(y_train):
+def compute_class_weights(y_train):
     """
     Calcola i pesi delle classi per compensare lo sbilanciamento.
     Versione semplificata.
@@ -161,7 +161,7 @@ def compute_class_weights_simple(y_train):
         unique_classes = np.unique(y_train)
         return {cls: 1.0 for cls in unique_classes}
 
-def load_client_smartgrid_data_fixed_pca(client_id):
+def load_client_smartgrid_data(client_id):
     """
     Carica i dati SmartGrid per un client specifico con PCA FISSA.
     SEMPLIFICATO: Rimossi controlli di compatibilità ridondanti.
@@ -203,7 +203,7 @@ def load_client_smartgrid_data_fixed_pca(client_id):
         X_cleaned, y,
         test_size=0.3,
         random_state=42,
-        stratify=y if len(np.unique(y)) > 1 else None
+        stratify=y if len(np.unique(y)) > 1 else None #Garantisce la presenza di entrambe le classi Nat/Atk in entrambi i set
     )
     
     print(f"[Client {client_id}] Suddivisione: {len(X_train_raw)} training, {len(X_val_raw)} validation")
@@ -224,12 +224,12 @@ def load_client_smartgrid_data_fixed_pca(client_id):
     print(f"[Client {client_id}] SMOTE rimosso per attacchi realistici")
     
     # Calcola class weights per compensare sbilanciamento
-    class_weights = compute_class_weights_simple(y_train)
+    class_weights = compute_class_weights(y_train)
     print(f"[Client {client_id}] Class weights: {class_weights}")
     
     # STEP 5: PCA FISSA (garantisce compatibilità automatica)
-    X_train_final = apply_fixed_pca(X_train_preprocessed, client_id=client_id)
-    X_val_final = apply_fixed_pca(X_val_preprocessed, client_id=client_id)
+    X_train_final = apply_pca(X_train_preprocessed, client_id=client_id)
+    X_val_final = apply_pca(X_val_preprocessed, client_id=client_id)
     
     # VERIFICA FINALE: Dimensioni corrette garantite
     expected_shape = (len(X_train_final), PCA_COMPONENTS)
@@ -262,7 +262,7 @@ def load_client_smartgrid_data_fixed_pca(client_id):
     
     return X_train_final, y_train, X_val_final, y_val, dataset_info
 
-def create_smartgrid_dnn_model_fixed_architecture():
+def create_dnn_model():
     """
     Crea il modello DNN SmartGrid con architettura FISSA per compatibilità garantita.
     SEMPLIFICATO: Architettura sempre identica = nessun controllo compatibilità necessario.
@@ -391,8 +391,8 @@ def create_training_callbacks():
     callbacks = [
         # Early Stopping
         EarlyStopping(
-            monitor='loss',
-            patience=3,                    # Ottimizzabile
+            monitor='val_loss',  # <-- cambia da 'loss' a 'val_loss'
+            patience=3,
             restore_best_weights=True,
             verbose=0,
             mode='min',
@@ -401,7 +401,7 @@ def create_training_callbacks():
         
         # Reduce Learning Rate
         ReduceLROnPlateau(
-            monitor='loss',
+            monitor='val_loss',
             factor=0.7,                   # Ottimizzabile
             patience=2,                   # Ottimizzabile
             min_lr=1e-6,
@@ -421,7 +421,7 @@ X_val = None
 y_val = None
 dataset_info = None
 
-class SmartGridDNNClientFixed(fl.client.NumPyClient):
+class SmartGridClient(fl.client.NumPyClient):
     """
     Client Flower per SmartGrid con architettura FISSA.
     SEMPLIFICATO: Rimossi tutti i controlli di compatibilità ridondanti.
@@ -477,6 +477,7 @@ class SmartGridDNNClientFixed(fl.client.NumPyClient):
                 epochs=local_epochs,
                 batch_size=batch_size,
                 class_weight=class_weights,
+                validation_data=(X_val, y_val),
                 callbacks=callbacks,
                 verbose=0,
                 shuffle=True
@@ -626,11 +627,11 @@ def main():
     try:
         # Carica i dati con PCA fissa
         print(f"[Client {client_id}] Caricamento dati con PCA fissa...")
-        X_train, y_train, X_val, y_val, dataset_info = load_client_smartgrid_data_fixed_pca(client_id)
+        X_train, y_train, X_val, y_val, dataset_info = load_client_smartgrid_data(client_id)
         
         # Crea il modello con architettura fissa
-        model = create_smartgrid_dnn_model_fixed_architecture()
-        
+        model = create_dnn_model()
+
         print(f"[Client {client_id}] === RIASSUNTO CLIENT ARCHITETTURA FISSA ===")
         print(f"[Client {client_id}] Dataset: {dataset_info['train_samples']} train, {dataset_info['val_samples']} val")
         print(f"[Client {client_id}] Distribuzione: {dataset_info['attack_ratio']*100:.1f}% attacchi")
@@ -644,7 +645,7 @@ def main():
         # Avvia il client Flower
         fl.client.start_numpy_client(
             server_address="localhost:8080",
-            client=SmartGridDNNClientFixed()
+            client=SmartGridClient()
         )
         
     except Exception as e:

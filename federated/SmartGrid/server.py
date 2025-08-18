@@ -25,7 +25,7 @@ ACTIVATION_FUNCTION = 'relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
 USE_ADAMW = False  # Ottimizzabile: True per AdamW, False per Adam
 EXTENDED_DROPOUT = True  # Ottimizzabile: True per dropout esteso
 
-def clean_data_for_pca_server(X):
+def clean_data_for_pca(X):
     """
     Pulizia robusta dei dati per prevenire problemi numerici in PCA (server).
     IDENTICA ai client.
@@ -48,7 +48,7 @@ def clean_data_for_pca_server(X):
     
     return X_array
 
-def ensure_numerical_stability_server(X, stage_name):
+def numerical_stabilization(X, stage_name):
     """
     Assicura stabilità numerica rimuovendo inf, nan e valori estremi (server).
     IDENTICA ai client.
@@ -77,7 +77,7 @@ def ensure_numerical_stability_server(X, stage_name):
     else:
         return np.clip(X, -1e6, 1e6)
 
-def apply_fixed_pca_server(X_preprocessed):
+def apply_pca(X_preprocessed):
     """
     Applica PCA con numero FISSO di componenti (server, identico ai client).
     GARANZIA: Output sempre con PCA_COMPONENTS dimensioni.
@@ -101,8 +101,8 @@ def apply_fixed_pca_server(X_preprocessed):
     print(f"[Server] Componenti effettive: {n_components}")
     
     # Pulizia robusta dei dati pre-PCA
-    X_stable = ensure_numerical_stability_server(X_preprocessed, "pre-PCA server")
-    
+    X_stable = numerical_stabilization(X_preprocessed, "pre-PCA server")
+
     try:
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore', category=RuntimeWarning)
@@ -134,13 +134,13 @@ def apply_fixed_pca_server(X_preprocessed):
         # Fallback semplice: usa le prime N feature (identico ai client)
         n_fallback = min(n_components, original_features)
         X_fallback = X_stable[:, :n_fallback]
-        X_fallback = ensure_numerical_stability_server(X_fallback, "PCA fallback server")
-        
+        X_fallback = numerical_stabilization(X_fallback, "PCA fallback server")
+
         print(f"[Server] ✅ Fallback server: {X_fallback.shape}")
         
         return X_fallback
 
-def apply_server_preprocessing_pipeline_fixed(X_global):
+def apply_preprocessing_pipeline(X_global):
     """
     Applica la stessa pipeline di preprocessing dei client sui dati globali del server.
     Usa PCA fissa identica ai client.
@@ -155,7 +155,7 @@ def apply_server_preprocessing_pipeline_fixed(X_global):
     print(f"[Server] === PIPELINE PREPROCESSING SERVER CON PCA FISSA (SEMPLIFICATA) ===")
     
     # Pulizia robusta preliminare (identica ai client)
-    X_cleaned = clean_data_for_pca_server(X_global)
+    X_cleaned = clean_data_for_pca(X_global)
     
     # Pipeline di preprocessing identica ai client
     preprocessing_pipeline = Pipeline([
@@ -167,8 +167,8 @@ def apply_server_preprocessing_pipeline_fixed(X_global):
     print(f"[Server] Preprocessing completato: {X_preprocessed.shape}")
     
     # PCA fissa identica ai client (garantisce compatibilità)
-    X_global_final = apply_fixed_pca_server(X_preprocessed)
-    
+    X_global_final = apply_pca(X_preprocessed)
+
     # VERIFICA FINALE: Dimensioni corrette garantite
     if X_global_final.shape[1] != PCA_COMPONENTS:
         raise RuntimeError(f"Server PCA output shape inconsistente: {X_global_final.shape[1]} vs {PCA_COMPONENTS}")
@@ -179,7 +179,7 @@ def apply_server_preprocessing_pipeline_fixed(X_global):
     
     return X_global_final
 
-def compute_class_weights_server_simple(y_global):
+def compute_class_weights(y_global):
     """
     Calcola i pesi delle classi per il dataset globale del server.
     Versione semplificata identica ai client.
@@ -200,7 +200,7 @@ def compute_class_weights_server_simple(y_global):
         unique_classes = np.unique(y_global)
         return {cls: 1.0 for cls in unique_classes}
 
-def create_server_dnn_model_fixed_architecture():
+def create_dnn_model():
     """
     Crea il modello DNN per il server IDENTICO ai client con architettura FISSA.
     SEMPLIFICATO: Architettura sempre identica = compatibilità automatica.
@@ -328,7 +328,7 @@ def create_server_dnn_model_fixed_architecture():
     
     return model
 
-def get_smartgrid_evaluate_fn_fixed():
+def get_smartgrid_evaluate_fn():
     """
     Crea una funzione di valutazione globale per il server SmartGrid DNN con architettura FISSA.
     SEMPLIFICATO: Compatibilità garantita automaticamente.
@@ -385,11 +385,11 @@ def get_smartgrid_evaluate_fn_fixed():
         print(f"Distribuzione: {attack_samples} attacchi ({attack_ratio*100:.1f}%), {natural_samples} naturali")
         
         # Calcola class weights per il dataset globale
-        class_weights = compute_class_weights_server_simple(y_global)
+        class_weights = compute_class_weights(y_global)
         print(f"Class weights globali: {class_weights}")
         
         # Applica pipeline con PCA fissa (garantisce compatibilità automatica)
-        X_global_final = apply_server_preprocessing_pipeline_fixed(X_global)
+        X_global_final = apply_preprocessing_pipeline(X_global)
         
         print(f"Dataset preprocessato con PCA FISSA: {len(X_global_final)} campioni, {X_global_final.shape[1]} feature")
         print(f"Componenti PCA fisse: {PCA_COMPONENTS}")
@@ -427,7 +427,7 @@ def get_smartgrid_evaluate_fn_fixed():
         
         try:
             # Crea il modello DNN con architettura fissa per la valutazione (identico ai client)
-            model = create_server_dnn_model_fixed_architecture()
+            model = create_dnn_model()
             
             # IMPOSTAZIONE PESI SEMPLIFICATA
             # Nessun controllo di compatibilità necessario (architettura fissa)
@@ -514,7 +514,7 @@ def get_smartgrid_evaluate_fn_fixed():
     
     return evaluate
 
-def print_client_metrics_fixed(fit_results):
+def print_client_metrics(fit_results):
     """
     Stampa le metriche dei client dopo ogni round con architettura fissa.
     SEMPLIFICATO: Focus sui risultati, non sui controlli di compatibilità.
@@ -666,7 +666,7 @@ class SmartGridDNNFedAvgFixed(FedAvg):
             return None
         
         # Stampa metriche dei client con architettura fissa
-        print_client_metrics_fixed(results)
+        print_client_metrics(results)
         
         # Chiama l'aggregazione standard (semplificata)
         try:
@@ -788,7 +788,7 @@ def main():
         min_fit_clients=2,
         min_evaluate_clients=2,
         min_available_clients=2,
-        evaluate_fn=get_smartgrid_evaluate_fn_fixed()
+        evaluate_fn=get_smartgrid_evaluate_fn()
     )
     
     print(f"\nServer DNN ARCHITETTURA FISSA in attesa di client su localhost:8080...")
