@@ -17,7 +17,7 @@ from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score
 
 # CONFIGURAZIONE PCA STATICA FISSA
-PCA_COMPONENTS = 35  # NUMERO FISSO - garantisce compatibilità automatica
+PCA_COMPONENTS = 20  # NUMERO FISSO - garantisce compatibilità automatica
 PCA_RANDOM_STATE = 42
 
 # CONFIGURAZIONE MODELLO DNN - PARAMETRI OTTIMIZZABILI CON OPTUNA
@@ -25,118 +25,73 @@ ACTIVATION_FUNCTION = 'relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
 USE_ADAMW = False  # Ottimizzabile: True per AdamW, False per Adam
 EXTENDED_DROPOUT = True  # Ottimizzabile: True per dropout esteso
 
+def clip_outliers_iqr(X, k=3.0):
+    """
+    Clippa gli outlier per ogni feature usando la regola dei quantili (IQR).
+    Limiti: [Q1 - k*IQR, Q3 + k*IQR] (default k=3).
+    """
+    X_clipped = X.copy()
+    for col in range(X_clipped.shape[1]):
+        col_data = X_clipped[:, col]
+        q1 = np.nanpercentile(col_data, 25)
+        q3 = np.nanpercentile(col_data, 75)
+        iqr = q3 - q1
+        lower = q1 - k * iqr
+        upper = q3 + k * iqr
+        X_clipped[:, col] = np.clip(col_data, lower, upper)
+    return X_clipped
+
+def remove_near_constant_features(X, threshold=1e-8):
+    """
+    Rimuove le feature quasi-costanti, ovvero con varianza < threshold.
+    """
+    variances = np.nanvar(X, axis=0)
+    keep_mask = variances > threshold
+    return X[:, keep_mask], keep_mask
+
 def clean_data_for_pca(X):
     """
-    Pulizia robusta dei dati per prevenire problemi numerici in PCA.
+    Pulizia robusta dei dati per prevenire problemi numerici in PCA:
+    - Sostituisce inf/-inf con NaN
+    - NON usa threshold fissi
+    - NON azzera valori piccoli
     """
     if hasattr(X, 'values'):
         X_array = X.values.copy()
     else:
         X_array = X.copy()
-    
     # Sostituisci inf e -inf con NaN
     X_array = np.where(np.isinf(X_array), np.nan, X_array)
-    
-    # Rimuovi valori estremi
-    threshold = 1e8
-    X_array = np.where(np.abs(X_array) > threshold, np.nan, X_array)
-    
-    # Rimuovi valori molto piccoli
-    epsilon = 1e-12
-    X_array = np.where(np.abs(X_array) < epsilon, 0, X_array)
-    
     return X_array
-
-def numerical_stabilization(X, stage_name):
-    """
-    Assicura stabilità numerica rimuovendo inf, nan e valori estremi.
-    """
-    nan_count = np.isnan(X).sum()
-    inf_count = np.isinf(X).sum()
-    extreme_count = np.sum(np.abs(X) > 1e6)
-    
-    if nan_count > 0 or inf_count > 0 or extreme_count > 0:
-        X_clean = X.copy()
-        
-        # Sostituisci NaN e inf con mediana delle colonne
-        for col in range(X_clean.shape[1]):
-            col_data = X_clean[:, col]
-            finite_mask = np.isfinite(col_data)
-            
-            if np.any(finite_mask):
-                median_val = np.median(col_data[finite_mask])
-                X_clean[~finite_mask, col] = median_val
-            else:
-                X_clean[:, col] = 0
-        
-        # Clip valori estremi
-        X_clean = np.clip(X_clean, -1e6, 1e6)
-        return X_clean
-    else:
-        return np.clip(X, -1e6, 1e6)
 
 def apply_pca(X_preprocessed, client_id=None):
     """
     Applica PCA con numero FISSO di componenti.
     GARANZIA: Output sempre con PCA_COMPONENTS dimensioni.
-    
-    Args:
-        X_preprocessed: Dati preprocessati e standardizzati
-        client_id: ID del client per logging
-    
-    Returns:
-        X_pca con esattamente PCA_COMPONENTS colonne
     """
     print(f"[Client {client_id}] === APPLICAZIONE PCA FISSA (SEMPLIFICATA) ===")
-    
     original_features = X_preprocessed.shape[1]
     n_samples = len(X_preprocessed)
-    
-    # NUMERO FISSO GARANTITO
     n_components = min(PCA_COMPONENTS, original_features, n_samples)
-    
-    print(f"[Client {client_id}] Feature originali: {original_features}")
-    print(f"[Client {client_id}] Componenti PCA fisse: {PCA_COMPONENTS}")
-    print(f"[Client {client_id}] Componenti effettive: {n_components}")
-    
-    # Pulizia robusta dei dati pre-PCA
-    X_stable = numerical_stabilization(X_preprocessed, f"pre-PCA client {client_id}")
-    
     try:
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore', category=RuntimeWarning)
-            
-            # PCA con numero FISSO di componenti
             pca = PCA(n_components=n_components, random_state=PCA_RANDOM_STATE)
-            X_pca = pca.fit_transform(X_stable)
-            
-            # Verifica output (controllo semplificato)
+            X_pca = pca.fit_transform(X_preprocessed)
             if np.any(np.isnan(X_pca)) or np.any(np.isinf(X_pca)):
                 raise ValueError(f"PCA client {client_id} ha prodotto output con NaN o inf")
-            
-            # GARANZIA: Output sempre con dimensioni corrette
             if X_pca.shape[1] != n_components:
                 raise ValueError(f"PCA output shape inconsistente: {X_pca.shape[1]} vs {n_components}")
-            
-            # Calcola varianza spiegata
             variance_explained = np.sum(pca.explained_variance_ratio_)
-            
             print(f"[Client {client_id}] ✅ PCA fissa applicata: {X_pca.shape}")
             print(f"[Client {client_id}] Varianza spiegata: {variance_explained*100:.2f}%")
-            
             return X_pca
-            
     except Exception as e:
         print(f"[Client {client_id}] ERRORE PCA: {e}")
         print(f"[Client {client_id}] Attivazione fallback semplificato...")
-        
-        # Fallback semplice: usa le prime N feature
         n_fallback = min(n_components, original_features)
-        X_fallback = X_stable[:, :n_fallback]
-        X_fallback = numerical_stabilization(X_fallback, f"PCA fallback client {client_id}")
-        
+        X_fallback = X_preprocessed[:, :n_fallback]
         print(f"[Client {client_id}] ✅ Fallback: {X_fallback.shape}")
-        
         return X_fallback
 
 def compute_class_weights(y_train):
@@ -151,92 +106,80 @@ def compute_class_weights(y_train):
             classes=unique_classes,
             y=y_train
         )
-        
         class_weight_dict = dict(zip(unique_classes, class_weights))
         return class_weight_dict
-        
     except Exception as e:
         print(f"Errore nel calcolo class weights: {e}")
-        # Fallback: pesi uguali
         unique_classes = np.unique(y_train)
         return {cls: 1.0 for cls in unique_classes}
 
 def load_client_smartgrid_data(client_id):
     """
     Carica i dati SmartGrid per un client specifico con PCA FISSA.
-    SEMPLIFICATO: Rimossi controlli di compatibilità ridondanti.
-    
-    Args:
-        client_id: ID del client
-    
-    Returns:
-        Tuple con dati processati e informazioni dataset
+    Applica:
+      - Pulizia inf/NaN
+      - Clipping outlier per quantili (feature-wise)
+      - Imputazione mediana
+      - Rimozione feature quasi-costanti
+      - Scaling standard
+      - PCA
     """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(script_dir, "..", "..", "data", "SmartGrid", f"data{client_id}.csv")
-
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File {file_path} non trovato per il client {client_id}")
-
     df = pd.read_csv(file_path)
-    
-    print(f"[Client {client_id}] === CARICAMENTO CON PCA FISSA SEMPLIFICATA ===")
+    print(f"[Client {client_id}] === CARICAMENTO CON PCA FISSA E PREPROCESSING ROBUSTO ===")
     print(f"[Client {client_id}] Dataset caricato: {len(df)} campioni")
     print(f"[Client {client_id}] PCA fissa: {PCA_COMPONENTS} componenti (compatibilità garantita)")
-    
-    # Separa feature e target
     X = df.drop(columns=["marker"])
     y = (df["marker"] != "Natural").astype(int)
-    
-    # Statistiche distribuzione
     attack_samples = y.sum()
     natural_samples = (y == 0).sum()
     attack_ratio = y.mean()
-    
     print(f"[Client {client_id}] Distribuzione: {attack_samples} attacchi ({attack_ratio*100:.1f}%), {natural_samples} naturali")
-    
-    # Pulizia preliminare
+    # Pulizia preliminare: solo inf/NaN
     X_cleaned = clean_data_for_pca(X)
-    
-    # STEP 1: Suddivisione train/validation (mantiene distribuzione naturale)
+    # STEP 1: Suddivisione train/validation
     X_train_raw, X_val_raw, y_train, y_val = train_test_split(
         X_cleaned, y,
         test_size=0.3,
         random_state=42,
-        stratify=y if len(np.unique(y)) > 1 else None #Garantisce la presenza di entrambe le classi Nat/Atk in entrambi i set
+        stratify=y if len(np.unique(y)) > 1 else None
     )
-    
     print(f"[Client {client_id}] Suddivisione: {len(X_train_raw)} training, {len(X_val_raw)} validation")
-    
-    # STEP 2-3: Pipeline di preprocessing
-    preprocessing_pipeline = Pipeline([
-        ('imputer', SimpleImputer(strategy='median')),
-        ('scaler', StandardScaler())
-    ])
-    
-    # Fit della pipeline SOLO sui dati di training del client
-    X_train_preprocessed = preprocessing_pipeline.fit_transform(X_train_raw)
-    X_val_preprocessed = preprocessing_pipeline.transform(X_val_raw)
-    
-    print(f"[Client {client_id}] Preprocessing completato")
-    
-    # STEP 4: NO SMOTE - Mantieni distribuzione naturale
-    print(f"[Client {client_id}] SMOTE rimosso per attacchi realistici")
-    
-    # Calcola class weights per compensare sbilanciamento
-    class_weights = compute_class_weights(y_train)
-    print(f"[Client {client_id}] Class weights: {class_weights}")
-    
-    # STEP 5: PCA FISSA (garantisce compatibilità automatica)
-    X_train_final = apply_pca(X_train_preprocessed, client_id=client_id)
-    X_val_final = apply_pca(X_val_preprocessed, client_id=client_id)
-    
-    # VERIFICA FINALE: Dimensioni corrette garantite
+    # STEP 2: Clipping outlier per quantili SOLO su training, applicato anche a validation usando limiti del train
+    X_train_np = np.array(X_train_raw, dtype=float)
+    X_val_np = np.array(X_val_raw, dtype=float)
+    # Calcola limiti clipping su training
+    q1 = np.nanpercentile(X_train_np, 25, axis=0)
+    q3 = np.nanpercentile(X_train_np, 75, axis=0)
+    iqr = q3 - q1
+    lower = q1 - 3.0 * iqr
+    upper = q3 + 3.0 * iqr
+    X_train_clipped = np.clip(X_train_np, lower, upper)
+    X_val_clipped = np.clip(X_val_np, lower, upper)
+    # STEP 3: Imputazione mediana
+    imputer = SimpleImputer(strategy='median')
+    X_train_imputed = imputer.fit_transform(X_train_clipped)
+    X_val_imputed = imputer.transform(X_val_clipped)
+    # STEP 4: Rimozione feature quasi-costanti (usando solo il train)
+    X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed)
+    X_val_reduced = X_val_imputed[:, keep_mask]
+    print(f"[Client {client_id}] Feature dopo rimozione quasi-costanti: {X_train_reduced.shape[1]} (da {X_train.shape[1] if 'X_train' in locals() else X_train_imputed.shape[1]})")
+    # STEP 5: Scaling standard
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train_reduced)
+    X_val_scaled = scaler.transform(X_val_reduced)
+    print(f"[Client {client_id}] Preprocessing completato (clipping, imputazione, costanti, scaling)")
+    # STEP 6: PCA FISSA (compatibilità automatica)
+    X_train_final = apply_pca(X_train_scaled, client_id=client_id)
+    X_val_final = apply_pca(X_val_scaled, client_id=client_id)
     expected_shape = (len(X_train_final), PCA_COMPONENTS)
     if X_train_final.shape[1] != PCA_COMPONENTS:
         raise RuntimeError(f"Client {client_id}: PCA output shape inconsistente: {X_train_final.shape} vs {expected_shape}")
-    
-    # Informazioni dataset
+    class_weights = compute_class_weights(y_train)
+    # Info dataset
     dataset_info = {
         'client_id': client_id,
         'total_samples': len(df),
@@ -251,15 +194,13 @@ def load_client_smartgrid_data(client_id):
         'pca_features': X_train_final.shape[1],
         'pca_components_fixed': PCA_COMPONENTS,
         'class_weights': class_weights,
-        'preprocessing_method': 'fixed_pca_no_compatibility_checks',
-        'compatibility_guaranteed': True  # PCA fissa garantisce compatibilità
+        'preprocessing_method': 'iqr_clipping_impute_remove_constants_scaling',
+        'compatibility_guaranteed': True
     }
-    
-    print(f"[Client {client_id}] === CARICAMENTO COMPLETATO (PCA FISSA SEMPLIFICATA) ===")
+    print(f"[Client {client_id}] === CARICAMENTO COMPLETATO (PCA FISSA ROBUSTA) ===")
     print(f"[Client {client_id}]   - Training: {X_train_final.shape}")
     print(f"[Client {client_id}]   - Validation: {X_val_final.shape}")
     print(f"[Client {client_id}]   - Compatibilità: GARANTITA (PCA fissa)")
-    
     return X_train_final, y_train, X_val_final, y_val, dataset_info
 
 def create_dnn_model():

@@ -24,10 +24,34 @@ import sys
 from datetime import datetime
 
 # Configurazioni fisse (identiche al sistema federato)
-PCA_COMPONENTS = 35
+PCA_COMPONENTS = 20
 PCA_RANDOM_STATE = 42
 
 warnings.filterwarnings('ignore')
+
+def clip_outliers_iqr(X, k=3.0):
+    """
+    Clippa gli outlier per ogni feature usando la regola dei quantili (IQR).
+    """
+    X_clipped = X.copy()
+    for col in range(X_clipped.shape[1]):
+        col_data = X_clipped[:, col]
+        q1 = np.nanpercentile(col_data, 25)
+        q3 = np.nanpercentile(col_data, 75)
+        iqr = q3 - q1
+        lower = q1 - k * iqr
+        upper = q3 + k * iqr
+        X_clipped[:, col] = np.clip(col_data, lower, upper)
+    return X_clipped
+
+def remove_near_constant_features(X, threshold=1e-8):
+    """
+    Rimuove le feature quasi-costanti, ovvero con varianza < threshold.
+    """
+    variances = np.nanvar(X, axis=0)
+    keep_mask = variances > threshold
+    return X[:, keep_mask], keep_mask
+
 
 class SmartGridOptunaOptimizer:
 
@@ -131,97 +155,76 @@ class SmartGridOptunaOptimizer:
     
     def preprocess_data(self, X, y):
         """
-        Applica preprocessing identico al sistema federato.
-        
-        Args:
-            X: Features raw
-            y: Target
-        
-        Returns:
-            X_train, X_val, y_train, y_val preprocessati
+        Applica preprocessing identico al sistema federato aggiornato.
         """
         print("\n=== PREPROCESSING DATI ===")
         print("Pipeline:")
         print("  1. Split train/validation (80/20)")
-        print("  2. Pulizia dati (rimozione inf, NaN, valori estremi)")
-        print("  3. Imputazione con mediana")
-        print("  4. Normalizzazione con StandardScaler")
-        print("  5. PCA fissa a 35 componenti")
-        
+        print("  2. Pulizia dati (rimozione inf, NaN)")
+        print("  3. Clipping outlier per quantili (IQR)")
+        print("  4. Imputazione con mediana")
+        print("  5. Rimozione feature quasi-costanti")
+        print("  6. Normalizzazione con StandardScaler")
+        print("  7. PCA fissa a 35 componenti")
+
         # Split train/validation (80/20)
         X_train_raw, X_val_raw, y_train, y_val = train_test_split(
             X, y, test_size=0.2, random_state=self.random_state, stratify=y
         )
-        
         print(f"Training set: {len(X_train_raw)} campioni")
         print(f"Validation set: {len(X_val_raw)} campioni")
-        
-        # Pulizia dati (identica al federato)
-        X_train_cleaned = self._clean_data(X_train_raw)
-        X_val_cleaned = self._clean_data(X_val_raw)
-        
-        # Pipeline preprocessing (identica al federato)
-        preprocessing_pipeline = Pipeline([
-            ('imputer', SimpleImputer(strategy='median')),
-            ('scaler', StandardScaler())
-        ])
-        
-        X_train_preprocessed = preprocessing_pipeline.fit_transform(X_train_cleaned)
-        X_val_preprocessed = preprocessing_pipeline.transform(X_val_cleaned)
-        
-        # PCA fissa (identica al federato)
-        X_train_final = self._apply_pca(X_train_preprocessed)
-        X_val_final = self._apply_pca(X_val_preprocessed)
-        
-        # Verifica finale
+
+        # Pulizia inf/NaN
+        def clean(X):
+            X_array = X.values.copy() if hasattr(X, 'values') else X.copy()
+            X_array = np.where(np.isinf(X_array), np.nan, X_array)
+            return np.array(X_array, dtype=float)
+
+        X_train_cleaned = clean(X_train_raw)
+        X_val_cleaned = clean(X_val_raw)
+
+        # Clipping outlier per quantili calcolati sul train e applicati anche al validation
+        q1 = np.nanpercentile(X_train_cleaned, 25, axis=0)
+        q3 = np.nanpercentile(X_train_cleaned, 75, axis=0)
+        iqr = q3 - q1
+        lower = q1 - 3.0 * iqr
+        upper = q3 + 3.0 * iqr
+        X_train_clipped = np.clip(X_train_cleaned, lower, upper)
+        X_val_clipped = np.clip(X_val_cleaned, lower, upper)
+
+        # Imputazione mediana
+        imputer = SimpleImputer(strategy='median')
+        X_train_imputed = imputer.fit_transform(X_train_clipped)
+        X_val_imputed = imputer.transform(X_val_clipped)
+
+        # Rimozione feature quasi-costanti (varianza < 1e-8 sul train)
+        X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed)
+        X_val_reduced = X_val_imputed[:, keep_mask]
+
+        # Normalizzazione
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train_reduced)
+        X_val_scaled = scaler.transform(X_val_reduced)
+
+        # PCA fissa
+        X_train_final = self._apply_pca(X_train_scaled)
+        X_val_final = self._apply_pca(X_val_scaled)
         if X_train_final.shape[1] != PCA_COMPONENTS:
             raise RuntimeError(f"PCA output inconsistente: {X_train_final.shape[1]} vs {PCA_COMPONENTS}")
-        
+
         return X_train_final, X_val_final, y_train, y_val
     
-    def _clean_data(self, X):
-        """Pulizia dati identica al federato."""
-        if hasattr(X, 'values'):
-            X_array = X.values.copy()
-        else:
-            X_array = X.copy()
-        
-        # Rimuovi inf e NaN
-        X_array = np.where(np.isinf(X_array), np.nan, X_array)
-        X_array = np.where(np.abs(X_array) > 1e8, np.nan, X_array)
-        X_array = np.where(np.abs(X_array) < 1e-12, 0, X_array)
-        
-        return X_array
-    
     def _apply_pca(self, X_preprocessed):
-        """Applica PCA identica al federato."""
         n_components = min(PCA_COMPONENTS, X_preprocessed.shape[1], len(X_preprocessed))
-        
-        # Stabilità numerica
-        X_stable = np.clip(X_preprocessed, -1e6, 1e6)
-        
-        # Sostituisci NaN con mediana
-        for col in range(X_stable.shape[1]):
-            col_data = X_stable[:, col]
-            finite_mask = np.isfinite(col_data)
-            if np.any(finite_mask):
-                median_val = np.median(col_data[finite_mask])
-                X_stable[~finite_mask, col] = median_val
-            else:
-                X_stable[:, col] = 0
-        
-        # PCA
         try:
             pca = PCA(n_components=n_components, random_state=PCA_RANDOM_STATE)
-            X_pca = pca.fit_transform(X_stable)
-            
+            X_pca = pca.fit_transform(X_preprocessed)
             if np.any(np.isnan(X_pca)) or np.any(np.isinf(X_pca)):
                 raise ValueError("PCA output contiene NaN/inf")
-            
             return X_pca
-        except:
+        except Exception as e:
             # Fallback: usa prime n_components colonne
-            return X_stable[:, :n_components]
+            return X_preprocessed[:, :n_components]
     
     def create_model(self, trial):
         """

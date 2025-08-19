@@ -17,7 +17,7 @@ from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score
 import os
 
 # CONFIGURAZIONE PCA STATICA FISSA (identica ai client)
-PCA_COMPONENTS = 35  # NUMERO FISSO - garantisce compatibilità automatica
+PCA_COMPONENTS = 20  # NUMERO FISSO - garantisce compatibilità automatica
 PCA_RANDOM_STATE = 42
 
 # CONFIGURAZIONE MODELLO DNN - IDENTICA AI CLIENT (ottimizzabile con Optuna)
@@ -25,158 +25,106 @@ ACTIVATION_FUNCTION = 'relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
 USE_ADAMW = False  # Ottimizzabile: True per AdamW, False per Adam
 EXTENDED_DROPOUT = True  # Ottimizzabile: True per dropout esteso
 
+def clip_outliers_iqr(X, k=3.0):
+    """
+    Clippa gli outlier per ogni feature usando la regola dei quantili (IQR).
+    Limiti: [Q1 - k*IQR, Q3 + k*IQR] (default k=3).
+    """
+    X_clipped = X.copy()
+    for col in range(X_clipped.shape[1]):
+        col_data = X_clipped[:, col]
+        q1 = np.nanpercentile(col_data, 25)
+        q3 = np.nanpercentile(col_data, 75)
+        iqr = q3 - q1
+        lower = q1 - k * iqr
+        upper = q3 + k * iqr
+        X_clipped[:, col] = np.clip(col_data, lower, upper)
+    return X_clipped
+
+def remove_near_constant_features(X, threshold=1e-8):
+    """
+    Rimuove le feature quasi-costanti, ovvero con varianza < threshold.
+    """
+    variances = np.nanvar(X, axis=0)
+    keep_mask = variances > threshold
+    return X[:, keep_mask], keep_mask
+
 def clean_data_for_pca(X):
     """
     Pulizia robusta dei dati per prevenire problemi numerici in PCA (server).
-    IDENTICA ai client.
     """
     if hasattr(X, 'values'):
         X_array = X.values.copy()
     else:
         X_array = X.copy()
-    
     # Sostituisci inf e -inf con NaN
     X_array = np.where(np.isinf(X_array), np.nan, X_array)
-    
-    # Rimuovi valori estremi
-    threshold = 1e8
-    X_array = np.where(np.abs(X_array) > threshold, np.nan, X_array)
-    
-    # Rimuovi valori molto piccoli
-    epsilon = 1e-12
-    X_array = np.where(np.abs(X_array) < epsilon, 0, X_array)
-    
     return X_array
-
-def numerical_stabilization(X, stage_name):
-    """
-    Assicura stabilità numerica rimuovendo inf, nan e valori estremi (server).
-    IDENTICA ai client.
-    """
-    nan_count = np.isnan(X).sum()
-    inf_count = np.isinf(X).sum()
-    extreme_count = np.sum(np.abs(X) > 1e6)
-    
-    if nan_count > 0 or inf_count > 0 or extreme_count > 0:
-        X_clean = X.copy()
-        
-        # Sostituisci NaN e inf con mediana delle colonne
-        for col in range(X_clean.shape[1]):
-            col_data = X_clean[:, col]
-            finite_mask = np.isfinite(col_data)
-            
-            if np.any(finite_mask):
-                median_val = np.median(col_data[finite_mask])
-                X_clean[~finite_mask, col] = median_val
-            else:
-                X_clean[:, col] = 0
-        
-        # Clip valori estremi
-        X_clean = np.clip(X_clean, -1e6, 1e6)
-        return X_clean
-    else:
-        return np.clip(X, -1e6, 1e6)
 
 def apply_pca(X_preprocessed):
     """
     Applica PCA con numero FISSO di componenti (server, identico ai client).
     GARANZIA: Output sempre con PCA_COMPONENTS dimensioni.
-    
-    Args:
-        X_preprocessed: Dati preprocessati e standardizzati del server
-    
-    Returns:
-        X_pca con esattamente PCA_COMPONENTS colonne
     """
     print(f"[Server] === APPLICAZIONE PCA FISSA SERVER (SEMPLIFICATA) ===")
-    
     original_features = X_preprocessed.shape[1]
     n_samples = len(X_preprocessed)
-    
-    # NUMERO FISSO GARANTITO (identico ai client)
     n_components = min(PCA_COMPONENTS, original_features, n_samples)
-    
-    print(f"[Server] Feature originali: {original_features}")
-    print(f"[Server] Componenti PCA fisse: {PCA_COMPONENTS}")
-    print(f"[Server] Componenti effettive: {n_components}")
-    
-    # Pulizia robusta dei dati pre-PCA
-    X_stable = numerical_stabilization(X_preprocessed, "pre-PCA server")
-
     try:
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore', category=RuntimeWarning)
-            
-            # PCA con numero FISSO di componenti (identico ai client)
             pca = PCA(n_components=n_components, random_state=PCA_RANDOM_STATE)
-            X_pca = pca.fit_transform(X_stable)
-            
-            # Verifica output (controllo semplificato)
+            X_pca = pca.fit_transform(X_preprocessed)
             if np.any(np.isnan(X_pca)) or np.any(np.isinf(X_pca)):
                 raise ValueError("PCA server ha prodotto output con NaN o inf")
-            
-            # GARANZIA: Output sempre con dimensioni corrette
             if X_pca.shape[1] != n_components:
                 raise ValueError(f"PCA server output shape inconsistente: {X_pca.shape[1]} vs {n_components}")
-            
-            # Calcola varianza spiegata
             variance_explained = np.sum(pca.explained_variance_ratio_)
-            
             print(f"[Server] ✅ PCA fissa server applicata: {X_pca.shape}")
             print(f"[Server] Varianza spiegata: {variance_explained*100:.2f}%")
-            
             return X_pca
-            
     except Exception as e:
         print(f"[Server] ERRORE PCA fissa server: {e}")
         print(f"[Server] Attivazione fallback...")
-        
-        # Fallback semplice: usa le prime N feature (identico ai client)
         n_fallback = min(n_components, original_features)
-        X_fallback = X_stable[:, :n_fallback]
-        X_fallback = numerical_stabilization(X_fallback, "PCA fallback server")
-
+        X_fallback = X_preprocessed[:, :n_fallback]
         print(f"[Server] ✅ Fallback server: {X_fallback.shape}")
-        
         return X_fallback
 
 def apply_preprocessing_pipeline(X_global):
     """
     Applica la stessa pipeline di preprocessing dei client sui dati globali del server.
-    Usa PCA fissa identica ai client.
-    SEMPLIFICATO: Compatibilità garantita automaticamente.
-    
-    Args:
-        X_global: Dati grezzi del server
-    
-    Returns:
-        X_global_final con esattamente PCA_COMPONENTS colonne
+    Pipeline:
+      - Pulizia inf/NaN
+      - Clipping outlier per quantili (feature-wise)
+      - Imputazione mediana
+      - Rimozione feature quasi-costanti
+      - Scaling standard
+      - PCA fissa
     """
-    print(f"[Server] === PIPELINE PREPROCESSING SERVER CON PCA FISSA (SEMPLIFICATA) ===")
-    
-    # Pulizia robusta preliminare (identica ai client)
+    print(f"[Server] === PIPELINE PREPROCESSING SERVER CON PCA FISSA (ROBUSTA) ===")
+    # Pulizia preliminare (inf/NaN)
     X_cleaned = clean_data_for_pca(X_global)
-    
-    # Pipeline di preprocessing identica ai client
-    preprocessing_pipeline = Pipeline([
-        ('imputer', SimpleImputer(strategy='median')),
-        ('scaler', StandardScaler())
-    ])
-    
-    X_preprocessed = preprocessing_pipeline.fit_transform(X_cleaned)
-    print(f"[Server] Preprocessing completato: {X_preprocessed.shape}")
-    
+    # Clipping outlier feature-wise usando limiti calcolati sui dati di test globali
+    X_clipped = clip_outliers_iqr(np.array(X_cleaned, dtype=float))
+    # Imputazione mediana
+    imputer = SimpleImputer(strategy='median')
+    X_imputed = imputer.fit_transform(X_clipped)
+    # Rimozione feature quasi-costanti
+    X_reduced, keep_mask = remove_near_constant_features(X_imputed)
+    print(f"[Server] Feature dopo rimozione quasi-costanti: {X_reduced.shape[1]} (da {X_imputed.shape[1]})")
+    # Scaling standard
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_reduced)
+    print(f"[Server] Preprocessing completato (clipping, imputazione, costanti, scaling)")
     # PCA fissa identica ai client (garantisce compatibilità)
-    X_global_final = apply_pca(X_preprocessed)
-
+    X_global_final = apply_pca(X_scaled)
     # VERIFICA FINALE: Dimensioni corrette garantite
     if X_global_final.shape[1] != PCA_COMPONENTS:
         raise RuntimeError(f"Server PCA output shape inconsistente: {X_global_final.shape[1]} vs {PCA_COMPONENTS}")
-    
     print(f"[Server] ✅ Pipeline preprocessing con PCA fissa completata")
     print(f"[Server] Risultato finale: {X_global_final.shape}")
     print(f"[Server] Compatibilità con client: GARANTITA")
-    
     return X_global_final
 
 def compute_class_weights(y_global):
@@ -191,10 +139,8 @@ def compute_class_weights(y_global):
             classes=unique_classes,
             y=y_global
         )
-        
         class_weight_dict = dict(zip(unique_classes, class_weights))
         return class_weight_dict
-        
     except Exception as e:
         print(f"Errore nel calcolo class weights server: {e}")
         unique_classes = np.unique(y_global)

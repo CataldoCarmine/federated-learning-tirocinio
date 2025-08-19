@@ -9,116 +9,92 @@ import os
 import warnings
 warnings.filterwarnings('ignore')
 
+def clip_outliers_iqr(X, k=3.0):
+    """
+    Clippa gli outlier per ogni feature usando la regola dei quantili (IQR).
+    Limiti: [Q1 - k*IQR, Q3 + k*IQR] (default k=3).
+    """
+    X_clipped = X.copy()
+    for col in range(X_clipped.shape[1]):
+        col_data = X_clipped[:, col]
+        q1 = np.nanpercentile(col_data, 25)
+        q3 = np.nanpercentile(col_data, 75)
+        iqr = q3 - q1
+        lower = q1 - k * iqr
+        upper = q3 + k * iqr
+        X_clipped[:, col] = np.clip(col_data, lower, upper)
+    return X_clipped
+
+def remove_near_constant_features(X, threshold=1e-8):
+    """
+    Rimuove le feature quasi-costanti, ovvero con varianza < threshold.
+    """
+    variances = np.nanvar(X, axis=0)
+    keep_mask = variances > threshold
+    return X[:, keep_mask], keep_mask
+
+
 def clean_data_for_pca_analysis(X):
     """
-    Pulizia robusta dei dati per prevenire problemi numerici in PCA.
+    Pulizia dati: solo sostituzione inf/-inf con NaN.
     """
     if hasattr(X, 'values'):
         X_array = X.values.copy()
     else:
         X_array = X.copy()
-    
-    # Sostituisci inf e -inf con NaN
     X_array = np.where(np.isinf(X_array), np.nan, X_array)
-    
-    # Rimuovi valori estremi
-    threshold = 1e8
-    X_array = np.where(np.abs(X_array) > threshold, np.nan, X_array)
-    
-    # Rimuovi valori molto piccoli
-    epsilon = 1e-12
-    X_array = np.where(np.abs(X_array) < epsilon, 0, X_array)
-    
     return X_array
-
-def ensure_numerical_stability_analysis(X):
-    """
-    Assicura stabilità numerica rimuovendo inf, nan e valori estremi.
-    """
-    nan_count = np.isnan(X).sum()
-    inf_count = np.isinf(X).sum()
-    extreme_count = np.sum(np.abs(X) > 1e6)
-    
-    if nan_count > 0 or inf_count > 0 or extreme_count > 0:
-        X_clean = X.copy()
-        
-        # Sostituisci NaN e inf con mediana delle colonne
-        for col in range(X_clean.shape[1]):
-            col_data = X_clean[:, col]
-            finite_mask = np.isfinite(col_data)
-            
-            if np.any(finite_mask):
-                median_val = np.median(col_data[finite_mask])
-                X_clean[~finite_mask, col] = median_val
-            else:
-                X_clean[:, col] = 0
-        
-        # Clip valori estremi
-        X_clean = np.clip(X_clean, -1e6, 1e6)
-        return X_clean
-    else:
-        return np.clip(X, -1e6, 1e6)
 
 def analyze_single_client_pca(client_id, data_dir):
     """
     Analizza la PCA per un singolo client.
-    
-    Args:
-        client_id: ID del client
-        data_dir: Directory contenente i dati
-    
-    Returns:
-        Dizionario con risultati analisi PCA
+    Preprocessing: pulizia inf/NaN, clipping IQR, imputazione mediana, rimozione quasi-costanti, scaling.
     """
     file_path = os.path.join(data_dir, f"data{client_id}.csv")
-    
     if not os.path.exists(file_path):
         print(f"File data{client_id}.csv non trovato")
         return None
-    
     try:
-        # Carica dati
         df = pd.read_csv(file_path)
         X = df.drop(columns=["marker"])
         y = (df["marker"] != "Natural").astype(int)
-        
         print(f"\nAnalisi Client {client_id}:")
         print(f"  Campioni: {len(df)}")
         print(f"  Feature originali: {X.shape[1]}")
         print(f"  Distribuzione attacchi: {y.mean()*100:.1f}%")
-        
-        # Pulizia dati
+
+        # Pulizia inf/NaN
         X_cleaned = clean_data_for_pca_analysis(X)
-        
-        # Preprocessing
-        preprocessing_pipeline = Pipeline([
-            ('imputer', SimpleImputer(strategy='median')),
-            ('scaler', StandardScaler())
-        ])
-        
-        X_preprocessed = preprocessing_pipeline.fit_transform(X_cleaned)
-        X_stable = ensure_numerical_stability_analysis(X_preprocessed)
-        
+        X_np = np.array(X_cleaned, dtype=float)
+
+        # Clipping outlier per quantili
+        X_clipped = clip_outliers_iqr(X_np, k=3.0)
+
+        # Imputazione mediana
+        imputer = SimpleImputer(strategy='median')
+        X_imputed = imputer.fit_transform(X_clipped)
+
+        # Rimozione feature quasi-costanti
+        X_reduced, keep_mask = remove_near_constant_features(X_imputed)
+
+        # Scaling standard
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_reduced)
+
         # PCA completa
         pca_full = PCA()
-        pca_full.fit(X_stable)
-        
+        pca_full.fit(X_scaled)
+
         explained_variance_ratio = pca_full.explained_variance_ratio_
         cumulative_variance = np.cumsum(explained_variance_ratio)
-        
-        # Criteri per numero componenti
         n_components_95 = np.argmax(cumulative_variance >= 0.95) + 1
         n_components_90 = np.argmax(cumulative_variance >= 0.90) + 1
         n_components_99 = np.argmax(cumulative_variance >= 0.99) + 1
-        
-        # Kaiser criterion (autovalori > 1)
         eigenvalues = pca_full.explained_variance_
         n_components_kaiser = np.sum(eigenvalues > 1.0)
-        
-        # Limite pratico
-        n_samples = len(X_stable)
+        n_samples = len(X_scaled)
         max_practical = min(int(np.sqrt(n_samples)), int(n_samples * 0.5))
-        
+
         results = {
             'client_id': client_id,
             'total_samples': len(df),
@@ -136,15 +112,15 @@ def analyze_single_client_pca(client_id, data_dir):
             'cumulative_variance': cumulative_variance,
             'eigenvalues': eigenvalues
         }
-        
+
         print(f"  Componenti per 90% varianza: {results['n_components_90']}")
         print(f"  Componenti per 95% varianza: {results['n_components_95']}")
         print(f"  Componenti per 99% varianza: {results['n_components_99']}")
         print(f"  Kaiser criterion (λ>1): {results['n_components_kaiser']}")
         print(f"  Limite pratico: {results['max_practical']}")
-        
+
         return results
-        
+
     except Exception as e:
         print(f"Errore analisi client {client_id}: {e}")
         return None
