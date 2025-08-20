@@ -458,7 +458,11 @@ def get_smartgrid_evaluate_fn():
                 "f1_attack": report["attack"]["f1-score"],
                 "support_natural": report["natural"]["support"],
                 "support_attack": report["attack"]["support"],
-                "confusion_matrix": conf_matrix.tolist(),
+                # Nuovo: confusion matrix flatten
+                "tn": int(conf_matrix[0, 0]),
+                "fp": int(conf_matrix[0, 1]),
+                "fn": int(conf_matrix[1, 0]),
+                "tp": int(conf_matrix[1, 1]),
                 
                 # Informazioni dataset e modello
                 "global_test_samples": int(len(X_global)),
