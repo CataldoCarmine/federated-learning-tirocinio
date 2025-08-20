@@ -17,7 +17,7 @@ from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score
 import os
 
 # CONFIGURAZIONE PCA STATICA FISSA (identica ai client)
-PCA_COMPONENTS = 20  # NUMERO FISSO - garantisce compatibilità automatica
+PCA_COMPONENTS = 21  # NUMERO FISSO - garantisce compatibilità automatica
 PCA_RANDOM_STATE = 42
 
 # CONFIGURAZIONE MODELLO DNN - IDENTICA AI CLIENT (ottimizzabile con Optuna)

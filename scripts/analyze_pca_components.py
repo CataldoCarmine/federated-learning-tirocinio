@@ -56,10 +56,36 @@ def clean_data_for_pca_analysis(X):
     X_array = np.where(np.isinf(X_array), np.nan, X_array)
     return X_array
 
+def varianza_spiegata_per_classe(pca, X_scaled, y):
+    """
+    Calcola la varianza spiegata dalla proiezione PCA separatamente su attacchi e naturali.
+    La varianza spiegata è la varianza totale delle proiezioni rispetto al totale della classe.
+    """
+    results = {}
+    for label, name in [(1, "attack"), (0, "natural")]:
+        mask = (y == label)
+        if np.sum(mask) > 1:
+            projected = pca.transform(X_scaled[mask])
+            var_proj = np.var(projected, axis=0, ddof=1)
+            total_var = np.sum(var_proj)
+            results[name] = {
+                "samples": np.sum(mask),
+                "var_proj": var_proj,
+                "total_var_proj": total_var
+            }
+        else:
+            results[name] = {
+                "samples": np.sum(mask),
+                "var_proj": None,
+                "total_var_proj": None
+            }
+    return results
+
 def analyze_single_client_pca(client_id, data_dir):
     """
     Analizza la PCA per un singolo client.
     Preprocessing: pulizia inf/NaN, clipping IQR, imputazione mediana, rimozione quasi-costanti, scaling.
+    Calcola anche la varianza post-PCA separata per attacchi e naturali.
     """
     file_path = os.path.join(data_dir, f"data{client_id}.csv")
     if not os.path.exists(file_path):
@@ -106,6 +132,11 @@ def analyze_single_client_pca(client_id, data_dir):
         n_samples = len(X_scaled)
         max_practical = min(int(np.sqrt(n_samples)), int(n_samples * 0.5))
 
+        # Analisi varianza post-PCA per classi
+        varianza_classi = varianza_spiegata_per_classe(pca_full, X_scaled, y)
+        attack_var = varianza_classi["attack"]["total_var_proj"]
+        natural_var = varianza_classi["natural"]["total_var_proj"]
+
         results = {
             'client_id': client_id,
             'total_samples': len(df),
@@ -121,7 +152,11 @@ def analyze_single_client_pca(client_id, data_dir):
             'variance_explained_99': cumulative_variance[min(n_components_99-1, len(cumulative_variance)-1)] if n_components_99 > 0 else 0,
             'explained_variance_ratio': explained_variance_ratio,
             'cumulative_variance': cumulative_variance,
-            'eigenvalues': eigenvalues
+            'eigenvalues': eigenvalues,
+            'attack_var_post_pca': attack_var,
+            'natural_var_post_pca': natural_var,
+            'attack_samples': varianza_classi["attack"]["samples"],
+            'natural_samples': varianza_classi["natural"]["samples"]
         }
 
         print(f"  Componenti per 90% varianza: {results['n_components_90']}")
@@ -129,6 +164,8 @@ def analyze_single_client_pca(client_id, data_dir):
         print(f"  Componenti per 99% varianza: {results['n_components_99']}")
         print(f"  Kaiser criterion (λ>1): {results['n_components_kaiser']}")
         print(f"  Limite pratico: {results['max_practical']}")
+        print(f"  Varianza totale post-PCA (attacchi): {attack_var:.2f} su {results['attack_samples']} campioni")
+        print(f"  Varianza totale post-PCA (naturali): {natural_var:.2f} su {results['natural_samples']} campioni")
 
         return results
 

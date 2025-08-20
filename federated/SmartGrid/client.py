@@ -17,7 +17,7 @@ from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score
 
 # CONFIGURAZIONE PCA STATICA FISSA
-PCA_COMPONENTS = 20  # NUMERO FISSO - garantisce compatibilità automatica
+PCA_COMPONENTS = 21  # NUMERO FISSO - garantisce compatibilità automatica
 PCA_RANDOM_STATE = 42
 
 # CONFIGURAZIONE MODELLO DNN - PARAMETRI OTTIMIZZABILI CON OPTUNA
