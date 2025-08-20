@@ -29,7 +29,7 @@ PCA_RANDOM_STATE = 42
 
 warnings.filterwarnings('ignore')
 
-def clip_outliers_iqr(X, k=3.0):
+def clip_outliers_iqr(X, k=5.0):
     """
     Clippa gli outlier per ogni feature usando la regola dei quantili (IQR).
     """
@@ -44,12 +44,23 @@ def clip_outliers_iqr(X, k=3.0):
         X_clipped[:, col] = np.clip(col_data, lower, upper)
     return X_clipped
 
-def remove_near_constant_features(X, threshold=1e-8):
+def remove_near_constant_features(X, threshold_var=1e-12, threshold_ratio=0.999):
     """
-    Rimuove le feature quasi-costanti, ovvero con varianza < threshold.
+    Rimuove le feature che sono costanti almeno al 99.9% (tutte uguali tranne lo 0.1%).
     """
-    variances = np.nanvar(X, axis=0)
-    keep_mask = variances > threshold
+    keep_mask = []
+    n = X.shape[0]
+    for col in range(X.shape[1]):
+        col_data = X[:, col]
+        # Conta la moda (valore più frequente)
+        vals, counts = np.unique(col_data, return_counts=True)
+        max_count = np.max(counts)
+        ratio = max_count / n
+        var = np.nanvar(col_data)
+        # Tiene solo se NON è costante al 99.9% e varianza > threshold_var
+        keep = not (ratio >= threshold_ratio or var < threshold_var)
+        keep_mask.append(keep)
+    keep_mask = np.array(keep_mask)
     return X[:, keep_mask], keep_mask
 
 
@@ -198,7 +209,7 @@ class SmartGridOptunaOptimizer:
         X_val_imputed = imputer.transform(X_val_clipped)
 
         # Rimozione feature quasi-costanti (varianza < 1e-8 sul train)
-        X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed)
+        X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed, threshold_var=1e-12, threshold_ratio=0.999)
         X_val_reduced = X_val_imputed[:, keep_mask]
 
         # Normalizzazione
