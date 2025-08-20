@@ -13,7 +13,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.utils.class_weight import compute_class_weight
-from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score
+from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score, classification_report, confusion_matrix
 import os
 
 # CONFIGURAZIONE PCA STATICA FISSA (identica ai client)
@@ -410,6 +410,11 @@ def get_smartgrid_evaluate_fn():
             y_pred_prob = model.predict(X_global, verbose=0).flatten()
             y_pred_binary = (y_pred_prob > 0.5).astype(int)
             balanced_acc = balanced_accuracy_score(y_global, y_pred_binary)
+
+            # Metriche per classe 
+            report = classification_report(y_global, y_pred_binary, target_names=["natural", "attack"], output_dict=True, zero_division=0)
+            conf_matrix = confusion_matrix(y_global, y_pred_binary)
+
             
             print(f"RISULTATI VALUTAZIONE ARCHITETTURA FISSA:")
             print(f"  Loss: {loss:.4f}")
@@ -429,6 +434,12 @@ def get_smartgrid_evaluate_fn():
             print(f"  Controlli compatibilità: RIMOSSI (non necessari)")
             print(f"  Distribuzione naturale: {dataset_info.get('attack_ratio', 0)*100:.1f}% attacchi")
             
+            print(f"Classification report (per classe):")
+            print(classification_report(y_global, y_pred_binary, target_names=["natural", "attack"], zero_division=0))
+            print(f"Confusion matrix:")
+            print(conf_matrix)
+
+
             return float(loss), {
                 # Metriche base
                 "accuracy": float(accuracy),
@@ -437,6 +448,17 @@ def get_smartgrid_evaluate_fn():
                 "auc": float(auc),
                 "f1_score": float(f1_score_val),
                 "balanced_accuracy": float(balanced_acc),
+
+                # Nuove metriche per classe
+                "precision_natural": report["natural"]["precision"],
+                "recall_natural": report["natural"]["recall"],
+                "f1_natural": report["natural"]["f1-score"],
+                "precision_attack": report["attack"]["precision"],
+                "recall_attack": report["attack"]["recall"],
+                "f1_attack": report["attack"]["f1-score"],
+                "support_natural": report["natural"]["support"],
+                "support_attack": report["attack"]["support"],
+                "confusion_matrix": conf_matrix.tolist(),
                 
                 # Informazioni dataset e modello
                 "global_test_samples": int(len(X_global)),

@@ -14,7 +14,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.utils.class_weight import compute_class_weight
-from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score
+from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score, classification_report, confusion_matrix
 
 # CONFIGURAZIONE PCA STATICA FISSA
 PCA_COMPONENTS = 21  # NUMERO FISSO - garantisce compatibilità automatica
@@ -527,8 +527,16 @@ class SmartGridClient(fl.client.NumPyClient):
             y_pred_binary = (y_pred_prob > 0.5).astype(int)
             balanced_acc = balanced_accuracy_score(y_val, y_pred_binary)
             
+            # Metriche per classe
+            report = classification_report(y_val, y_pred_binary, target_names=["natural", "attack"], output_dict=True, zero_division=0)
+            conf_matrix = confusion_matrix(y_val, y_pred_binary)
+
             print(f"[Client {client_id}] Val Loss: {loss:.4f}, Val Accuracy: {accuracy:.4f}")
             print(f"[Client {client_id}] Val F1: {f1_score_val:.4f}, Val Balanced Acc: {balanced_acc:.4f}")
+            print(f"[Client {client_id}] Classification report (per classe):")
+            print(classification_report(y_val, y_pred_binary, target_names=["natural", "attack"], zero_division=0))
+            print(f"[Client {client_id}] Confusion matrix:")
+            print(conf_matrix)
             
             # Metriche
             metrics = {
@@ -540,7 +548,16 @@ class SmartGridClient(fl.client.NumPyClient):
                 "balanced_accuracy": balanced_acc,
                 "val_samples": len(X_val),
                 "architecture_fixed": True,
-                "compatibility_guaranteed": True
+                "compatibility_guaranteed": True,
+                "precision_natural": report["natural"]["precision"],
+                "recall_natural": report["natural"]["recall"],
+                "f1_natural": report["natural"]["f1-score"],
+                "precision_attack": report["attack"]["precision"],
+                "recall_attack": report["attack"]["recall"],
+                "f1_attack": report["attack"]["f1-score"],
+                "support_natural": report["natural"]["support"],
+                "support_attack": report["attack"]["support"],
+                "confusion_matrix": conf_matrix.tolist()
             }
             
             return loss, len(X_val), metrics
