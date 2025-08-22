@@ -140,7 +140,7 @@ class SmartGridOptunaOptimizer:
             raise FileNotFoundError(f"Nessun file dati valido trovato in {self.data_dir}. "
                                    f"Verifica che esistano file data1.csv, data2.csv, etc. con colonna 'marker'")
         
-        print(f"📊 File caricati con successo: {successful_loads}")
+        print(f"File caricati con successo: {successful_loads}")
         
         # Combina tutti i dataframe
         df_combined = pd.concat(df_list, ignore_index=True)
@@ -170,14 +170,6 @@ class SmartGridOptunaOptimizer:
         Applica preprocessing identico al sistema federato aggiornato.
         """
         print("\n=== PREPROCESSING DATI ===")
-        print("Pipeline:")
-        print("  1. Split train/validation (80/20)")
-        print("  2. Pulizia dati (rimozione inf, NaN)")
-        print("  3. Clipping outlier per quantili (IQR)")
-        print("  4. Imputazione con mediana")
-        print("  5. Rimozione feature quasi-costanti")
-        print("  6. Normalizzazione con StandardScaler")
-        print("  7. PCA fissa a 35 componenti")
 
         # Split train/validation (80/20)
         X_train_raw, X_val_raw, y_train, y_val = train_test_split(
@@ -426,7 +418,7 @@ class SmartGridOptunaOptimizer:
         X, y = self.load_subset_data()
         self.X_train, self.X_val, self.y_train, self.y_val = self.preprocess_data(X, y)
         
-        print(f"\n📊 Dataset preparato: {len(self.X_train)} campioni training, {self.X_val.shape[1]} feature")
+        print(f"\n📊 Dataset stats: {len(self.X_train)} campioni training, {self.X_val.shape[1]} feature")
         print(f"Distribuzione training: {self.y_train.mean()*100:.1f}% attacchi")
         
         # Crea studio Optuna

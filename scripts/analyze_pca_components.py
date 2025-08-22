@@ -272,14 +272,14 @@ def summarize_pca_analysis(all_results):
     print(f"  Limite pratico: {stats['practical_mean']:.1f} ± {stats['practical_std']:.1f} (range: {stats['practical_min']}-{stats['practical_max']})")
     print()
     
-    # Raccomandazioni
-    print("RACCOMANDAZIONI:")
+    # Componenti consigliate
+    print("COMPONENTI CONSIGLIATE:")
     
-    # Raccomandazione conservativa (95% varianza)
+    # Approccio conservativo (95% varianza)
     recommended_95 = int(np.ceil(stats['n_components_95_mean']))
     recommended_95_safe = min(recommended_95, int(stats['practical_mean']))
     
-    # Raccomandazione bilanciata (90% varianza)
+    # Approccio bilanciato (90% varianza)
     recommended_90 = int(np.ceil(stats['n_components_90_mean']))
     recommended_90_safe = min(recommended_90, int(stats['practical_mean']))
     
