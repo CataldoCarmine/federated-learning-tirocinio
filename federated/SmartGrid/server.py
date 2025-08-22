@@ -15,12 +15,13 @@ from sklearn.pipeline import Pipeline
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score, classification_report, confusion_matrix
 import os
+warnings.filterwarnings('ignore')
 
-# CONFIGURAZIONE PCA STATICA FISSA (identica ai client)
-PCA_COMPONENTS = 21  # NUMERO FISSO - garantisce compatibilità automatica
+# CONFIGURAZIONE PCA STATICA 
+PCA_COMPONENTS = 84  # NUMERO FISSO - garantisce compatibilità automatica
 PCA_RANDOM_STATE = 42
 
-# CONFIGURAZIONE MODELLO DNN - IDENTICA AI CLIENT (ottimizzabile con Optuna)
+# CONFIGURAZIONE MODELLO DNN
 ACTIVATION_FUNCTION = 'relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
 USE_ADAMW = False  # Ottimizzabile: True per AdamW, False per Adam
 EXTENDED_DROPOUT = True  # Ottimizzabile: True per dropout esteso
@@ -47,13 +48,16 @@ def remove_near_constant_features(X, threshold_var=1e-12, threshold_ratio=0.999)
     """
     keep_mask = []
     n = X.shape[0]
+    
     for col in range(X.shape[1]):
         col_data = X[:, col]
+
         # Conta la moda (valore più frequente)
         vals, counts = np.unique(col_data, return_counts=True)
         max_count = np.max(counts)
         ratio = max_count / n
         var = np.nanvar(col_data)
+
         # Tiene solo se NON è costante al 99.9% e varianza > threshold_var
         keep = not (ratio >= threshold_ratio or var < threshold_var)
         keep_mask.append(keep)
@@ -75,25 +79,30 @@ def clean_data_for_pca(X):
 def apply_pca(X_preprocessed):
     """
     Applica PCA con numero FISSO di componenti (server, identico ai client).
-    GARANZIA: Output sempre con PCA_COMPONENTS dimensioni.
     """
-    print(f"[Server] === APPLICAZIONE PCA FISSA SERVER (SEMPLIFICATA) ===")
+    print(f"[Server] === APPLICAZIONE PCA ===")
+
     original_features = X_preprocessed.shape[1]
     n_samples = len(X_preprocessed)
     n_components = min(PCA_COMPONENTS, original_features, n_samples)
+
     try:
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore', category=RuntimeWarning)
             pca = PCA(n_components=n_components, random_state=PCA_RANDOM_STATE)
             X_pca = pca.fit_transform(X_preprocessed)
+
+            # VERIFICA: Output senza NaN/inf e dimensioni corrette
             if np.any(np.isnan(X_pca)) or np.any(np.isinf(X_pca)):
                 raise ValueError("PCA server ha prodotto output con NaN o inf")
             if X_pca.shape[1] != n_components:
                 raise ValueError(f"PCA server output shape inconsistente: {X_pca.shape[1]} vs {n_components}")
+            
             variance_explained = np.sum(pca.explained_variance_ratio_)
             print(f"[Server] ✅ PCA fissa server applicata: {X_pca.shape}")
             print(f"[Server] Varianza spiegata: {variance_explained*100:.2f}%")
             return X_pca
+        
     except Exception as e:
         print(f"[Server] ERRORE PCA fissa server: {e}")
         print(f"[Server] Attivazione fallback...")
@@ -113,7 +122,8 @@ def apply_preprocessing_pipeline(X_global):
       - Scaling standard
       - PCA fissa
     """
-    print(f"[Server] === PIPELINE PREPROCESSING SERVER CON PCA FISSA (ROBUSTA) ===")
+    print(f"[Server] === PIPELINE PREPROCESSING SERVER ===")
+
     # Pulizia preliminare (inf/NaN)
     X_cleaned = clean_data_for_pca(X_global)
     # Clipping outlier feature-wise usando limiti calcolati sui dati di test globali
@@ -130,12 +140,12 @@ def apply_preprocessing_pipeline(X_global):
     print(f"[Server] Preprocessing completato (clipping, imputazione, costanti, scaling)")
     # PCA fissa identica ai client (garantisce compatibilità)
     X_global_final = apply_pca(X_scaled)
+
     # VERIFICA FINALE: Dimensioni corrette garantite
     if X_global_final.shape[1] != PCA_COMPONENTS:
         raise RuntimeError(f"Server PCA output shape inconsistente: {X_global_final.shape[1]} vs {PCA_COMPONENTS}")
     print(f"[Server] ✅ Pipeline preprocessing con PCA fissa completata")
     print(f"[Server] Risultato finale: {X_global_final.shape}")
-    print(f"[Server] Compatibilità con client: GARANTITA")
     return X_global_final
 
 def compute_class_weights(y_global):
@@ -160,27 +170,22 @@ def compute_class_weights(y_global):
 def create_dnn_model():
     """
     Crea il modello DNN per il server IDENTICO ai client con architettura FISSA.
-    SEMPLIFICATO: Architettura sempre identica = compatibilità automatica.
     
     Returns:
         Modello Keras compilato IDENTICO ai client
     """
     print(f"[Server] === CREAZIONE DNN ARCHITETTURA FISSA SERVER ===")
-    print(f"[Server] Input features: {PCA_COMPONENTS} (FISSO - identico ai client)")
-    print(f"[Server] Architettura: {PCA_COMPONENTS} → 64 → 32 → 16 → 8 → 1 (FISSA)")
+    print(f"[Server] Architettura: {PCA_COMPONENTS} → 112 → 64 → 12 → 10 → 1")
     print(f"[Server] Attivazione: {ACTIVATION_FUNCTION}")
     print(f"[Server] Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'}")
     print(f"[Server] Dropout esteso: {EXTENDED_DROPOUT}")
-    
-    # Parametri IDENTICI ai client (ottimizzabili con Optuna)
-    dropout_rate = 0.2          # Ottimizzabile
-    dropout_final = 0.15         # Ottimizzabile
-    l2_reg = 0.0002726058480553248             # Ottimizzabile
-    
-    # ARCHITETTURA FISSA IDENTICA AI CLIENT
-    print(f"[Server] Architettura FISSA IDENTICA AI CLIENT")
-    
-    # Selezione funzione di attivazione (identica ai client)
+
+    # Parametri IDENTICI ai client
+    dropout_rate = 0.2
+    dropout_final = 0.15
+    l2_reg = 0.0002726058480553248
+
+    # Selezione funzione di attivazione
     if ACTIVATION_FUNCTION == 'leaky_relu':
         activation_layer = lambda: layers.LeakyReLU(alpha=0.01)
         initializer = 'he_normal'
@@ -191,14 +196,12 @@ def create_dnn_model():
         activation_layer = lambda: layers.Activation('relu')
         initializer = 'he_normal'
     
-    print(f"[Server] Funzione attivazione: {ACTIVATION_FUNCTION}, Initializer: {initializer}")
-    
-    # MODELLO CON ARCHITETTURA FISSA IDENTICA AI CLIENT
+    # MODELLO
     model = tf.keras.Sequential([
-        # Input layer esplicito con dimensione FISSA IDENTICA ai client
+        # Input layer esplicito
         layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
 
-        # Layer 1: 112 neuroni (FISSO - identico ai client)
+        # Layer 1: 112 neuroni
         layers.Dense(112, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
@@ -207,7 +210,7 @@ def create_dnn_model():
         layers.BatchNormalization(name='batch_norm_1'),
         layers.Dropout(dropout_rate, name='dropout_1'),
 
-        # Layer 2: 64 neuroni (FISSO - identico ai client)
+        # Layer 2: 64 neuroni
         layers.Dense(64, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
@@ -216,7 +219,7 @@ def create_dnn_model():
         layers.BatchNormalization(name='batch_norm_2'),
         layers.Dropout(dropout_rate if EXTENDED_DROPOUT else 0.0, name='dropout_2'),
 
-        # Layer 3: 12 neuroni (FISSO - identico ai client)
+        # Layer 3: 12 neuroni
         layers.Dense(12, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
@@ -225,7 +228,7 @@ def create_dnn_model():
         layers.BatchNormalization(name='batch_norm_3'),
         layers.Dropout(dropout_rate, name='dropout_3'),
 
-        # Layer 4: 10 neuroni (FISSO - identico ai client)
+        # Layer 4: 10 neuroni
         layers.Dense(10, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
@@ -234,17 +237,17 @@ def create_dnn_model():
         layers.BatchNormalization(name='batch_norm_4'),
         layers.Dropout(dropout_final, name='dropout_4'),
         
-        # Output layer IDENTICO ai client
+        # Output layer 
         layers.Dense(1, 
                     activation='sigmoid',
                     kernel_initializer='glorot_uniform',
                     name='output_layer')
     ])
     
-    # OTTIMIZZATORE IDENTICO ai client (ottimizzabile con Optuna)
+    # OTTIMIZZATORE  
     if USE_ADAMW:
         optimizer = tf.keras.optimizers.AdamW(
-            learning_rate=0.006025741928842929,  # Ottimizzabile
+            learning_rate=0.006025741928842929,  
             weight_decay=0.01,
             beta_1=0.9,
             beta_2=0.999,
@@ -254,15 +257,14 @@ def create_dnn_model():
         print(f"[Server] Ottimizzatore: AdamW")
     else:
         optimizer = tf.keras.optimizers.Adam(
-            learning_rate=0.006025741928842929,  # Ottimizzabile
+            learning_rate=0.006025741928842929,
             beta_1=0.9,
             beta_2=0.999,
             epsilon=1e-7,
             clipnorm=1.0
         )
-        print(f"[Server] Ottimizzatore: Adam")
-    
-    # Compila il modello IDENTICO ai client
+
+    # Compila il modello
     model.compile(
         optimizer=optimizer,
         loss=tf.keras.losses.BinaryCrossentropy(),
@@ -277,27 +279,19 @@ def create_dnn_model():
     # Statistiche modello
     total_params = model.count_params()
     
-    print(f"[Server] === DNN ARCHITETTURA FISSA SERVER CREATA ===")
-    print(f"[Server]   - Architettura: FISSA {PCA_COMPONENTS} → 64 → 32 → 16 → 8 → 1")
-    print(f"[Server]   - Parametri totali: {total_params:,}")
-    print(f"[Server]   - IDENTICO ai client per compatibilità automatica")
-    print(f"[Server]   - Controlli compatibilità: NON NECESSARI")
-    
     return model
 
 def get_smartgrid_evaluate_fn():
     """
-    Crea una funzione di valutazione globale per il server SmartGrid DNN con architettura FISSA.
-    SEMPLIFICATO: Compatibilità garantita automaticamente.
+    Crea una funzione di valutazione globale per il server SmartGrid.
     """
     
     def load_global_test_data():
         """
         Carica un dataset globale di test per la valutazione del server.
         Usa PCA fissa identica ai client.
-        SEMPLIFICATO: Nessun controllo di compatibilità necessario.
         """
-        print("=== CARICAMENTO DATASET GLOBALE TEST SERVER (ARCHITETTURA FISSA) ===")
+        print("=== CARICAMENTO DATASET GLOBALE TEST SERVER ===")
         
         script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -345,12 +339,11 @@ def get_smartgrid_evaluate_fn():
         class_weights = compute_class_weights(y_global)
         print(f"Class weights globali: {class_weights}")
         
-        # Applica pipeline con PCA fissa (garantisce compatibilità automatica)
+        # Applica pipeline con PCA 
         X_global_final = apply_preprocessing_pipeline(X_global)
         
         print(f"Dataset preprocessato con PCA FISSA: {len(X_global_final)} campioni, {X_global_final.shape[1]} feature")
         print(f"Componenti PCA fisse: {PCA_COMPONENTS}")
-        print(f"Compatibilità con client: GARANTITA (architettura fissa)")
         
         return X_global_final, y_global, class_weights, {
             'total_samples': len(df_global),
@@ -376,21 +369,16 @@ def get_smartgrid_evaluate_fn():
         Funzione di valutazione chiamata ad ogni round con architettura FISSA.
         SEMPLIFICATO: Compatibilità garantita automaticamente.
         """
-        print(f"\n=== VALUTAZIONE GLOBALE DNN ARCHITETTURA FISSA - ROUND {server_round} ===")
-        print(f"Dataset naturalmente sbilanciato per attacchi realistici")
-        print(f"PCA fissa: {PCA_COMPONENTS} componenti")
-        print(f"Architettura: {PCA_COMPONENTS} → 64 → 32 → 16 → 8 → 1 (FISSA)")
-        print(f"Compatibilità: GARANTITA (architettura sempre identica)")
+        print(f"\n=== VALUTAZIONE GLOBALE - ROUND {server_round + 1} ===")
         
         try:
-            # Crea il modello DNN con architettura fissa per la valutazione (identico ai client)
+            # Crea il modello DNN per la valutazione
             model = create_dnn_model()
             
             # IMPOSTAZIONE PESI SEMPLIFICATA
-            # Nessun controllo di compatibilità necessario (architettura fissa)
             try:
                 model.set_weights(parameters)
-                print(f"✅ Pesi aggregati impostati su modello server (compatibilità garantita)")
+                print(f"✅ Pesi aggregati impostati su modello server")
             except Exception as e:
                 print(f"Errore nell'impostazione parametri server: {e}")
                 return 1.0, {
@@ -416,7 +404,7 @@ def get_smartgrid_evaluate_fn():
             conf_matrix = confusion_matrix(y_global, y_pred_binary)
 
             
-            print(f"RISULTATI VALUTAZIONE ARCHITETTURA FISSA:")
+            print(f"RISULTATI VALUTAZIONE:")
             print(f"  Loss: {loss:.4f}")
             print(f"  Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
             print(f"  F1-Score: {f1_score_val:.4f} ({f1_score_val*100:.2f}%)")
@@ -425,13 +413,9 @@ def get_smartgrid_evaluate_fn():
             print(f"  Recall: {recall:.4f} ({recall*100:.2f}%)")
             print(f"  AUC: {auc:.4f} ({auc*100:.2f}%)")
             print(f"  Campioni test: {len(X_global)}")
-            print(f"  Feature utilizzate: {X_global.shape[1]} (PCA fissa)")
             
             # Calcola parametri modello
             total_params = model.count_params()
-            print(f"  Parametri DNN: {total_params:,}")
-            print(f"  Architettura: FISSA (sempre identica)")
-            print(f"  Controlli compatibilità: RIMOSSI (non necessari)")
             print(f"  Distribuzione naturale: {dataset_info.get('attack_ratio', 0)*100:.1f}% attacchi")
             
             print(f"Classification report (per classe):")
@@ -466,25 +450,14 @@ def get_smartgrid_evaluate_fn():
                 
                 # Informazioni dataset e modello
                 "global_test_samples": int(len(X_global)),
-                "pipeline_features": int(PCA_COMPONENTS),
                 "total_params": int(total_params),
                 "attack_samples": int(dataset_info.get('attack_samples', 0)),
                 "natural_samples": int(dataset_info.get('natural_samples', 0)),
                 "attack_ratio": float(dataset_info.get('attack_ratio', 0)),
-                
-                # Informazioni architettura fissa
-                "architecture_fixed": True,
-                "compatibility_guaranteed": True,
-                "compatibility_checks_removed": True,
-                "pca_components_fixed": int(PCA_COMPONENTS),
-                
-                # Metodologia semplificata
-                "model_type": "dnn_fixed_architecture_simplified",
-                "preprocessing_method": "fixed_pca_no_compatibility_checks"
             }
             
         except Exception as e:
-            print(f"Errore durante la valutazione globale con architettura fissa: {e}")
+            print(f"Errore durante la valutazione globale: {e}")
             import traceback
             traceback.print_exc()
             return 1.0, {
@@ -505,7 +478,7 @@ def print_client_metrics(fit_results):
     if not fit_results:
         return
     
-    print(f"\n=== METRICHE CLIENT DNN ARCHITETTURA FISSA ===")
+    print(f"\n=== METRICHE CLIENT ===")
     
     total_samples = 0
     total_weighted_accuracy = 0
@@ -553,14 +526,6 @@ def print_client_metrics(fit_results):
             balanced_acc = client_metrics['train_balanced_accuracy']
             print(f"  Balanced Accuracy: {balanced_acc:.4f}")
         
-        # Informazioni architettura fissa
-        if 'architecture_fixed' in client_metrics and client_metrics['architecture_fixed']:
-            print(f"  ✅ Architettura: FISSA")
-        
-        if 'compatibility_guaranteed' in client_metrics and client_metrics['compatibility_guaranteed']:
-            compatibility_guaranteed_count += 1
-            print(f"  ✅ Compatibilità: GARANTITA")
-        
         # Early stopping
         if 'early_stopped' in client_metrics:
             early_stopped = client_metrics['early_stopped']
@@ -577,12 +542,6 @@ def print_client_metrics(fit_results):
         if 'batch_size' in client_metrics:
             batch_size = client_metrics['batch_size']
             print(f"  Batch size: {batch_size}")
-        
-        # Informazioni PCA
-        if 'pca_features' in client_metrics and 'pca_components_fixed' in client_metrics:
-            pca_features = client_metrics['pca_features']
-            pca_fixed = client_metrics['pca_components_fixed']
-            print(f"  PCA: {pca_features} feature (fisso: {pca_fixed})")
     
     if total_samples > 0:
         # Calcola medie ponderate
@@ -590,37 +549,13 @@ def print_client_metrics(fit_results):
         avg_weighted_f1 = total_weighted_f1 / total_samples if total_weighted_f1 > 0 else 0
         avg_loss = np.mean(loss_list) if loss_list else 0
         
-        print(f"\nRIASSUNTO DNN ARCHITETTURA FISSA:")
+        print(f"\nRIASSUNTO METRICHE:")
         print(f"  Media accuracy: {avg_weighted_accuracy:.4f}")
         print(f"  Media F1-Score: {avg_weighted_f1:.4f}")
         print(f"  Media loss: {avg_loss:.4f}")
         print(f"  Totale campioni: {total_samples}")
         print(f"  Client con errori: {len(error_clients)}")
         print(f"  Client con EarlyStopping: {early_stopped_count}/{len(fit_results)}")
-        print(f"  Client con compatibilità garantita: {compatibility_guaranteed_count}/{len(fit_results)}")
-        
-        # Valutazioni specifiche architettura fissa
-        print(f"  ✅ Architettura FISSA: {PCA_COMPONENTS} → 64 → 32 → 16 → 8 → 1")
-        print(f"  ✅ Compatibilità: AUTOMATICA (PCA fissa)")
-        print(f"  ✅ Controlli ridondanti: RIMOSSI")
-        print(f"  ✅ Distribuzione naturale: MANTENUTA")
-        print(f"  ✅ Parametri ottimizzabili: CONFIGURATI per Optuna")
-        
-        # Valutazioni performance
-        if avg_weighted_accuracy > 0.8:
-            print(f"  🎯 Performance: OTTIME (accuracy > 80%)")
-        elif avg_weighted_accuracy > 0.7:
-            print(f"  🎯 Performance: BUONE (accuracy > 70%)")
-        else:
-            print(f"  ⚠️  Performance: DA MIGLIORARE (accuracy < 70%)")
-            print(f"      Suggerimento: Usa Optuna per ottimizzare iperparametri")
-        
-        # Raccomandazioni per ottimizzazione
-        if early_stopped_count == 0:
-            print(f"  💡 Suggerimento: Aumenta patience EarlyStopping per training più lungo")
-        
-        if compatibility_guaranteed_count < len(fit_results):
-            print(f"  ⚠️  Alcuni client non hanno compatibilità garantita")
 
 class SmartGridDNNFedAvgFixed(FedAvg):
     """
@@ -633,11 +568,9 @@ class SmartGridDNNFedAvgFixed(FedAvg):
         Aggrega i risultati dell'addestramento DNN con architettura FISSA.
         SEMPLIFICATO: Nessun controllo di compatibilità necessario.
         """
-        print(f"\n=== AGGREGAZIONE TRAINING DNN ARCHITETTURA FISSA - ROUND {server_round} ===")
+        print(f"\n=== AGGREGAZIONE TRAINING - ROUND {server_round} ===")
         print(f"Client partecipanti: {len(results)}")
         print(f"Client falliti: {len(failures)}")
-        print(f"Architettura: {PCA_COMPONENTS} → 64 → 32 → 16 → 8 → 1 (FISSA)")
-        print(f"Compatibilità: GARANTITA (architettura sempre identica)")
         
         if failures:
             print("Fallimenti:")
@@ -656,10 +589,8 @@ class SmartGridDNNFedAvgFixed(FedAvg):
             aggregated_result = super().aggregate_fit(server_round, results, failures)
             
             if aggregated_result is not None:
-                print(f"✅ Aggregazione DNN architettura fissa completata per round {server_round}")
+                print(f"✅ Aggregazione completata per round {server_round}")
                 print(f"✅ Pesi di {len(results)} client aggregati con successo")
-                print(f"✅ Architetture FISSE perfettamente compatibili (controlli rimossi)")
-                print(f"✅ Nessun problema di compatibilità possibile")
             else:
                 print(f"❌ ATTENZIONE: Aggregazione fallita per round {server_round}")
                 
@@ -676,7 +607,7 @@ class SmartGridDNNFedAvgFixed(FedAvg):
         Aggrega i risultati della valutazione DNN con architettura FISSA.
         SEMPLIFICATO: Compatibilità garantita automaticamente.
         """
-        print(f"\n=== AGGREGAZIONE VALUTAZIONE DNN ARCHITETTURA FISSA ROUND {server_round} ===")
+        print(f"\n=== AGGREGAZIONE VALUTAZIONE ROUND {server_round} ===")
         print(f"Client che hanno valutato: {len(results)}")
         
         if failures:
@@ -688,7 +619,7 @@ class SmartGridDNNFedAvgFixed(FedAvg):
             aggregated_result = super().aggregate_evaluate(server_round, results, failures)
             
             if aggregated_result is not None:
-                print(f"✅ Aggregazione valutazione DNN architettura fissa completata per round {server_round}")
+                print(f"✅ Aggregazione valutazione completata per round {server_round}")
             else:
                 print(f"Aggregazione valutazione non riuscita per round {server_round}")
                 
@@ -705,61 +636,21 @@ def main():
     Funzione principale per avviare il server SmartGrid federato DNN con architettura FISSA.
     SEMPLIFICATO: Controlli di compatibilità rimossi (non necessari).
     """
-    print("=== SERVER FEDERATO SMARTGRID DNN ARCHITETTURA FISSA ===")
-    print("CONFIGURAZIONE SEMPLIFICATA:")
-    print(f"  ✅ PCA FISSA: {PCA_COMPONENTS} componenti (compatibilità automatica)")
-    print("  ✅ Architettura FISSA: 35 → 64 → 32 → 16 → 8 → 1")
-    print("  ✅ Controlli compatibilità: RIMOSSI (non necessari)")
-    print("  ✅ Distribuzione naturale mantenuta (NO SMOTE)")
-    print("  ✅ Parametri ottimizzabili con Optuna")
-    print("  ✅ Regolarizzazione: Dropout, L2, BatchNorm, EarlyStopping, ReduceLR")
-    print("  ✅ Class weights automatici per compensare sbilanciamento")
-    print("  ✅ Metriche bilanciate: F1-Score, Balanced Accuracy, AUC")
-    print("  ✅ Normalizzazione LOCALE per ogni client (preserva privacy)")
-    print("")
-    print("VANTAGGI ARCHITETTURA FISSA:")
-    print(f"  🎯 Compatibilità GARANTITA: architettura sempre identica")
-    print(f"  🎯 Controlli rimossi: codice più semplice e veloce")
-    print(f"  🎯 PCA deterministica: {PCA_COMPONENTS} componenti fissi")
-    print(f"  🎯 Nessun errore di shape: dimensioni sempre corrette")
-    print(f"  🎯 Ottimizzazione Optuna: parametri facilmente modificabili")
-    print(f"  🎯 Performance consistenti: architettura testata")
-    print(f"  🎯 Manutenzione semplificata: meno codice da gestire")
-    print("")
-    print("PARAMETRI OTTIMIZZABILI CON OPTUNA:")
-    print("  🔧 Neuroni per layer (attualmente: 64, 32, 16, 8)")
-    print("  🔧 Funzione di attivazione (attualmente: leaky_relu)")
-    print("  🔧 Ottimizzatore (attualmente: AdamW)")
-    print("  🔧 Dropout rate (attualmente: 0.4, 0.3)")
-    print("  🔧 L2 regularization (attualmente: 0.0015)")
-    print("  🔧 Learning rate (attualmente: 0.0008)")
-    print("  🔧 Batch size e epochs per client")
-    print("  🔧 Patience per EarlyStopping e ReduceLROnPlateau")
-    print("")
-    print("VANTAGGI PER ATTACCHI:")
-    print("  🎯 Dati naturalmente distribuiti (nessun dato sintetico)")
-    print("  🎯 Architettura prevedibile per test di sicurezza")
-    print("  🎯 Membership inference su dati reali")
-    print("  🎯 Model extraction su comportamento naturale")
-    print("  🎯 Scenario federato completamente realistico")
-    print("  🎯 Dimensionalità fissa e prevedibile")
-    print("  🎯 Modelli ben regolarizzati per attacchi robusti")
-    print("")
+    print("=== SERVER FEDERATO SMARTGRID ===")
     print("Configurazione:")
-    print(f"  - PCA Components: {PCA_COMPONENTS} (FISSO)")
-    print(f"  - Architettura: {PCA_COMPONENTS} → 64 → 32 → 16 → 8 → 1 (FISSA)")
-    print(f"  - Attivazione: {ACTIVATION_FUNCTION} (ottimizzabile)")
-    print(f"  - Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'} (ottimizzabile)")
-    print(f"  - Learning Rate: 0.0008 (ottimizzabile)")
+    print(f"  - PCA Components: {PCA_COMPONENTS}")
+    print(f"  - Architettura: {PCA_COMPONENTS} → 112 → 64 → 12 → 10 → 1")
+    print(f"  - Attivazione: {ACTIVATION_FUNCTION}")
+    print(f"  - Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'}")
+    print(f"  - Learning Rate: 0.0008")
     print("  - Rounds: 100")
     print("  - Client minimi: 2")
     print("  - Strategia: FedAvg personalizzata con architettura fissa")
     print("  - Valutazione: Dataset globale con PCA fissa (client 14-15)")
-    print("  - Pipeline: Pulizia → Imputazione → Normalizzazione → PCA fissa (NO SMOTE)")
+    print("  - Pipeline: Pulizia → Imputazione → Normalizzazione → PCA fissa")
     print("  - Class weights: Automatici per compensare sbilanciamento")
     print("  - Regolarizzazione: Completa ma semplificata")
     print("  - Callback: EarlyStopping + ReduceLROnPlateau sui client")
-    print("  - Controlli compatibilità: RIMOSSI (architettura fissa)")
     
     # Configurazione del server
     config = fl.server.ServerConfig(num_rounds=100)
@@ -774,7 +665,7 @@ def main():
         evaluate_fn=get_smartgrid_evaluate_fn()
     )
     
-    print(f"\nServer DNN ARCHITETTURA FISSA in attesa di client su localhost:8080...")
+    print(f"\nServer DNN in attesa di client su localhost:8080...")
     print("Per connettere i client, esegui:")
     print("  python client.py 1")
     print("  python client.py 2")
@@ -783,22 +674,6 @@ def main():
     print("\nClient 14-15 riservati per valutazione globale")
     print("Training inizierà quando almeno 2 client saranno connessi.")
     print("")
-    print("VANTAGGI FINALI ARCHITETTURA FISSA:")
-    print("  ✅ Compatibilità AUTOMATICA: nessun controllo necessario")
-    print(f"  ✅ PCA deterministica: {PCA_COMPONENTS} componenti sempre uguali")
-    print("  ✅ Architettura prevedibile: 35 → 64 → 32 → 16 → 8 → 1")
-    print("  ✅ Parametri ottimizzabili: facile integrazione con Optuna")
-    print("  ✅ Codice semplificato: controlli ridondanti rimossi")
-    print("  ✅ Performance robuste: architettura testata e validata")
-    print("  ✅ Attacchi realistici: distribuzione naturale preservata")
-    print("  ✅ Manutenzione facile: meno codice, meno errori")
-    print("  ✅ Riproducibilità: risultati sempre consistenti")
-    print("  ✅ Scalabilità: aggiunta client senza problemi")
-    print("  ✅ Documentazione: perfetto per tesi universitaria")
-    print("  ✅ Integrazione: compatibile con tutti gli strumenti esistenti")
-    print("  ✅ Testing: facile verifica funzionamento")
-    print("  ✅ Debugging: meno punti di fallimento")
-    print("  ✅ Estensibilità: facile aggiunta nuove funzionalità")
     
     try:
         # Avvia il server Flower

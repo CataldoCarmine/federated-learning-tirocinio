@@ -22,6 +22,7 @@ import os
 import json
 import sys
 from datetime import datetime
+warnings.filterwarnings('ignore')
 
 # Configurazioni fisse (identiche al sistema federato)
 PCA_COMPONENTS = 21

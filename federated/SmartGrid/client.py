@@ -15,31 +15,35 @@ from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score, classification_report, confusion_matrix
+warnings.filterwarnings('ignore')
 
-# CONFIGURAZIONE PCA STATICA FISSA
-PCA_COMPONENTS = 21  # NUMERO FISSO - garantisce compatibilità automatica
+# CONFIGURAZIONE PCA STATICA 
+PCA_COMPONENTS = 84  # NUMERO FISSO - garantisce compatibilità automatica
 PCA_RANDOM_STATE = 42
 
-# CONFIGURAZIONE MODELLO DNN - PARAMETRI OTTIMIZZABILI CON OPTUNA
+# CONFIGURAZIONE MODELLO DNN 
 ACTIVATION_FUNCTION = 'relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
 USE_ADAMW = False  # Ottimizzabile: True per AdamW, False per Adam
 EXTENDED_DROPOUT = True  # Ottimizzabile: True per dropout esteso
 
-def clip_outliers_iqr(X, k=5.0):
+def fit_clip_outliers_iqr(X, k=5.0):
     """
-    Clippa gli outlier per ogni feature usando la regola dei quantili (IQR).
-    Limiti: [Q1 - k*IQR, Q3 + k*IQR] (default k=5.0).
+    Calcola i limiti inferiori e superiori per ogni feature
+    usando la regola dei quantili (IQR) sul dataset fornito (tipicamente il training).
+    Ritorna due array: lower e upper.
     """
-    X_clipped = X.copy()
-    for col in range(X_clipped.shape[1]):
-        col_data = X_clipped[:, col]
-        q1 = np.nanpercentile(col_data, 25)
-        q3 = np.nanpercentile(col_data, 75)
-        iqr = q3 - q1
-        lower = q1 - k * iqr
-        upper = q3 + k * iqr
-        X_clipped[:, col] = np.clip(col_data, lower, upper)
-    return X_clipped
+    q1 = np.nanpercentile(X, 25, axis=0)
+    q3 = np.nanpercentile(X, 75, axis=0)
+    iqr = q3 - q1
+    lower = q1 - k * iqr
+    upper = q3 + k * iqr
+    return lower, upper
+
+def transform_clip_outliers_iqr(X, lower, upper):
+    """
+    Applica il clipping ai dati X usando i limiti forniti.
+    """
+    return np.clip(X, lower, upper)
 
 def remove_near_constant_features(X, threshold_var=1e-12, threshold_ratio=0.999):
     """
@@ -47,13 +51,16 @@ def remove_near_constant_features(X, threshold_var=1e-12, threshold_ratio=0.999)
     """
     keep_mask = []
     n = X.shape[0]
+
     for col in range(X.shape[1]):
         col_data = X[:, col]
+
         # Conta la moda (valore più frequente)
         vals, counts = np.unique(col_data, return_counts=True)
         max_count = np.max(counts)
         ratio = max_count / n
         var = np.nanvar(col_data)
+        
         # Tiene solo se NON è costante al 99.9% e varianza > threshold_var
         keep = not (ratio >= threshold_ratio or var < threshold_var)
         keep_mask.append(keep)
@@ -78,25 +85,30 @@ def clean_data_for_pca(X):
 def apply_pca(X_preprocessed, client_id=None):
     """
     Applica PCA con numero FISSO di componenti.
-    GARANZIA: Output sempre con PCA_COMPONENTS dimensioni.
     """
-    print(f"[Client {client_id}] === APPLICAZIONE PCA FISSA (SEMPLIFICATA) ===")
+    print(f"[Client {client_id}] === APPLICAZIONE PCA ===")
+
     original_features = X_preprocessed.shape[1]
     n_samples = len(X_preprocessed)
     n_components = min(PCA_COMPONENTS, original_features, n_samples)
+
     try:
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore', category=RuntimeWarning)
             pca = PCA(n_components=n_components, random_state=PCA_RANDOM_STATE)
             X_pca = pca.fit_transform(X_preprocessed)
+
+            # VERIFICA: Output senza NaN/inf e dimensioni corrette
             if np.any(np.isnan(X_pca)) or np.any(np.isinf(X_pca)):
                 raise ValueError(f"PCA client {client_id} ha prodotto output con NaN o inf")
             if X_pca.shape[1] != n_components:
                 raise ValueError(f"PCA output shape inconsistente: {X_pca.shape[1]} vs {n_components}")
+            
             variance_explained = np.sum(pca.explained_variance_ratio_)
             print(f"[Client {client_id}] ✅ PCA fissa applicata: {X_pca.shape}")
             print(f"[Client {client_id}] Varianza spiegata: {variance_explained*100:.2f}%")
             return X_pca
+        
     except Exception as e:
         print(f"[Client {client_id}] ERRORE PCA: {e}")
         print(f"[Client {client_id}] Attivazione fallback semplificato...")
@@ -108,7 +120,6 @@ def apply_pca(X_preprocessed, client_id=None):
 def compute_class_weights(y_train):
     """
     Calcola i pesi delle classi per compensare lo sbilanciamento.
-    Versione semplificata.
     """
     try:
         unique_classes = np.unique(y_train)
@@ -139,16 +150,18 @@ def load_client_smartgrid_data(client_id):
     file_path = os.path.join(script_dir, "..", "..", "data", "SmartGrid", f"data{client_id}.csv")
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File {file_path} non trovato per il client {client_id}")
+    
     df = pd.read_csv(file_path)
-    print(f"[Client {client_id}] === CARICAMENTO CON PCA FISSA E PREPROCESSING ROBUSTO ===")
+    print(f"[Client {client_id}] === CARICAMENTO E PREPROCESSING DATI ===")
     print(f"[Client {client_id}] Dataset caricato: {len(df)} campioni")
-    print(f"[Client {client_id}] PCA fissa: {PCA_COMPONENTS} componenti (compatibilità garantita)")
+
     X = df.drop(columns=["marker"])
     y = (df["marker"] != "Natural").astype(int)
     attack_samples = y.sum()
     natural_samples = (y == 0).sum()
     attack_ratio = y.mean()
     print(f"[Client {client_id}] Distribuzione: {attack_samples} attacchi ({attack_ratio*100:.1f}%), {natural_samples} naturali")
+    
     # Pulizia preliminare: solo inf/NaN
     X_cleaned = clean_data_for_pca(X)
     # STEP 1: Suddivisione train/validation
@@ -159,37 +172,38 @@ def load_client_smartgrid_data(client_id):
         stratify=y if len(np.unique(y)) > 1 else None
     )
     print(f"[Client {client_id}] Suddivisione: {len(X_train_raw)} training, {len(X_val_raw)} validation")
+
     # STEP 2: Clipping outlier per quantili SOLO su training, applicato anche a validation usando limiti del train
     X_train_np = np.array(X_train_raw, dtype=float)
     X_val_np = np.array(X_val_raw, dtype=float)
-    # Calcola limiti clipping su training
-    q1 = np.nanpercentile(X_train_np, 25, axis=0)
-    q3 = np.nanpercentile(X_train_np, 75, axis=0)
-    iqr = q3 - q1
-    lower = q1 - 3.0 * iqr
-    upper = q3 + 3.0 * iqr
-    X_train_clipped = np.clip(X_train_np, lower, upper)
-    X_val_clipped = np.clip(X_val_np, lower, upper)
+    lower, upper = fit_clip_outliers_iqr(X_train_np, k=5.0)
+    X_train_clipped = transform_clip_outliers_iqr(X_train_np, lower, upper)
+    X_val_clipped = transform_clip_outliers_iqr(X_val_np, lower, upper)
+    
     # STEP 3: Imputazione mediana
     imputer = SimpleImputer(strategy='median')
     X_train_imputed = imputer.fit_transform(X_train_clipped)
     X_val_imputed = imputer.transform(X_val_clipped)
+
     # STEP 4: Rimozione feature quasi-costanti (usando solo il train)
     X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed, threshold_var=1e-12, threshold_ratio=0.999)
     X_val_reduced = X_val_imputed[:, keep_mask]
     print(f"[Client {client_id}] Feature dopo rimozione quasi-costanti: {X_train_reduced.shape[1]} (da {X_train.shape[1] if 'X_train' in locals() else X_train_imputed.shape[1]})")
+   
     # STEP 5: Scaling standard
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train_reduced)
     X_val_scaled = scaler.transform(X_val_reduced)
     print(f"[Client {client_id}] Preprocessing completato (clipping, imputazione, costanti, scaling)")
-    # STEP 6: PCA FISSA (compatibilità automatica)
+   
+   # STEP 6: PCA
     X_train_final = apply_pca(X_train_scaled, client_id=client_id)
     X_val_final = apply_pca(X_val_scaled, client_id=client_id)
     expected_shape = (len(X_train_final), PCA_COMPONENTS)
     if X_train_final.shape[1] != PCA_COMPONENTS:
         raise RuntimeError(f"Client {client_id}: PCA output shape inconsistente: {X_train_final.shape} vs {expected_shape}")
     class_weights = compute_class_weights(y_train)
+   
     # Info dataset
     dataset_info = {
         'client_id': client_id,
@@ -208,36 +222,29 @@ def load_client_smartgrid_data(client_id):
         'preprocessing_method': 'iqr_clipping_impute_remove_constants_scaling',
         'compatibility_guaranteed': True
     }
-    print(f"[Client {client_id}] === CARICAMENTO COMPLETATO (PCA FISSA ROBUSTA) ===")
-    print(f"[Client {client_id}]   - Training: {X_train_final.shape}")
-    print(f"[Client {client_id}]   - Validation: {X_val_final.shape}")
-    print(f"[Client {client_id}]   - Compatibilità: GARANTITA (PCA fissa)")
+    print(f"[Client {client_id}] === CARICAMENTO COMPLETATO ===")
     return X_train_final, y_train, X_val_final, y_val, dataset_info
 
 def create_dnn_model():
     """
-    Crea il modello DNN SmartGrid con architettura FISSA per compatibilità garantita.
-    SEMPLIFICATO: Architettura sempre identica = nessun controllo compatibilità necessario.
+    Crea il modello DNN SmartGrid.
     
     Returns:
         Modello Keras compilato con architettura fissa
     """
-    print(f"[Client] === CREAZIONE DNN ARCHITETTURA FISSA ===")
-    print(f"[Client] Input features: {PCA_COMPONENTS} (FISSO - compatibilità garantita)")
-    print(f"[Client] Architettura: {PCA_COMPONENTS} → 64 → 32 → 16 → 8 → 1 (FISSA)")
+    print(f"[Client] === CREAZIONE DNN ===")
+    print(f"[Client] Input features: {PCA_COMPONENTS}")
+    print(f"[Client] Architettura: {PCA_COMPONENTS} → 112 → 64 → 12 → 10 → 1")
     print(f"[Client] Attivazione: {ACTIVATION_FUNCTION}")
     print(f"[Client] Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'}")
     print(f"[Client] Dropout esteso: {EXTENDED_DROPOUT}")
     
-    # PARAMETRI OTTIMIZZABILI CON OPTUNA
-    dropout_rate = 0.2         # Ottimizzabile
-    dropout_final = 0.15         # Ottimizzabile
-    l2_reg = 0.0002726058480553248             # Ottimizzabile
+    # PARAMETRI OTTIMIZZABILI
+    dropout_rate = 0.2         
+    dropout_final = 0.15         
+    l2_reg = 0.0002726058480553248             
     
-    # ARCHITETTURA FISSA: garantisce compatibilità automatica
-    # PCA_COMPONENTS → ... → 1 (sempre uguale)
-    
-    # Selezione funzione di attivazione (ottimizzabile)
+    # Selezione funzione di attivazione
     if ACTIVATION_FUNCTION == 'leaky_relu':
         activation_layer = lambda: layers.LeakyReLU(alpha=0.01)
         initializer = 'he_normal'
@@ -250,12 +257,12 @@ def create_dnn_model():
     
     print(f"[Client] Funzione attivazione: {ACTIVATION_FUNCTION}, Initializer: {initializer}")
     
-    # MODELLO CON ARCHITETTURA FISSA (sempre identica)
+    # MODELLO 
     model = keras.Sequential([
-        # Input layer esplicito con dimensione FISSA
+        # Input layer esplicito 
         layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
 
-        # Layer 1: 112 neuroni (FISSO - ottimizzabile con Optuna)
+        # Layer 1: 112 neuroni
         layers.Dense(112, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
@@ -264,7 +271,7 @@ def create_dnn_model():
         layers.BatchNormalization(name='batch_norm_1'),
         layers.Dropout(dropout_rate, name='dropout_1'),
 
-        # Layer 2: 64 neuroni (FISSO - ottimizzabile con Optuna)
+        # Layer 2: 64 neuroni
         layers.Dense(64, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
@@ -273,7 +280,7 @@ def create_dnn_model():
         layers.BatchNormalization(name='batch_norm_2'),
         layers.Dropout(dropout_rate if EXTENDED_DROPOUT else 0.0, name='dropout_2'),
 
-        # Layer 3: 12 neuroni (FISSO - ottimizzabile con Optuna)
+        # Layer 3: 12 neuroni
         layers.Dense(12, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
@@ -282,7 +289,7 @@ def create_dnn_model():
         layers.BatchNormalization(name='batch_norm_3'),
         layers.Dropout(dropout_rate, name='dropout_3'),
 
-        # Layer 4: 10 neuroni (FISSO - ottimizzabile con Optuna)
+        # Layer 4: 10 neuroni
         layers.Dense(10, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
@@ -291,17 +298,17 @@ def create_dnn_model():
         layers.BatchNormalization(name='batch_norm_4'),
         layers.Dropout(dropout_final, name='dropout_4'),
         
-        # Output layer: 1 neurone (FISSO)
+        # Output layer: 1 neurone
         layers.Dense(1, 
                     activation='sigmoid',
                     kernel_initializer='glorot_uniform',
                     name='output_layer')
     ])
     
-    # OTTIMIZZATORE CONFIGURABILE (ottimizzabile con Optuna)
+    # OTTIMIZZATORE CONFIGURABILE
     if USE_ADAMW:
         optimizer = tf.keras.optimizers.AdamW(
-            learning_rate=0.006025741928842929,  # Ottimizzabile
+            learning_rate=0.006025741928842929,  
             weight_decay=0.01,
             beta_1=0.9,
             beta_2=0.999,
@@ -311,8 +318,7 @@ def create_dnn_model():
         print(f"[Client] Ottimizzatore: AdamW")
     else:
         optimizer = tf.keras.optimizers.Adam(
-            learning_rate=0.006025741928842929,  # Ottimizzabile
-            beta_1=0.9,
+            learning_rate=0.006025741928842929, 
             beta_2=0.999,
             epsilon=1e-7,
             clipnorm=1.0
@@ -343,7 +349,7 @@ def create_training_callbacks():
     callbacks = [
         # Early Stopping
         EarlyStopping(
-            monitor='val_loss',  # <-- cambia da 'loss' a 'val_loss'
+            monitor='val_loss',  # monitora val_loss invece che loss
             patience=3,
             restore_best_weights=True,
             verbose=0,
@@ -354,8 +360,8 @@ def create_training_callbacks():
         # Reduce Learning Rate
         ReduceLROnPlateau(
             monitor='val_loss',
-            factor=0.7,                   # Ottimizzabile
-            patience=2,                   # Ottimizzabile
+            factor=0.7,
+            patience=2,
             min_lr=1e-6,
             verbose=0,
             mode='min'
@@ -375,31 +381,27 @@ dataset_info = None
 
 class SmartGridClient(fl.client.NumPyClient):
     """
-    Client Flower per SmartGrid con architettura FISSA.
-    SEMPLIFICATO: Rimossi tutti i controlli di compatibilità ridondanti.
+    Client Flower per SmartGrid.
     """
     
     def get_parameters(self, config):
         """
         Restituisce i pesi attuali del modello.
-        SEMPLIFICATO: Nessun controllo necessario (architettura fissa).
         """
         return model.get_weights()
 
     def fit(self, parameters, config):
         """
-        Addestra il modello con architettura fissa.
-        SEMPLIFICATO: Compatibilità garantita automaticamente.
+        Addestra il modello.
         """
         global model, X_train, y_train, dataset_info
         
-        print(f"[Client {client_id}] Round di addestramento con architettura FISSA...")
+        print(f"[Client {client_id}] Round di addestramento ...")
         
         # IMPOSTAZIONE PESI SEMPLIFICATA
-        # Nessun controllo di compatibilità necessario (architettura fissa)
         try:
             model.set_weights(parameters)
-            print(f"[Client {client_id}] ✅ Pesi impostati (compatibilità garantita)")
+            print(f"[Client {client_id}] ✅ Pesi impostati")
         except Exception as e:
             print(f"[Client {client_id}] ❌ Errore impostazione pesi: {e}")
             return model.get_weights(), 0, {'error': f'weight_setting_failed: {str(e)}'}
@@ -408,9 +410,9 @@ class SmartGridClient(fl.client.NumPyClient):
             print(f"[Client {client_id}] Nessun dato di training!")
             return model.get_weights(), 0, {}
         
-        # Configurazione addestramento (ottimizzabile con Optuna)
-        local_epochs = 15            # Ottimizzabile
-        batch_size = 32              # Ottimizzabile
+        # Configurazione addestramento
+        local_epochs = 15
+        batch_size = 32
 
         # Class weights
         class_weights = dataset_info['class_weights']
@@ -419,10 +421,6 @@ class SmartGridClient(fl.client.NumPyClient):
         callbacks = create_training_callbacks()
         
         try:
-            print(f"[Client {client_id}] Training con architettura fissa:")
-            print(f"[Client {client_id}]   - Epoche: {local_epochs}")
-            print(f"[Client {client_id}]   - Batch size: {batch_size}")
-            print(f"[Client {client_id}]   - Architettura: {PCA_COMPONENTS} → 64 → 32 → 16 → 8 → 1")
             
             history = model.fit(
                 X_train, y_train,
@@ -480,19 +478,10 @@ class SmartGridClient(fl.client.NumPyClient):
             'local_epochs_actual': int(actual_epochs),
             'early_stopped': bool(early_stopped),
             'batch_size': int(batch_size),
-            'architecture_fixed': True,
-            'compatibility_guaranteed': True,
-            'compatibility_checks_removed': True,
             
             # Dataset info
             'client_id': int(dataset_info['client_id']),
             'train_samples': int(dataset_info['train_samples']),
-            'pca_features': int(dataset_info['pca_features']),
-            'pca_components_fixed': int(dataset_info['pca_components_fixed']),
-            
-            # Metodologia semplificata
-            'preprocessing_method': dataset_info['preprocessing_method'],
-            'model_type': 'dnn_fixed_architecture_simplified'
         }
         
         return model.get_weights(), len(X_train), metrics
@@ -500,11 +489,10 @@ class SmartGridClient(fl.client.NumPyClient):
     def evaluate(self, parameters, config):
         """
         Valuta il modello con architettura fissa.
-        SEMPLIFICATO: Nessun controllo di compatibilità necessario.
         """
         global model, X_val, y_val
         
-        # Impostazione pesi semplificata (compatibilità garantita)
+        # Impostazione pesi semplificata
         try:
             model.set_weights(parameters)
         except Exception as e:
@@ -536,7 +524,7 @@ class SmartGridClient(fl.client.NumPyClient):
             print(f"[Client {client_id}] Classification report (per classe):")
             print(classification_report(y_val, y_pred_binary, target_names=["natural", "attack"], zero_division=0))
             print(f"[Client {client_id}] Confusion matrix:")
-            print(conf_matrix)
+            print(f"tn: {conf_matrix[0, 0]}, fp: {conf_matrix[0, 1]}, fn: {conf_matrix[1, 0]}, tp: {conf_matrix[1, 1]}")
             
             # Metriche
             metrics = {
@@ -547,8 +535,6 @@ class SmartGridClient(fl.client.NumPyClient):
                 "f1_score": f1_score_val,
                 "balanced_accuracy": balanced_acc,
                 "val_samples": len(X_val),
-                "architecture_fixed": True,
-                "compatibility_guaranteed": True,
                 "precision_natural": report["natural"]["precision"],
                 "recall_natural": report["natural"]["recall"],
                 "f1_natural": report["natural"]["f1-score"],
@@ -572,12 +558,12 @@ class SmartGridClient(fl.client.NumPyClient):
 
 def main():
     """
-    Funzione principale per avviare il client SmartGrid con architettura fissa semplificata.
+    Funzione principale per avviare il client SmartGrid.
     """
     global client_id, model, X_train, y_train, X_val, y_val, dataset_info
     
     if len(sys.argv) != 2:
-        print("Uso: python client.py <client_id>")
+        print("Usa: python client.py <client_id>")
         print("Esempio: python client.py 1")
         sys.exit(1)
     
@@ -589,30 +575,22 @@ def main():
         print(f"Errore: Client ID non valido. {e}")
         sys.exit(1)
     
-    print(f"=== AVVIO CLIENT SMARTGRID DNN ARCHITETTURA FISSA {client_id} ===")
-    print("CONFIGURAZIONE SEMPLIFICATA:")
-    print(f"  ✅ PCA FISSA: {PCA_COMPONENTS} componenti (compatibilità garantita)")
-    print("  ✅ Architettura FISSA: 35 → 64 → 32 → 16 → 8 → 1")
-    print("  ✅ Controlli compatibilità: RIMOSSI (non necessari)")
-    print("  ✅ Distribuzione naturale mantenuta (NO SMOTE)")
-    print("  ✅ Parametri ottimizzabili con Optuna")
+    print(f"=== AVVIO CLIENT {client_id} ===")
     
     try:
-        # Carica i dati con PCA fissa
-        print(f"[Client {client_id}] Caricamento dati con PCA fissa...")
+        # Carica i dati con PCA 
+        print(f"[Client {client_id}] Caricamento dati con PCA ...")
         X_train, y_train, X_val, y_val, dataset_info = load_client_smartgrid_data(client_id)
         
         # Crea il modello con architettura fissa
         model = create_dnn_model()
 
-        print(f"[Client {client_id}] === RIASSUNTO CLIENT ARCHITETTURA FISSA ===")
+        print(f"[Client {client_id}] === RIASSUNTO CLIENT ===")
         print(f"[Client {client_id}] Dataset: {dataset_info['train_samples']} train, {dataset_info['val_samples']} val")
         print(f"[Client {client_id}] Distribuzione: {dataset_info['attack_ratio']*100:.1f}% attacchi")
         print(f"[Client {client_id}] Feature: {dataset_info['original_features']} → {dataset_info['pca_features']}")
         print(f"[Client {client_id}] PCA: {dataset_info['pca_components_fixed']} componenti FISSI")
         print(f"[Client {client_id}] Modello: {model.count_params():,} parametri")
-        print(f"[Client {client_id}] Architettura: FISSA (compatibilità garantita)")
-        print(f"[Client {client_id}] Compatibilità: {dataset_info['compatibility_guaranteed']}")
         print(f"[Client {client_id}] Connessione al server su localhost:8080...")
         
         # Avvia il client Flower
