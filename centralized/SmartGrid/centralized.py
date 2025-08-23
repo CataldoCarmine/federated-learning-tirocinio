@@ -9,35 +9,70 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
-from imblearn.over_sampling import SMOTE
+from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score, classification_report, confusion_matrix
+from sklearn.ensemble import RandomForestClassifier
 import time
 import sys
 import os
 
+# == CONFIGURAZIONI IDENTICHE AL FEDERATO ==
+PCA_COMPONENTS = 21
+PCA_RANDOM_STATE = 42
+
+def fit_clip_outliers_iqr(X, k=5.0):
+    q1 = np.nanpercentile(X, 25, axis=0)
+    q3 = np.nanpercentile(X, 75, axis=0)
+    iqr = q3 - q1
+    lower = q1 - k * iqr
+    upper = q3 + k * iqr
+    return lower, upper
+
+def transform_clip_outliers_iqr(X, lower, upper):
+    return np.clip(X, lower, upper)
+
+def remove_near_constant_features(X, threshold_var=1e-12, threshold_ratio=0.999):
+    keep_mask = []
+    n = X.shape[0]
+    for col in range(X.shape[1]):
+        col_data = X[:, col]
+        vals, counts = np.unique(col_data, return_counts=True)
+        max_count = np.max(counts)
+        ratio = max_count / n
+        var = np.nanvar(col_data)
+        keep = not (ratio >= threshold_ratio or var < threshold_var)
+        keep_mask.append(keep)
+    keep_mask = np.array(keep_mask)
+    return X[:, keep_mask], keep_mask
+
+def clean_data_for_pca(X):
+    if hasattr(X, 'values'):
+        X_array = X.values.copy()
+    else:
+        X_array = X.copy()
+    X_array = np.where(np.isinf(X_array), np.nan, X_array)
+    return X_array
+
+def apply_pca(X, pca_obj=None):
+    # Se viene passato un oggetto PCA già fit, usa transform, altrimenti fit_transform
+    if pca_obj is None:
+        pca = PCA(n_components=PCA_COMPONENTS, random_state=PCA_RANDOM_STATE)
+        X_pca = pca.fit_transform(X)
+        return X_pca, pca
+    else:
+        X_pca = pca_obj.transform(X)
+        return X_pca
+
 def load_centralized_smartgrid_data():
     """
     Carica e unisce tutti i dati SmartGrid per l'addestramento centralizzato.
-    Simula il caso tradizionale dove tutti i dati sono disponibili centralmente.
-    
-    Returns:
-        Tuple con (X, y, dataset_info)
     """
     print("=== CARICAMENTO DATASET SMARTGRID CENTRALIZZATO ===")
-
-    # Directory contenente questo script
     script_dir = os.path.dirname(os.path.abspath(__file__))
-
-    # Path assoluto alla cartella dei dati
     data_dir = os.path.join(script_dir, "..", "..", "data", "SmartGrid")
-    
-    # Lista per contenere tutti i dataframe
     df_list = []
     files_loaded = []
-    
-    # Carica tutti i file CSV disponibili (data1.csv a data15.csv)
     for file_id in range(1, 16):
         file_path = os.path.join(data_dir, f"data{file_id}.csv")
-        
         if os.path.exists(file_path):
             try:
                 df_file = pd.read_csv(file_path)
@@ -48,42 +83,24 @@ def load_centralized_smartgrid_data():
                 print(f"  - Errore nel caricamento di data{file_id}.csv: {e}")
         else:
             print(f"  - File data{file_id}.csv non trovato")
-    
     if not df_list:
         raise FileNotFoundError("Nessun file di dati SmartGrid trovato nella cartella data/SmartGrid/")
-    
-    # Unisci tutti i dataframe in un unico dataset centralizzato
     df_combined = pd.concat(df_list, ignore_index=True)
-    
     print(f"\nDataset centralizzato combinato:")
     print(f"  - File caricati: {len(files_loaded)} ({files_loaded})")
     print(f"  - Totale campioni: {len(df_combined)}")
     print(f"  - Feature totali: {df_combined.shape[1] - 1}")  # -1 per escludere 'marker'
-    
-    # Separa feature e target
     X = df_combined.drop(columns=["marker"])
     y = (df_combined["marker"] != "Natural").astype(int)  # 1 = attacco, 0 = naturale
-    
-    # Statistiche del dataset
     attack_samples = y.sum()
     natural_samples = (y == 0).sum()
     attack_ratio = y.mean()
-    
-    print(f"  - Campioni di attacco: {attack_samples} ({attack_ratio*100:.2f}%)")
-    print(f"  - Campioni naturali: {natural_samples} ({(1-attack_ratio)*100:.2f}%)")
-    
-    # Distribuzione delle classi per scenario (basata sulla colonna marker originale)
     marker_distribution = df_combined["marker"].value_counts()
     print(f"\nDistribuzione per tipo di scenario:")
     for marker, count in marker_distribution.items():
         percentage = (count / len(df_combined)) * 100
         print(f"  - {marker}: {count} campioni ({percentage:.2f}%)")
-    
-    # Gestione preliminare valori infiniti
-    print(f"\nPulizia preliminare valori infiniti...")
     X.replace([np.inf, -np.inf], np.nan, inplace=True)
-    
-    # Informazioni del dataset per il riassunto finale
     dataset_info = {
         'files_loaded': files_loaded,
         'total_files': len(files_loaded),
@@ -93,273 +110,104 @@ def load_centralized_smartgrid_data():
         'natural_samples': natural_samples,
         'attack_ratio': attack_ratio
     }
-    
     print("=" * 60)
-    
     return X, y, dataset_info
 
 def split_train_validation_test(X, y, train_size=0.7, val_size=0.15, test_size=0.15, random_state=42):
-    """
-    STEP 1: Suddivide il dataset in train (70%), validation (15%) e test (15%).
-    Questo viene fatto PRIMA di qualsiasi preprocessing per evitare data leakage.
-    
-    Args:
-        X: Feature del dataset
-        y: Target del dataset
-        train_size: Proporzione per il training set (default: 0.7)
-        val_size: Proporzione per il validation set (default: 0.15)
-        test_size: Proporzione per il test set (default: 0.15)
-        random_state: Seed per riproducibilità
-    
-    Returns:
-        Tuple con (X_train, X_val, X_test, y_train, y_val, y_test)
-    """
     print(f"=== STEP 1: SUDDIVISIONE TRAIN/VALIDATION/TEST (PRIMA DEL PREPROCESSING) ===")
-    
-    # Verifica che le proporzioni sommino a 1
     total_size = train_size + val_size + test_size
     if abs(total_size - 1.0) > 0.001:
         raise ValueError(f"Le proporzioni devono sommare a 1.0, ricevuto: {total_size}")
-    
-    # Prima divisione: separa il training set dal resto (validation + test)
-    temp_val_test_size = val_size + test_size  # 0.30
+    temp_val_test_size = val_size + test_size
     X_train, X_temp, y_train, y_temp = train_test_split(
-        X, y,
-        test_size=temp_val_test_size,
-        random_state=random_state,
-        stratify=y
+        X, y, test_size=temp_val_test_size, random_state=random_state, stratify=y
     )
-    
-    # Seconda divisione: separa validation e test dal resto
-    # Calcola la proporzione relativa tra validation e test
-    relative_test_size = test_size / temp_val_test_size  # 0.15 / 0.30 = 0.5
-    
+    relative_test_size = test_size / temp_val_test_size
     X_val, X_test, y_val, y_test = train_test_split(
-        X_temp, y_temp,
-        test_size=relative_test_size,
-        random_state=random_state,
-        stratify=y_temp
+        X_temp, y_temp, test_size=relative_test_size, random_state=random_state, stratify=y_temp
     )
-    
-    # Stampa informazioni sulla suddivisione
     print(f"  - Training set: {len(X_train)} campioni ({len(X_train)/len(X)*100:.1f}%)")
     print(f"  - Validation set: {len(X_val)} campioni ({len(X_val)/len(X)*100:.1f}%)")
     print(f"  - Test set: {len(X_test)} campioni ({len(X_test)/len(X)*100:.1f}%)")
-    
-    # Verifica distribuzione delle classi
     train_attack_ratio = y_train.mean()
     val_attack_ratio = y_val.mean()
     test_attack_ratio = y_test.mean()
-    
     print(f"  - Proporzione attacchi training: {train_attack_ratio*100:.2f}%")
     print(f"  - Proporzione attacchi validation: {val_attack_ratio*100:.2f}%")
     print(f"  - Proporzione attacchi test: {test_attack_ratio*100:.2f}%")
-    
     print("=" * 60)
-    
     return X_train, X_val, X_test, y_train, y_val, y_test
 
-def create_preprocessing_pipeline():
+def centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw):
     """
-    Crea la pipeline di preprocessing scikit-learn.
-    STEP 2-3: Imputazione e Normalizzazione
-    
-    Returns:
-        Pipeline di preprocessing
+    Pipeline identica a quella federata: clipping, imputazione, rimozione quasi-costanti, scaling, PCA.
     """
-    print(f"=== CREAZIONE PIPELINE PREPROCESSING ===")
-    print(f"  - Step 2: Imputazione con mediana")
-    print(f"  - Step 3: Normalizzazione con StandardScaler")
-    print(f"  - PCA verrà applicata successivamente dopo SMOTE")
-    
-    pipeline = Pipeline([
-        ('imputer', SimpleImputer(strategy='median')),
-        ('scaler', StandardScaler())
-    ])
-    
-    print("=" * 60)
-    
-    return pipeline
+    # Pulizia inf/NaN
+    X_train_clean = clean_data_for_pca(X_train_raw)
+    X_val_clean = clean_data_for_pca(X_val_raw)
+    X_test_clean = clean_data_for_pca(X_test_raw)
+    # Clipping IQR
+    lower, upper = fit_clip_outliers_iqr(X_train_clean, k=5.0)
+    X_train_clipped = transform_clip_outliers_iqr(X_train_clean, lower, upper)
+    X_val_clipped = transform_clip_outliers_iqr(X_val_clean, lower, upper)
+    X_test_clipped = transform_clip_outliers_iqr(X_test_clean, lower, upper)
+    # Imputazione mediana
+    imputer = SimpleImputer(strategy='median')
+    X_train_imputed = imputer.fit_transform(X_train_clipped)
+    X_val_imputed = imputer.transform(X_val_clipped)
+    X_test_imputed = imputer.transform(X_test_clipped)
+    # Rimozione quasi-costanti
+    X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed, threshold_var=1e-12, threshold_ratio=0.999)
+    X_val_reduced = X_val_imputed[:, keep_mask]
+    X_test_reduced = X_test_imputed[:, keep_mask]
+    # Scaling
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train_reduced)
+    X_val_scaled = scaler.transform(X_val_reduced)
+    X_test_scaled = scaler.transform(X_test_reduced)
+    return X_train_scaled, X_val_scaled, X_test_scaled
 
-def apply_smote_balancing(X_train, y_train):
+def feature_importance_analysis(X, y, feature_names=None, n_estimators=100, title="Feature Importance", max_show=20):
     """
-    STEP 4: Applica SMOTE per bilanciare le classi solo sul training set.
-    
-    Args:
-        X_train: Feature di training (già preprocessate)
-        y_train: Target di training
-    
-    Returns:
-        Tuple (X_train_balanced, y_train_balanced)
+    Calcola e stampa la feature importance con RandomForest.
     """
-    print(f"=== STEP 4: BILANCIAMENTO CLASSI CON SMOTE ===")
-    
-    # Calcola il rapporto di squilibrio nel training set
-    train_attack_ratio = y_train.mean()
-    minority_class_ratio = min(train_attack_ratio, 1 - train_attack_ratio)
-    
-    print(f"  - Distribuzione training PRIMA del bilanciamento:")
-    print(f"    - Classe 0 (Natural): {(y_train == 0).sum()} campioni ({(1-train_attack_ratio)*100:.2f}%)")
-    print(f"    - Classe 1 (Attack): {(y_train == 1).sum()} campioni ({train_attack_ratio*100:.2f}%)")
-    print(f"    - Rapporto classe minoritaria: {minority_class_ratio*100:.2f}%")
-    
-    # Applica SMOTE solo se lo squilibrio è significativo (< 40%)
-    if minority_class_ratio < 0.4:
-        print(f"  - Squilibrio significativo rilevato, applicazione SMOTE...")
-        
-        # Configura SMOTE
-        smote = SMOTE(
-            sampling_strategy='auto',  # Bilancia automaticamente alla classe maggioritaria
-            random_state=42,          # Per riproducibilità
-            k_neighbors=5             # Numero di vicini per generare campioni sintetici
-        )
-        
-        try:
-            X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
-            
-            # Statistiche dopo il bilanciamento
-            print(f"  - SMOTE applicato con successo")
-            print(f"  - Distribuzione training DOPO il bilanciamento:")
-            print(f"    - Classe 0 (Natural): {(y_train_balanced == 0).sum()} campioni ({(y_train_balanced == 0).mean()*100:.2f}%)")
-            print(f"    - Classe 1 (Attack): {(y_train_balanced == 1).sum()} campioni ({(y_train_balanced == 1).mean()*100:.2f}%)")
-            print(f"    - Campioni sintetici generati: {len(X_train_balanced) - len(X_train)}")
-            
-            print("=" * 60)
-            return X_train_balanced, y_train_balanced
-            
-        except Exception as e:
-            print(f"  - Errore durante l'applicazione di SMOTE: {e}")
-            print(f"  - Continuazione con dati originali sbilanciati")
-            print("=" * 60)
-            return X_train, y_train
-    else:
-        print(f"  - Squilibrio accettabile, SMOTE non necessario")
-        print("=" * 60)
-        return X_train, y_train
-
-def apply_pca_reduction(X_train, X_val, X_test, variance_threshold=0.95):
-    """
-    STEP 5: Applica PCA per riduzione dimensionale DOPO SMOTE.
-    Fit della PCA solo sul training set, transform su tutti i set.
-    
-    Args:
-        X_train: Dati di training (dopo SMOTE)
-        X_val: Dati di validation (preprocessati)
-        X_test: Dati di test (preprocessati)
-        variance_threshold: Soglia di varianza cumulativa
-    
-    Returns:
-        Tuple (X_train_pca, X_val_pca, X_test_pca, pca_object, n_components_selected)
-    """
-    print(f"=== STEP 5: RIDUZIONE DIMENSIONALE CON PCA ===")
-    
-    original_features = X_train.shape[1]
-    print(f"  - Feature originali: {original_features}")
-    print(f"  - Soglia varianza cumulativa: {variance_threshold*100:.1f}%")
-    
-    # Prima esecuzione: PCA completa per analizzare la varianza
-    pca_full = PCA()
-    pca_full.fit(X_train)  # Fit solo sui dati di training (inclusi quelli generati da SMOTE)
-    
-    # Calcola varianza cumulativa
-    cumulative_variance = np.cumsum(pca_full.explained_variance_ratio_)
-    
-    # Trova il numero di componenti necessarie per raggiungere la soglia
-    n_components_selected = np.argmax(cumulative_variance >= variance_threshold) + 1
-    
-    # Assicurati che il numero di componenti sia valido
-    n_components_selected = min(n_components_selected, original_features, len(X_train))
-    
-    print(f"  - Componenti selezionate: {n_components_selected}")
-    print(f"  - Varianza spiegata con {n_components_selected} componenti: {cumulative_variance[n_components_selected-1]*100:.2f}%")
-    print(f"  - Riduzione dimensionalità: {original_features} → {n_components_selected} ({(1-n_components_selected/original_features)*100:.1f}% riduzione)")
-    
-    # Mostra varianza spiegata dalle prime 10 componenti
-    print(f"  - Varianza spiegata dalle prime 10 componenti:")
-    for i in range(min(10, len(pca_full.explained_variance_ratio_))):
-        print(f"    - PC{i+1}: {pca_full.explained_variance_ratio_[i]*100:.2f}% (cumulativa: {cumulative_variance[i]*100:.2f}%)")
-    
-    # Seconda esecuzione: PCA con numero ottimale di componenti
-    pca_optimal = PCA(n_components=n_components_selected)
-    
-    # Fit della PCA solo sui dati di training
-    X_train_pca = pca_optimal.fit_transform(X_train)
-    
-    # Transform su validation e test usando la PCA fitted sul training
-    X_val_pca = pca_optimal.transform(X_val)
-    X_test_pca = pca_optimal.transform(X_test)
-    
-    print(f"  - Shape dopo PCA:")
-    print(f"    - Training: {X_train_pca.shape}")
-    print(f"    - Validation: {X_val_pca.shape}")
-    print(f"    - Test: {X_test_pca.shape}")
-    
-    print("=" * 60)
-    
-    return X_train_pca, X_val_pca, X_test_pca, pca_optimal, n_components_selected
+    print("=== ANALISI FEATURE IMPORTANCE (RandomForest) ===")
+    rf = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
+    rf.fit(X, y)
+    importances = rf.feature_importances_
+    indices = np.argsort(importances)[::-1]
+    # Stampa le prime max_show feature
+    print(f"{'Feature':<20} {'Importance':<12}")
+    print("-" * 35)
+    for i in range(min(max_show, len(importances))):
+        fname = f"F{i+1}" if feature_names is None else feature_names[indices[i]]
+        print(f"{fname:<20} {importances[indices[i]]:.6f}")
+    print()
+    return importances, indices
 
 def create_smartgrid_dnn_model(input_shape):
-    """
-    Crea un modello DNN (Deep Neural Network) per la classificazione binaria SmartGrid.
-    Architettura ottimizzata con iperparametri corretti per buone performance.
-    
-    Args:
-        input_shape: Numero di feature in input (dopo PCA)
-    
-    Returns:
-        Modello Keras compilato
-    """
-    print("=== CREAZIONE MODELLO DNN SMARTGRID OTTIMIZZATO ===")
-    
-    # Configurazione ottimizzata del modello DNN
-    dropout_rate = 0.2          # Ridotto da 0.3 per evitare underfitting
-    l2_reg = 0.0001            # Ridotto da 0.001 per evitare regolarizzazione eccessiva
-    
-    # Architettura DNN ottimizzata per rilevamento intrusioni
+    print("=== CREAZIONE MODELLO DNN CENTRALIZZATO ===")
+    dropout_rate = 0.2
+    l2_reg = 0.0001
     model = keras.Sequential([
-        # Layer di input
         layers.Input(shape=(input_shape,), name='input_layer'),
-        
-        # Primo blocco: Estrazione feature di alto livello
-        layers.Dense(128, activation='relu',  # Ridotto da 256 per stabilità
-                    kernel_regularizer=regularizers.l2(l2_reg),
-                    kernel_initializer='he_normal',  # Inizializzazione migliore per ReLU
-                    name='dense_1'),
+        layers.Dense(112, activation='relu', kernel_regularizer=regularizers.l2(l2_reg), kernel_initializer='he_normal', name='dense_1'),
         layers.BatchNormalization(name='batch_norm_1'),
         layers.Dropout(dropout_rate, name='dropout_1'),
-        
-        # Secondo blocco: Raffinamento pattern
-        layers.Dense(64, activation='relu',   # Ridotto da 128
-                    kernel_regularizer=regularizers.l2(l2_reg),
-                    kernel_initializer='he_normal',
-                    name='dense_2'),
+        layers.Dense(64, activation='relu', kernel_regularizer=regularizers.l2(l2_reg), kernel_initializer='he_normal', name='dense_2'),
         layers.BatchNormalization(name='batch_norm_2'),
         layers.Dropout(dropout_rate, name='dropout_2'),
-        
-        # Terzo blocco: Specializzazione per sicurezza
-        layers.Dense(32, activation='relu',   # Ridotto da 64
-                    kernel_regularizer=regularizers.l2(l2_reg),
-                    kernel_initializer='he_normal',
-                    name='dense_3'),
+        layers.Dense(12, activation='relu', kernel_regularizer=regularizers.l2(l2_reg), kernel_initializer='he_normal', name='dense_3'),
         layers.BatchNormalization(name='batch_norm_3'),
-        layers.Dropout(dropout_rate / 2, name='dropout_3'),  # Dropout ridotto
-        
-        # Layer finale: Classificazione binaria
-        layers.Dense(1, activation='sigmoid', 
-                    kernel_initializer='glorot_uniform',  # Migliore per sigmoid
-                    name='output_layer')
+        layers.Dropout(dropout_rate, name='dropout_3'),
+        layers.Dense(10, activation='relu', kernel_regularizer=regularizers.l2(l2_reg), kernel_initializer='he_normal', name='dense_4'),
+        layers.BatchNormalization(name='batch_norm_4'),
+        layers.Dropout(0.15, name='dropout_4'),
+        layers.Dense(1, activation='sigmoid', kernel_initializer='glorot_uniform', name='output_layer')
     ])
-    
-    # Ottimizzatore Adam con learning rate ridotto per DNN stabile
     optimizer = keras.optimizers.Adam(
-        learning_rate=0.0001,     # Ridotto da 0.001 per convergenza stabile
-        beta_1=0.9,
-        beta_2=0.999,
-        epsilon=1e-7,
-        clipnorm=1.0              # Gradient clipping per stabilità
+        learning_rate=0.006, beta_1=0.9, beta_2=0.999, epsilon=1e-7, clipnorm=1.0
     )
-    
-    # Compila il modello
     model.compile(
         optimizer=optimizer,
         loss=tf.keras.losses.BinaryCrossentropy(),
@@ -370,101 +218,18 @@ def create_smartgrid_dnn_model(input_shape):
             tf.keras.metrics.AUC(name='auc')
         ]
     )
-    
-    print("Architettura del modello DNN ottimizzato:")
+    print(f"Modello DNN creato con input shape: {input_shape}")
     model.summary()
-    print(f"\nCaratteristiche del modello ottimizzato:")
-    print(f"  - Input shape: {input_shape} feature (dopo riduzione PCA)")
-    print(f"  - Architettura: 3 layer nascosti (128→64→32)")
-    print(f"  - Attivazione: ReLU con BatchNormalization")
-    print(f"  - Regolarizzazione: Dropout {dropout_rate} + L2 {l2_reg}")
-    print(f"  - Inizializzazione: He Normal per ReLU, Glorot per Sigmoid")
-    print(f"  - Output: Sigmoid per classificazione binaria")
-    print(f"  - Ottimizzatore: Adam con learning rate {optimizer.learning_rate}")
-    print(f"  - Gradient clipping: {optimizer.clipnorm}")
-    print(f"  - Parametri totali: {model.count_params():,}")
-    print("=" * 60)
-    
     return model
 
-def create_training_callbacks():
-    """
-    Crea i callback ottimizzati per l'addestramento della DNN.
-    
-    Returns:
-        Lista di callback Keras
-    """
-    callbacks = [
-        # Early Stopping ottimizzato
-        EarlyStopping(
-            monitor='val_loss',
-            patience=15,               # Aumentato per DNN più complessa
-            restore_best_weights=True,
-            verbose=1,
-            mode='min',
-            min_delta=0.0001          # Soglia minima di miglioramento
-        ),
-        
-        # Riduzione Learning Rate ottimizzata
-        ReduceLROnPlateau(
-            monitor='val_loss',
-            factor=0.5,
-            patience=7,                # Ridotto per risposta più rapida
-            min_lr=1e-7,              # Learning rate minimo più basso
-            verbose=1,
-            mode='min'
-        )
-    ]
-    
-    return callbacks
-
 def train_smartgrid_dnn_model(model, X_train, y_train, X_val, y_val):
-    """
-    Addestra il modello DNN SmartGrid sui dati centralizzati con configurazione ottimizzata.
-    
-    Args:
-        model: Modello DNN Keras da addestrare
-        X_train, y_train: Dati di training (bilanciati con SMOTE, con PCA applicata)
-        X_val, y_val: Dati di validation per monitoraggio (sbilanciati, distribuzione reale, con PCA applicata)
-    
-    Returns:
-        History dell'addestramento
-    """
-    print("=== ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID OTTIMIZZATO ===")
-    
-    # Configurazione ottimizzata per DNN
-    epochs = 66               # Aumentato per permettere convergenza
-    batch_size = 16           # Ridotto per gradiente più stabile
-    
-    print(f"Configurazione addestramento DNN ottimizzato:")
-    print(f"  - Epoche massime: {epochs}")
-    print(f"  - Batch size: {batch_size}")
-    print(f"  - Campioni training: {len(X_train)}")
-    print(f"  - Campioni validation: {len(X_val)}")
-    print(f"  - Feature in input (post-PCA): {X_train.shape[1]}")
-    print(f"  - Batch per epoca: {len(X_train) // batch_size}")
-    print(f"  - Early stopping: Attivo (patience=15)")
-    print(f"  - Learning rate reduction: Attivo (patience=7)")
-    
-    # Distribuzione delle classi nei set di training e validation
-    train_attacks = y_train.sum()
-    train_naturals = (y_train == 0).sum()
-    val_attacks = y_val.sum()
-    val_naturals = (y_val == 0).sum()
-    
-    print(f"  - Distribuzione training: {train_attacks} attacchi, {train_naturals} naturali")
-    print(f"  - Distribuzione validation: {val_attacks} attacchi, {val_naturals} naturali")
-    
-    # Crea i callback per l'addestramento
-    callbacks = create_training_callbacks()
-    
-    print("=" * 60)
-    
-    # Registra il tempo di inizio
-    start_time = time.time()
-    
-    # Addestra il modello DNN con validation data e callback
-    print("Inizio addestramento DNN ottimizzato...")
+    print("=== ADDESTRAMENTO DNN CENTRALIZZATO ===")
+    epochs = 20
+    batch_size = 32
+    callbacks = [
+        EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True, verbose=1),
+        ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2, min_lr=1e-6, verbose=1)
+    ]
     history = model.fit(
         X_train, y_train,
         epochs=epochs,
@@ -474,261 +239,86 @@ def train_smartgrid_dnn_model(model, X_train, y_train, X_val, y_val):
         verbose=1,
         shuffle=True
     )
-    
-    # Calcola il tempo totale
-    training_time = time.time() - start_time
-    
-    # Statistiche sull'addestramento
-    actual_epochs = len(history.history['loss'])
-    best_val_loss = min(history.history['val_loss'])
-    best_epoch = np.argmin(history.history['val_loss']) + 1
-    
-    print(f"\nAddestramento DNN ottimizzato completato:")
-    print(f"  - Tempo totale: {training_time:.2f} secondi")
-    print(f"  - Epoche effettive: {actual_epochs}/{epochs}")
-    print(f"  - Migliore val_loss: {best_val_loss:.4f} (epoca {best_epoch})")
-    print(f"  - Early stopping: {'Attivato' if actual_epochs < epochs else 'Non attivato'}")
-    print("=" * 60)
-    
     return history
 
-def evaluate_smartgrid_model(model, X_test, y_test, set_name="Test"):
-    """
-    Valuta il modello DNN SmartGrid sui dati specificati.
-    Include metriche estese per sistemi di sicurezza.
-    
-    Args:
-        model: Modello DNN addestrato
-        X_test, y_test: Dati di test (con PCA applicata)
-        set_name: Nome del set per logging (default: "Test")
-    
-    Returns:
-        Tuple con (loss, accuracy, metrics_dict)
-    """
+def evaluate_smartgrid_model(model, X_test, y_test, set_name="Test", threshold=0.5):
     print(f"=== VALUTAZIONE FINALE DNN SMARTGRID - {set_name.upper()} SET ===")
-    
-    # Valutazione finale con tutte le metriche
     results = model.evaluate(X_test, y_test, verbose=0)
     loss, accuracy, precision, recall, auc = results
-    
-    # Calcola F1-score
-    f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-    
-    print(f"Risultati finali {set_name} (DNN Ottimizzato):")
-    print(f"  - {set_name} Loss: {loss:.4f}")
-    print(f"  - {set_name} Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
-    print(f"  - {set_name} Precision: {precision:.4f} ({precision*100:.2f}%)")
-    print(f"  - {set_name} Recall: {recall:.4f} ({recall*100:.2f}%)")
-    print(f"  - {set_name} F1-Score: {f1_score:.4f} ({f1_score*100:.2f}%)")
-    print(f"  - {set_name} AUC: {auc:.4f} ({auc*100:.2f}%)")
-    print(f"  - Campioni di {set_name.lower()} utilizzati: {len(X_test)}")
-    print(f"  - Feature utilizzate (post-PCA): {X_test.shape[1]}")
-    
-    # Predizioni per analisi dettagliata
-    predictions_prob = model.predict(X_test, verbose=0)
-    predictions_binary = (predictions_prob > 0.5).astype(int).flatten()
-    
-    # Analisi per classe
-    print(f"\nAccuracy per classe ({set_name}):")
-    
-    # Classe 0 (Natural/Normale)
-    natural_mask = (y_test == 0)
-    if np.sum(natural_mask) > 0:
-        natural_predictions = predictions_binary[natural_mask]
-        natural_accuracy = np.mean(natural_predictions == 0)
-        natural_count = np.sum(natural_mask)
-        print(f"  Classe 0 (Natural): {natural_accuracy:.4f} ({natural_accuracy*100:.2f}%) - {natural_count} campioni")
-    
-    # Classe 1 (Attack/Attacco)
-    attack_mask = (y_test == 1)
-    if np.sum(attack_mask) > 0:
-        attack_predictions = predictions_binary[attack_mask]
-        attack_accuracy = np.mean(attack_predictions == 1)
-        attack_count = np.sum(attack_mask)
-        print(f"  Classe 1 (Attack): {attack_accuracy:.4f} ({attack_accuracy*100:.2f}%) - {attack_count} campioni")
-    
-    # Matrice di confusione
-    true_negatives = np.sum((y_test == 0) & (predictions_binary == 0))
-    false_positives = np.sum((y_test == 0) & (predictions_binary == 1))
-    false_negatives = np.sum((y_test == 1) & (predictions_binary == 0))
-    true_positives = np.sum((y_test == 1) & (predictions_binary == 1))
-    
-    print(f"\nMatrice di confusione ({set_name}):")
-    print(f"  - True Negatives (TN): {true_negatives}")
-    print(f"  - False Positives (FP): {false_positives}") 
-    print(f"  - False Negatives (FN): {false_negatives}")
-    print(f"  - True Positives (TP): {true_positives}")
-    
-    # Metriche di sicurezza aggiuntive
-    specificity = true_negatives / (true_negatives + false_positives) if (true_negatives + false_positives) > 0 else 0
-    false_positive_rate = false_positives / (false_positives + true_negatives) if (false_positives + true_negatives) > 0 else 0
-    false_negative_rate = false_negatives / (false_negatives + true_positives) if (false_negatives + true_positives) > 0 else 0
-    
-    print(f"\nMetriche di sicurezza aggiuntive ({set_name}):")
-    print(f"  - Specificity (TNR): {specificity:.4f} ({specificity*100:.2f}%)")
-    print(f"  - False Positive Rate: {false_positive_rate:.4f} ({false_positive_rate*100:.2f}%)")
-    print(f"  - False Negative Rate: {false_negative_rate:.4f} ({false_negative_rate*100:.2f}%)")
-    
-    # Dizionario con tutte le metriche
-    metrics_dict = {
-        'accuracy': accuracy,
-        'precision': precision,
-        'recall': recall,
-        'f1_score': f1_score,
-        'auc': auc,
-        'specificity': specificity,
-        'fpr': false_positive_rate,
-        'fnr': false_negative_rate,
-        'tn': true_negatives,
-        'fp': false_positives,
-        'fn': false_negatives,
-        'tp': true_positives
+    f1_score_val = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    y_pred_prob = model.predict(X_test, verbose=0)
+    y_pred_binary = (y_pred_prob > threshold).astype(int).flatten()
+    balanced_acc = balanced_accuracy_score(y_test, y_pred_binary)
+    report = classification_report(y_test, y_pred_binary, target_names=["natural", "attack"], output_dict=True, zero_division=0)
+    conf_matrix = confusion_matrix(y_test, y_pred_binary)
+    print(f"  Loss: {loss:.4f}")
+    print(f"  Accuracy: {accuracy:.4f}")
+    print(f"  F1-Score: {f1_score_val:.4f}")
+    print(f"  Balanced Accuracy: {balanced_acc:.4f}")
+    print(f"  Precision: {precision:.4f}")
+    print(f"  Recall: {recall:.4f}")
+    print(f"  AUC: {auc:.4f}")
+    print(f"Classification report (per classe):")
+    print(classification_report(y_test, y_pred_binary, target_names=["natural", "attack"], zero_division=0))
+    print(f"Confusion matrix:")
+    print(conf_matrix)
+    return loss, accuracy, {
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "auc": auc,
+        "f1_score": f1_score_val,
+        "balanced_accuracy": balanced_acc,
+        "precision_natural": report["natural"]["precision"],
+        "recall_natural": report["natural"]["recall"],
+        "f1_natural": report["natural"]["f1-score"],
+        "precision_attack": report["attack"]["precision"],
+        "recall_attack": report["attack"]["recall"],
+        "f1_attack": report["attack"]["f1-score"],
+        "support_natural": report["natural"]["support"],
+        "support_attack": report["attack"]["support"],
+        "tn": int(conf_matrix[0, 0]),
+        "fp": int(conf_matrix[0, 1]),
+        "fn": int(conf_matrix[1, 0]),
+        "tp": int(conf_matrix[1, 1])
     }
-    
-    print("=" * 60)
-    
-    return loss, accuracy, metrics_dict
-
-def print_training_summary(history, final_loss, final_accuracy, final_metrics, dataset_info, pca_components):
-    """
-    Stampa un riassunto dell'addestramento DNN SmartGrid.
-    Include analisi dell'evoluzione delle metriche durante l'addestramento.
-    
-    Args:
-        history: History dell'addestramento
-        final_loss, final_accuracy: Metriche finali del test set
-        final_metrics: Dizionario con tutte le metriche finali
-        dataset_info: Informazioni sul dataset
-        pca_components: Numero di componenti PCA selezionate
-    """
-    print("=== RIASSUNTO ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID OTTIMIZZATO ===")
-    
-    # Estrai le metriche dalla history
-    train_loss = history.history['loss']
-    train_accuracy = history.history['accuracy']
-    val_loss = history.history['val_loss']
-    val_accuracy = history.history['val_accuracy']
-    
-    actual_epochs = len(train_loss)
-    
-    print(f"Evoluzione delle metriche per epoca (DNN Ottimizzato):")
-    print(f"{'Epoca':<6} {'Train Loss':<12} {'Train Acc':<12} {'Val Loss':<12} {'Val Acc':<12}")
-    print("-" * 60)
-    
-    # Mostra alcune epoche rappresentative
-    epochs_to_show = min(10, actual_epochs)
-    step = max(1, actual_epochs // epochs_to_show)
-    
-    for i in range(0, actual_epochs, step):
-        epoch = i + 1
-        print(f"{epoch:<6} {train_loss[i]:<12.4f} {train_accuracy[i]:<12.4f} "
-              f"{val_loss[i]:<12.4f} {val_accuracy[i]:<12.4f}")
-    
-    # Mostra sempre l'ultima epoca
-    if actual_epochs > 1 and (actual_epochs - 1) % step != 0:
-        i = actual_epochs - 1
-        epoch = actual_epochs
-        print(f"{epoch:<6} {train_loss[i]:<12.4f} {train_accuracy[i]:<12.4f} "
-              f"{val_loss[i]:<12.4f} {val_accuracy[i]:<12.4f}")
-    
-    print(f"\nRisultati finali DNN Ottimizzato:")
-    print(f"  - Loss finale (Test): {final_loss:.4f}")
-    print(f"  - Accuracy finale (Test): {final_accuracy:.4f}")
-    print(f"  - Precision (Test): {final_metrics['precision']:.4f}")
-    print(f"  - Recall (Test): {final_metrics['recall']:.4f}")
-    print(f"  - F1-Score (Test): {final_metrics['f1_score']:.4f}")
-    print(f"  - AUC (Test): {final_metrics['auc']:.4f}")
-    print(f"  - Miglioramento accuracy: {(final_accuracy - train_accuracy[0]):.4f}")
-    print(f"  - Epoche effettive: {actual_epochs}")
-    
-    # Informazioni sul dataset e modello utilizzato
-    print(f"\nInformazioni dataset e modello:")
-    print(f"  - File utilizzati: {dataset_info['total_files']} (data{min(dataset_info['files_loaded'])}.csv - data{max(dataset_info['files_loaded'])}.csv)")
-    print(f"  - Campioni totali processati: {dataset_info['total_samples']}")
-    print(f"  - Feature originali: {dataset_info['features']}")
-    print(f"  - Feature dopo PCA: {pca_components}")
-    print(f"  - Riduzione dimensionalità: {(1-pca_components/dataset_info['features'])*100:.1f}%")
-    print(f"  - Proporzione attacchi: {dataset_info['attack_ratio']*100:.2f}%")
-    print(f"  - Suddivisione: 70% train, 15% validation, 15% test")
-    print(f"  - Pipeline preprocessing: Split → Imputazione → Normalizzazione → SMOTE → PCA")
-    print(f"  - Architettura: DNN Ottimizzata (3 layer nascosti: 128→64→32)")
-    print(f"  - Regolarizzazione: Dropout 0.2 + L2 0.0001 + BatchNormalization")
-    print(f"  - Ottimizzazioni: Learning Rate 0.0001 + Gradient Clipping + Batch Size 16")
-    print(f"  - Callback: EarlyStopping (patience 15) + ReduceLROnPlateau (patience 7)")
-    
-    print("\n" + "=" * 80)
-    print("ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID OTTIMIZZATO COMPLETATO")
-    print("Performance significativamente migliorate rispetto alla versione precedente.")
-    print("=" * 80)
 
 def main():
-    """
-    Funzione principale per l'addestramento centralizzato SmartGrid con DNN ottimizzata.
-    """
-    print("INIZIO ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID OTTIMIZZATO")
-    print("Questo script addestra un modello DNN ottimizzato di rilevamento intrusioni SmartGrid")
-    print("usando un approccio centralizzato con iperparametri corretti per buone performance.")
-    print("Pipeline: Split → Imputazione → Normalizzazione → SMOTE → PCA")
-    print("Modello: Deep Neural Network ottimizzata (3 layer nascosti) con regolarizzazione corretta")
-    print("Ottimizzazioni: Learning Rate ridotto, Batch Size piccolo, Gradient Clipping")
-    print("Suddivisione: 70% train, 15% validation, 15% test")
-    print("=" * 80)
-    
+    print("INIZIO ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID (PIPELINE FEDERATA + FEATURE IMPORTANCE)")
     try:
         # 1. Carica i dati grezzi
         X, y, dataset_info = load_centralized_smartgrid_data()
-        
-        # STEP 1: Suddividi in train/validation/test CON DATI ORIGINALI
+        # 2. Split train/val/test
         X_train_raw, X_val_raw, X_test_raw, y_train, y_val, y_test = split_train_validation_test(
-            X, y,
-            train_size=0.7,
-            val_size=0.15,
-            test_size=0.15,
-            random_state=42
+            X, y, train_size=0.7, val_size=0.15, test_size=0.15, random_state=42
         )
-        
-        # STEP 2-3: Applica pipeline di preprocessing
-        preprocessing_pipeline = create_preprocessing_pipeline()
-        
-        print(f"=== STEP 2-3: APPLICAZIONE PIPELINE PREPROCESSING ===")
-        print(f"  - Fit della pipeline sui dati di training")
-        print(f"  - Transform su training, validation e test")
-        
-        X_train_preprocessed = preprocessing_pipeline.fit_transform(X_train_raw)
-        X_val_preprocessed = preprocessing_pipeline.transform(X_val_raw)
-        X_test_preprocessed = preprocessing_pipeline.transform(X_test_raw)
-        
-        print(f"  - Training preprocessed shape: {X_train_preprocessed.shape}")
-        print(f"  - Validation preprocessed shape: {X_val_preprocessed.shape}")
-        print(f"  - Test preprocessed shape: {X_test_preprocessed.shape}")
-        print("=" * 60)
-        
-        # STEP 4: Applica SMOTE solo sul training set
-        X_train_balanced, y_train_balanced = apply_smote_balancing(X_train_preprocessed, y_train)
-        
-        # STEP 5: Applica PCA
-        X_train_final, X_val_final, X_test_final, pca_object, n_components = apply_pca_reduction(
-            X_train_balanced, X_val_preprocessed, X_test_preprocessed,
-            variance_threshold=0.95
-        )
-        
-        # 6. Crea il modello DNN ottimizzato
-        model = create_smartgrid_dnn_model(n_components)
-        
-        # 7. Addestra il modello DNN ottimizzato
-        history = train_smartgrid_dnn_model(model, X_train_final, y_train_balanced, X_val_final, y_val)
-        
-        # 8. Valuta il modello sul validation set
+        # 3. Pipeline identica al federato (clipping, imputazione, rimozione quasi-costanti, scaling)
+        X_train_scaled, X_val_scaled, X_test_scaled = centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw)
+
+        # === FEATURE IMPORTANCE PRIMA DELLA PCA ===
+        print("\n[Centralizzato] Feature importance PRIMA della PCA:")
+        feature_names = list(X_train_raw.columns)
+        feature_importance_analysis(X_train_scaled, y_train, feature_names=feature_names, n_estimators=100, title="Prima della PCA", max_show=20)
+
+        # 4. PCA (fit solo sul train)
+        X_train_pca, pca_object = apply_pca(X_train_scaled)
+        X_val_pca = apply_pca(X_val_scaled, pca_obj=pca_object)
+        X_test_pca = apply_pca(X_test_scaled, pca_obj=pca_object)
+
+        # === FEATURE IMPORTANCE DOPO LA PCA ===
+        print("\n[Centralizzato] Feature importance DOPO la PCA (componenti PCA):")
+        pca_feature_names = [f"PCA_{i+1}" for i in range(X_train_pca.shape[1])]
+        feature_importance_analysis(X_train_pca, y_train, feature_names=pca_feature_names, n_estimators=100, title="Dopo la PCA", max_show=20)
+
+        # 5. Crea e addestra il modello DNN
+        model = create_smartgrid_dnn_model(X_train_pca.shape[1])
+        history = train_smartgrid_dnn_model(model, X_train_pca, y_train, X_val_pca, y_val)
+
+        # 6. Valuta sul test set
         print("\n" + "=" * 80)
-        val_loss, val_accuracy, val_metrics = evaluate_smartgrid_model(model, X_val_final, y_val, "Validation")
-        
-        # 9. Valuta il modello sul test set (valutazione finale)
-        print("\n" + "=" * 80)
-        final_loss, final_accuracy, final_metrics = evaluate_smartgrid_model(model, X_test_final, y_test, "Test")
-        
-        # 10. Stampa riassunto finale
-        print_training_summary(history, final_loss, final_accuracy, final_metrics, dataset_info, n_components)
-        
+        final_loss, final_accuracy, final_metrics = evaluate_smartgrid_model(model, X_test_pca, y_test, "Test", threshold=0.5)
+
+        print("\nPipeline centralizzata completata.\n")
     except Exception as e:
         print(f"Errore durante l'esecuzione: {e}")
         import traceback
