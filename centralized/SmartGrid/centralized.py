@@ -11,13 +11,30 @@ from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score, classification_report, confusion_matrix
 from sklearn.ensemble import RandomForestClassifier
-import time
 import sys
 import os
+import warnings
+warnings.filterwarnings('ignore')
 
-# == CONFIGURAZIONI IDENTICHE AL FEDERATO ==
-PCA_COMPONENTS = 21
+# ========== PARAMETRI GLOBALI (identici al federato) ==========
+# PCA Statici
+PCA_COMPONENTS = 74
 PCA_RANDOM_STATE = 42
+
+# Configurazione modello DNN 
+ACTIVATION_FUNCTION = 'relu'  # 'relu', 'leaky_relu', 'selu'
+USE_ADAMW = False
+EXTENDED_DROPOUT = True
+
+# Parametri ottimizzati (Optuna)
+DROPOUT_RATE = 0.2
+DROPOUT_FINAL = 0.15
+L2_REG = 0.0002726058480553248
+LEARNING_RATE = 0.006025741928842929
+BATCH_SIZE = 32
+EPOCHS = 15
+
+# ========== FUNZIONI DI PREPROCESSING (identiche al federato) ==========
 
 def fit_clip_outliers_iqr(X, k=5.0):
     q1 = np.nanpercentile(X, 25, axis=0)
@@ -53,7 +70,6 @@ def clean_data_for_pca(X):
     return X_array
 
 def apply_pca(X, pca_obj=None):
-    # Se viene passato un oggetto PCA già fit, usa transform, altrimenti fit_transform
     if pca_obj is None:
         pca = PCA(n_components=PCA_COMPONENTS, random_state=PCA_RANDOM_STATE)
         X_pca = pca.fit_transform(X)
@@ -140,74 +156,97 @@ def split_train_validation_test(X, y, train_size=0.7, val_size=0.15, test_size=0
 
 def centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw):
     """
-    Pipeline identica a quella federata: clipping, imputazione, rimozione quasi-costanti, scaling, PCA.
+    Pipeline identica a quella federata: clipping, imputazione, rimozione quasi-costanti, scaling.
     """
-    # Pulizia inf/NaN
     X_train_clean = clean_data_for_pca(X_train_raw)
     X_val_clean = clean_data_for_pca(X_val_raw)
     X_test_clean = clean_data_for_pca(X_test_raw)
-    # Clipping IQR
     lower, upper = fit_clip_outliers_iqr(X_train_clean, k=5.0)
     X_train_clipped = transform_clip_outliers_iqr(X_train_clean, lower, upper)
     X_val_clipped = transform_clip_outliers_iqr(X_val_clean, lower, upper)
     X_test_clipped = transform_clip_outliers_iqr(X_test_clean, lower, upper)
-    # Imputazione mediana
     imputer = SimpleImputer(strategy='median')
     X_train_imputed = imputer.fit_transform(X_train_clipped)
     X_val_imputed = imputer.transform(X_val_clipped)
     X_test_imputed = imputer.transform(X_test_clipped)
-    # Rimozione quasi-costanti
     X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed, threshold_var=1e-12, threshold_ratio=0.999)
     X_val_reduced = X_val_imputed[:, keep_mask]
     X_test_reduced = X_test_imputed[:, keep_mask]
-    # Scaling
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train_reduced)
     X_val_scaled = scaler.transform(X_val_reduced)
     X_test_scaled = scaler.transform(X_test_reduced)
     return X_train_scaled, X_val_scaled, X_test_scaled
 
-def feature_importance_analysis(X, y, feature_names=None, n_estimators=100, title="Feature Importance", max_show=20):
-    """
-    Calcola e stampa la feature importance con RandomForest.
-    """
-    print("=== ANALISI FEATURE IMPORTANCE (RandomForest) ===")
-    rf = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
-    rf.fit(X, y)
-    importances = rf.feature_importances_
-    indices = np.argsort(importances)[::-1]
-    # Stampa le prime max_show feature
-    print(f"{'Feature':<20} {'Importance':<12}")
-    print("-" * 35)
-    for i in range(min(max_show, len(importances))):
-        fname = f"F{i+1}" if feature_names is None else feature_names[indices[i]]
-        print(f"{fname:<20} {importances[indices[i]]:.6f}")
-    print()
-    return importances, indices
+# ========== FUNZIONI MODELLO/ CALLBACK (identici federato) ==========
 
-def create_smartgrid_dnn_model(input_shape):
-    print("=== CREAZIONE MODELLO DNN CENTRALIZZATO ===")
-    dropout_rate = 0.2
-    l2_reg = 0.0001
+def create_smartgrid_dnn_model():
+    """
+    Modello DNN identico a quello federato, parametri globali.
+    """
+    print(f"[Centralizzato] === CREAZIONE DNN ===")
+    print(f"[Centralizzato] Input features: {PCA_COMPONENTS}")
+    print(f"[Centralizzato] Architettura: {PCA_COMPONENTS} → 112 → 64 → 12 → 10 → 1")
+    print(f"[Centralizzato] Attivazione: {ACTIVATION_FUNCTION}")
+    print(f"[Centralizzato] Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'}")
+    print(f"[Centralizzato] Dropout esteso: {EXTENDED_DROPOUT}")
+
+    # Selezione funzione di attivazione
+    if ACTIVATION_FUNCTION == 'leaky_relu':
+        activation_layer = lambda: layers.LeakyReLU(alpha=0.01)
+        initializer = 'he_normal'
+    elif ACTIVATION_FUNCTION == 'selu':
+        activation_layer = lambda: layers.Activation('selu')
+        initializer = 'lecun_normal'
+    else:  # relu default
+        activation_layer = lambda: layers.Activation('relu')
+        initializer = 'he_normal'
+    
     model = keras.Sequential([
-        layers.Input(shape=(input_shape,), name='input_layer'),
-        layers.Dense(112, activation='relu', kernel_regularizer=regularizers.l2(l2_reg), kernel_initializer='he_normal', name='dense_1'),
+        layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
+        layers.Dense(112, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_1'),
+        activation_layer(),
         layers.BatchNormalization(name='batch_norm_1'),
-        layers.Dropout(dropout_rate, name='dropout_1'),
-        layers.Dense(64, activation='relu', kernel_regularizer=regularizers.l2(l2_reg), kernel_initializer='he_normal', name='dense_2'),
+        layers.Dropout(DROPOUT_RATE, name='dropout_1'),
+
+        layers.Dense(64, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_2'),
+        activation_layer(),
         layers.BatchNormalization(name='batch_norm_2'),
-        layers.Dropout(dropout_rate, name='dropout_2'),
-        layers.Dense(12, activation='relu', kernel_regularizer=regularizers.l2(l2_reg), kernel_initializer='he_normal', name='dense_3'),
+        layers.Dropout(DROPOUT_RATE if EXTENDED_DROPOUT else 0.0, name='dropout_2'),
+
+        layers.Dense(12, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_3'),
+        activation_layer(),
         layers.BatchNormalization(name='batch_norm_3'),
-        layers.Dropout(dropout_rate, name='dropout_3'),
-        layers.Dense(10, activation='relu', kernel_regularizer=regularizers.l2(l2_reg), kernel_initializer='he_normal', name='dense_4'),
+        layers.Dropout(DROPOUT_RATE, name='dropout_3'),
+
+        layers.Dense(10, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_4'),
+        activation_layer(),
         layers.BatchNormalization(name='batch_norm_4'),
-        layers.Dropout(0.15, name='dropout_4'),
+        layers.Dropout(DROPOUT_FINAL, name='dropout_4'),
+
         layers.Dense(1, activation='sigmoid', kernel_initializer='glorot_uniform', name='output_layer')
     ])
-    optimizer = keras.optimizers.Adam(
-        learning_rate=0.006, beta_1=0.9, beta_2=0.999, epsilon=1e-7, clipnorm=1.0
-    )
+
+    if USE_ADAMW:
+        optimizer = tf.keras.optimizers.AdamW(
+            learning_rate=LEARNING_RATE,
+            weight_decay=0.01,
+            beta_1=0.9,
+            beta_2=0.999,
+            epsilon=1e-7,
+            clipnorm=1.0
+        )
+        print(f"[Centralizzato] Ottimizzatore: AdamW")
+    else:
+        optimizer = tf.keras.optimizers.Adam(
+            learning_rate=LEARNING_RATE,
+            beta_1=0.9,
+            beta_2=0.999,
+            epsilon=1e-7,
+            clipnorm=1.0
+        )
+        print(f"[Centralizzato] Ottimizzatore: Adam")
+
     model.compile(
         optimizer=optimizer,
         loss=tf.keras.losses.BinaryCrossentropy(),
@@ -218,22 +257,41 @@ def create_smartgrid_dnn_model(input_shape):
             tf.keras.metrics.AUC(name='auc')
         ]
     )
-    print(f"Modello DNN creato con input shape: {input_shape}")
+
     model.summary()
     return model
 
+def create_training_callbacks():
+    """
+    Callback identici al federato.
+    """
+    callbacks = [
+        EarlyStopping(
+            monitor='val_loss',
+            patience=3,
+            restore_best_weights=True,
+            verbose=1,
+            mode='min',
+            min_delta=0.001
+        ),
+        ReduceLROnPlateau(
+            monitor='val_loss',
+            factor=0.7,
+            patience=2,
+            min_lr=1e-6,
+            verbose=1,
+            mode='min'
+        )
+    ]
+    return callbacks
+
 def train_smartgrid_dnn_model(model, X_train, y_train, X_val, y_val):
     print("=== ADDESTRAMENTO DNN CENTRALIZZATO ===")
-    epochs = 20
-    batch_size = 32
-    callbacks = [
-        EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True, verbose=1),
-        ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2, min_lr=1e-6, verbose=1)
-    ]
+    callbacks = create_training_callbacks()
     history = model.fit(
         X_train, y_train,
-        epochs=epochs,
-        batch_size=batch_size,
+        epochs=EPOCHS,
+        batch_size=BATCH_SIZE,
         validation_data=(X_val, y_val),
         callbacks=callbacks,
         verbose=1,
@@ -283,38 +341,47 @@ def evaluate_smartgrid_model(model, X_test, y_test, set_name="Test", threshold=0
         "tp": int(conf_matrix[1, 1])
     }
 
+# ========== FEATURE IMPORTANCE ANALYSIS (solo centralizzato) ==========
+
+def feature_importance_analysis(X, y, feature_names=None, n_estimators=100, title="Feature Importance", max_show=20):
+    print("=== ANALISI FEATURE IMPORTANCE (RandomForest) ===")
+    rf = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
+    rf.fit(X, y)
+    importances = rf.feature_importances_
+    indices = np.argsort(importances)[::-1]
+    print(f"{'Feature':<20} {'Importance':<12}")
+    print("-" * 35)
+    for i in range(min(max_show, len(importances))):
+        fname = f"F{i+1}" if feature_names is None else feature_names[indices[i]]
+        print(f"{fname:<20} {importances[indices[i]]:.6f}")
+    print()
+    return importances, indices
+
+# ========== MAIN ==========
+
 def main():
     print("INIZIO ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID (PIPELINE FEDERATA + FEATURE IMPORTANCE)")
     try:
-        # 1. Carica i dati grezzi
         X, y, dataset_info = load_centralized_smartgrid_data()
-        # 2. Split train/val/test
         X_train_raw, X_val_raw, X_test_raw, y_train, y_val, y_test = split_train_validation_test(
             X, y, train_size=0.7, val_size=0.15, test_size=0.15, random_state=42
         )
-        # 3. Pipeline identica al federato (clipping, imputazione, rimozione quasi-costanti, scaling)
         X_train_scaled, X_val_scaled, X_test_scaled = centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw)
 
-        # === FEATURE IMPORTANCE PRIMA DELLA PCA ===
         print("\n[Centralizzato] Feature importance PRIMA della PCA:")
         feature_names = list(X_train_raw.columns)
         feature_importance_analysis(X_train_scaled, y_train, feature_names=feature_names, n_estimators=100, title="Prima della PCA", max_show=20)
 
-        # 4. PCA (fit solo sul train)
         X_train_pca, pca_object = apply_pca(X_train_scaled)
         X_val_pca = apply_pca(X_val_scaled, pca_obj=pca_object)
         X_test_pca = apply_pca(X_test_scaled, pca_obj=pca_object)
 
-        # === FEATURE IMPORTANCE DOPO LA PCA ===
         print("\n[Centralizzato] Feature importance DOPO la PCA (componenti PCA):")
         pca_feature_names = [f"PCA_{i+1}" for i in range(X_train_pca.shape[1])]
         feature_importance_analysis(X_train_pca, y_train, feature_names=pca_feature_names, n_estimators=100, title="Dopo la PCA", max_show=20)
 
-        # 5. Crea e addestra il modello DNN
-        model = create_smartgrid_dnn_model(X_train_pca.shape[1])
+        model = create_smartgrid_dnn_model()
         history = train_smartgrid_dnn_model(model, X_train_pca, y_train, X_val_pca, y_val)
-
-        # 6. Valuta sul test set
         print("\n" + "=" * 80)
         final_loss, final_accuracy, final_metrics = evaluate_smartgrid_model(model, X_test_pca, y_test, "Test", threshold=0.5)
 

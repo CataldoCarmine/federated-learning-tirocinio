@@ -18,7 +18,7 @@ import os
 warnings.filterwarnings('ignore')
 
 # CONFIGURAZIONE PCA STATICA 
-PCA_COMPONENTS = 21  # NUMERO FISSO - garantisce compatibilità automatica
+PCA_COMPONENTS = 74  # NUMERO FISSO - garantisce compatibilità automatica
 PCA_RANDOM_STATE = 42
 
 # CONFIGURAZIONE MODELLO DNN

@@ -18,7 +18,7 @@ from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score, cl
 warnings.filterwarnings('ignore')
 
 # CONFIGURAZIONE PCA STATICA 
-PCA_COMPONENTS = 21  # NUMERO FISSO - garantisce compatibilità automatica
+PCA_COMPONENTS = 74  # NUMERO FISSO - garantisce compatibilità automatica
 PCA_RANDOM_STATE = 42
 
 # CONFIGURAZIONE MODELLO DNN 

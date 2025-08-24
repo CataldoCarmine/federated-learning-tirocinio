@@ -25,7 +25,7 @@ from datetime import datetime
 warnings.filterwarnings('ignore')
 
 # Configurazioni fisse (identiche al sistema federato)
-PCA_COMPONENTS = 21
+PCA_COMPONENTS = 74
 PCA_RANDOM_STATE = 42
 
 warnings.filterwarnings('ignore')
