@@ -1,0 +1,13 @@
+{
+  "neurons_layer_1": 112,
+  "neurons_layer_2": 64,
+  "neurons_layer_3": 32,
+  "neurons_layer_4": 12,
+  "dropout_rate": 0.6,
+  "l2_reg": 0.00015030900645056822,
+  "extended_dropout": true,
+  "activation_function": "leaky_relu",
+  "optimizer_type": "adam",
+  "learning_rate": 0.0003646439558980723,
+  "batch_size": 16
+}

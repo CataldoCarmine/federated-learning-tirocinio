@@ -1,0 +1,105 @@
+Trial n. 0 | Stato: 1
+Score: 0.5625661002884599
+Parametri ottimizzati: {
+  "neurons_layer_1": 64,
+  "neurons_layer_2": 64,
+  "neurons_layer_3": 28,
+  "neurons_layer_4": 12,
+  "dropout_rate": 0.2,
+  "l2_reg": 0.00020511104188433984,
+  "extended_dropout": false,
+  "activation_function": "leaky_relu",
+  "optimizer_type": "adam",
+  "learning_rate": 0.00026587543983272726,
+  "batch_size": 32
+}
+Epoche usate: 20
+Batch size: 32
+Subset usato: ['data2.csv', 'data6.csv', 'data9.csv', 'data11.csv', 'data13.csv']
+Precision/Recall [natural]: 0.30518697225572977/0.3501730103806228
+Precision/Recall [attack]:  0.7333901192504259/0.691566265060241
+------------------------------------------------------------
+Trial n. 1 | Stato: 1
+Score: 0.5570552226497687
+Parametri ottimizzati: {
+  "neurons_layer_1": 80,
+  "neurons_layer_2": 40,
+  "neurons_layer_3": 16,
+  "neurons_layer_4": 12,
+  "dropout_rate": 0.2,
+  "l2_reg": 0.0003839629299804173,
+  "extended_dropout": false,
+  "activation_function": "relu",
+  "optimizer_type": "adam",
+  "learning_rate": 0.0016409286730647919,
+  "batch_size": 16
+}
+Epoche usate: 50
+Batch size: 16
+Subset usato: ['data2.csv', 'data6.csv', 'data9.csv', 'data11.csv', 'data13.csv']
+Precision/Recall [natural]: 0.3096118299445471/0.46366782006920415
+Precision/Recall [attack]:  0.7430371352785146/0.6
+------------------------------------------------------------
+Trial n. 2 | Stato: 1
+Score: 0.5328834913098675
+Parametri ottimizzati: {
+  "neurons_layer_1": 128,
+  "neurons_layer_2": 56,
+  "neurons_layer_3": 16,
+  "neurons_layer_4": 4,
+  "dropout_rate": 0.5,
+  "l2_reg": 0.0007591104805282694,
+  "extended_dropout": false,
+  "activation_function": "leaky_relu",
+  "optimizer_type": "adam",
+  "learning_rate": 0.001096821720752952,
+  "batch_size": 16
+}
+Epoche usate: 50
+Batch size: 16
+Subset usato: ['data1.csv', 'data4.csv', 'data8.csv', 'data12.csv', 'data13.csv']
+Precision/Recall [natural]: 0.30755330683050236/0.5773405698778833
+Precision/Recall [attack]:  0.7435158501440923/0.48522299838796346
+------------------------------------------------------------
+Trial n. 3 | Stato: 1
+Score: 0.647116202146742
+Parametri ottimizzati: {
+  "neurons_layer_1": 112,
+  "neurons_layer_2": 64,
+  "neurons_layer_3": 32,
+  "neurons_layer_4": 12,
+  "dropout_rate": 0.6,
+  "l2_reg": 0.00015030900645056822,
+  "extended_dropout": true,
+  "activation_function": "leaky_relu",
+  "optimizer_type": "adam",
+  "learning_rate": 0.0003646439558980723,
+  "batch_size": 16
+}
+Epoche usate: 45
+Batch size: 16
+Subset usato: ['data1.csv', 'data2.csv', 'data3.csv', 'data5.csv', 'data7.csv']
+Precision/Recall [natural]: 0.39621052631578946/0.6669029057406095
+Precision/Recall [attack]:  0.8318425760286225/0.6185155626496409
+------------------------------------------------------------
+Trial n. 4 | Stato: 1
+Score: 0.6171083105083461
+Parametri ottimizzati: {
+  "neurons_layer_1": 32,
+  "neurons_layer_2": 64,
+  "neurons_layer_3": 28,
+  "neurons_layer_4": 6,
+  "dropout_rate": 0.2,
+  "l2_reg": 0.004274869455295219,
+  "extended_dropout": false,
+  "activation_function": "relu",
+  "optimizer_type": "adamw",
+  "learning_rate": 0.0017643967683381545,
+  "batch_size": 16
+}
+Epoche usate: 20
+Batch size: 16
+Subset usato: ['data1.csv', 'data2.csv', 'data3.csv', 'data5.csv', 'data7.csv']
+Precision/Recall [natural]: 0.3752430330524951/0.410347271438696
+Precision/Recall [attack]:  0.7706093189964157/0.7435488161745145
+------------------------------------------------------------
