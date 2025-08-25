@@ -7,6 +7,7 @@ from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 import os
 import warnings
+from datetime import datetime
 warnings.filterwarnings('ignore')
 
 def clip_outliers_iqr(X, k=5.0):
@@ -81,12 +82,7 @@ def varianza_spiegata_per_classe(pca, X_scaled, y):
             }
     return results
 
-def analyze_single_client_pca(client_id, data_dir):
-    """
-    Analizza la PCA per un singolo client.
-    Preprocessing: pulizia inf/NaN, clipping IQR, imputazione mediana, rimozione quasi-costanti, scaling.
-    Calcola anche la varianza post-PCA separata per attacchi e naturali.
-    """
+def analyze_single_client_pca(client_id, data_dir, log_lines):
     file_path = os.path.join(data_dir, f"data{client_id}.csv")
     if not os.path.exists(file_path):
         print(f"File data{client_id}.csv non trovato")
@@ -95,12 +91,15 @@ def analyze_single_client_pca(client_id, data_dir):
         df = pd.read_csv(file_path)
         X = df.drop(columns=["marker"])
         y = (df["marker"] != "Natural").astype(int)
-        print(f"\nAnalisi Client {client_id}:")
-        print(f"  Campioni: {len(df)}")
-        print(f"  Feature originali: {X.shape[1]}")
-        print(f"  Distribuzione attacchi: {y.mean()*100:.1f}%")
+        msg = (
+            f"\nAnalisi Client {client_id}:\n"
+            f"  Campioni: {len(df)}\n"
+            f"  Feature originali: {X.shape[1]}\n"
+            f"  Distribuzione attacchi: {y.mean()*100:.1f}%"
+        )
+        print(msg)
+        log_lines.append(msg)
 
-        # Pulizia inf/NaN
         X_cleaned = clean_data_for_pca_analysis(X)
         X_np = np.array(X_cleaned, dtype=float)
 
@@ -136,6 +135,18 @@ def analyze_single_client_pca(client_id, data_dir):
         varianza_classi = varianza_spiegata_per_classe(pca_full, X_scaled, y)
         attack_var = varianza_classi["attack"]["total_var_proj"]
         natural_var = varianza_classi["natural"]["total_var_proj"]
+
+        msg2 = (
+            f"  Componenti per 90% varianza: {min(n_components_90, X.shape[1])}\n"
+            f"  Componenti per 95% varianza: {min(n_components_95, X.shape[1])}\n"
+            f"  Componenti per 99% varianza: {min(n_components_99, X.shape[1])}\n"
+            f"  Kaiser criterion (λ>1): {min(n_components_kaiser, X.shape[1])}\n"
+            f"  Limite pratico: {min(max_practical, X.shape[1])}\n"
+            f"  Varianza totale post-PCA (attacchi): {attack_var:.2f} su {varianza_classi['attack']['samples']} campioni\n"
+            f"  Varianza totale post-PCA (naturali): {natural_var:.2f} su {varianza_classi['natural']['samples']} campioni"
+        )
+        print(msg2)
+        log_lines.append(msg2)
 
         results = {
             'client_id': client_id,
@@ -173,57 +184,38 @@ def analyze_single_client_pca(client_id, data_dir):
         print(f"Errore analisi client {client_id}: {e}")
         return None
 
-def analyze_all_clients_pca(data_dir, client_range=(1, 16)):
-    """
-    Analizza la PCA per tutti i client disponibili.
-    
-    Args:
-        data_dir: Directory contenente i dati
-        client_range: Range di client da analizzare (default: 1-15)
-    
-    Returns:
-        Lista con risultati analisi per ogni client
-    """
+def analyze_all_clients_pca(data_dir, client_range=(1, 16), log_lines=None):
     print("=" * 60)
     print("Determinazione numero ottimale di componenti PCA")
     print("=" * 60)
-    
+    if log_lines is not None:
+        log_lines.append("=" * 60)
+        log_lines.append("Determinazione numero ottimale di componenti PCA")
+        log_lines.append("=" * 60)
     all_results = []
     
     for client_id in range(client_range[0], client_range[1]):
-        result = analyze_single_client_pca(client_id, data_dir)
+        result = analyze_single_client_pca(client_id, data_dir, log_lines)
         if result is not None:
             all_results.append(result)
     
     return all_results
 
-def summarize_pca_analysis(all_results):
-    """
-    Riassume i risultati dell'analisi PCA e raccomanda numero ottimale di componenti.
-    
-    Args:
-        all_results: Lista con risultati analisi PCA
-    
-    Returns:
-        Dizionario con raccomandazioni
-    """
+def summarize_pca_analysis(all_results, log_lines):
     if not all_results:
         print("Nessun risultato disponibile per l'analisi")
         return None
-    
-    print("\n" + "=" * 60)
-    print("RIASSUNTO ANALISI PCA")
-    print("=" * 60)
-    
-    # Estrai statistiche
+    msg = "\n" + "=" * 60 + "\nRIASSUNTO ANALISI PCA\n" + "=" * 60
+    print(msg)
+    log_lines.append(msg)
+
     n_components_90_list = [r['n_components_90'] for r in all_results]
     n_components_95_list = [r['n_components_95'] for r in all_results]
     n_components_99_list = [r['n_components_99'] for r in all_results]
     kaiser_list = [r['n_components_kaiser'] for r in all_results]
     practical_list = [r['max_practical'] for r in all_results]
     original_features_list = [r['original_features'] for r in all_results]
-    
-    # Calcola statistiche aggregate
+
     stats = {
         'num_clients': len(all_results),
         'original_features_mean': np.mean(original_features_list),
@@ -256,26 +248,25 @@ def summarize_pca_analysis(all_results):
         'practical_min': np.min(practical_list),
         'practical_max': np.max(practical_list)
     }
-    
-    print(f"Client analizzati: {stats['num_clients']}")
-    print(f"Feature originali: {stats['original_features_mean']:.1f} ± {stats['original_features_std']:.1f} (range: {stats['original_features_min']}-{stats['original_features_max']})")
-    print()
-    
-    print("COMPONENTI PCA PER SOGLIA DI VARIANZA:")
-    print(f"  90% varianza: {stats['n_components_90_mean']:.1f} ± {stats['n_components_90_std']:.1f} (range: {stats['n_components_90_min']}-{stats['n_components_90_max']})")
-    print(f"  95% varianza: {stats['n_components_95_mean']:.1f} ± {stats['n_components_95_std']:.1f} (range: {stats['n_components_95_min']}-{stats['n_components_95_max']})")
-    print(f"  99% varianza: {stats['n_components_99_mean']:.1f} ± {stats['n_components_99_std']:.1f} (range: {stats['n_components_99_min']}-{stats['n_components_99_max']})")
-    print()
-    
-    print("ALTRI CRITERI:")
-    print(f"  Kaiser (λ>1): {stats['kaiser_mean']:.1f} ± {stats['kaiser_std']:.1f} (range: {stats['kaiser_min']}-{stats['kaiser_max']})")
-    print(f"  Limite pratico: {stats['practical_mean']:.1f} ± {stats['practical_std']:.1f} (range: {stats['practical_min']}-{stats['practical_max']})")
-    print()
-    
-    # Componenti consigliate
-    print("COMPONENTI CONSIGLIATE:")
-    
-    # Approccio conservativo (95% varianza)
+
+    msg2 = (
+        f"Client analizzati: {stats['num_clients']}\n"
+        f"Feature originali: {stats['original_features_mean']:.1f} ± {stats['original_features_std']:.1f} (range: {stats['original_features_min']}-{stats['original_features_max']})\n\n"
+        f"COMPONENTI PCA PER SOGLIA DI VARIANZA:\n"
+        f"  90% varianza: {stats['n_components_90_mean']:.1f} ± {stats['n_components_90_std']:.1f} (range: {stats['n_components_90_min']}-{stats['n_components_90_max']})\n"
+        f"  95% varianza: {stats['n_components_95_mean']:.1f} ± {stats['n_components_95_std']:.1f} (range: {stats['n_components_95_min']}-{stats['n_components_95_max']})\n"
+        f"  99% varianza: {stats['n_components_99_mean']:.1f} ± {stats['n_components_99_std']:.1f} (range: {stats['n_components_99_min']}-{stats['n_components_99_max']})\n\n"
+        f"ALTRI CRITERI:\n"
+        f"  Kaiser (λ>1): {stats['kaiser_mean']:.1f} ± {stats['kaiser_std']:.1f} (range: {stats['kaiser_min']}-{stats['kaiser_max']})\n"
+        f"  Limite pratico: {stats['practical_mean']:.1f} ± {stats['practical_std']:.1f} (range: {stats['practical_min']}-{stats['practical_max']})\n"
+    )
+    print(msg2)
+    log_lines.append(msg2)
+
+    msg3 = "COMPONENTI CONSIGLIATE:"
+    print(msg3)
+    log_lines.append(msg3)
+
     recommended_95 = int(np.ceil(stats['n_components_95_mean']))
     recommended_95_safe = min(recommended_95, int(stats['practical_mean']))
     
@@ -286,12 +277,15 @@ def summarize_pca_analysis(all_results):
     # Raccomandazione Kaiser
     recommended_kaiser = int(np.ceil(stats['kaiser_mean']))
     recommended_kaiser_safe = min(recommended_kaiser, int(stats['practical_mean']))
-    
-    print(f"  Conservativa (95% varianza): {recommended_95_safe} componenti")
-    print(f"  Bilanciata (90% varianza): {recommended_90_safe} componenti")
-    print(f"  Kaiser criterion: {recommended_kaiser_safe} componenti")
-    
-    # Scelta finale basata su compromessi
+
+    msg4 = (
+        f"  Conservativa (95% varianza): {recommended_95_safe} componenti\n"
+        f"  Bilanciata (90% varianza): {recommended_90_safe} componenti\n"
+        f"  Kaiser criterion: {recommended_kaiser_safe} componenti"
+    )
+    print(msg4)
+    log_lines.append(msg4)
+
     if recommended_95_safe <= 50 and stats['n_components_95_std'] < 10:
         final_recommendation = recommended_95_safe
         justification = f"95% varianza con bassa variabilità tra client (σ={stats['n_components_95_std']:.1f})"
@@ -301,21 +295,27 @@ def summarize_pca_analysis(all_results):
     else:
         final_recommendation = min(40, recommended_kaiser_safe)
         justification = f"Limite conservativo per evitare overfitting"
-    
-    print(f"\nRACCOMANDAZIONE FINALE: {final_recommendation} componenti PCA")
-    print(f"Giustificazione: {justification}")
-    
-    # Dettaglio per client
-    print(f"\nDETTAGLIO PER CLIENT:")
-    print(f"{'Client':<8} {'Campioni':<10} {'Orig':<6} {'90%':<5} {'95%':<5} {'99%':<5} {'Kaiser':<7} {'Pratico':<8}")
-    print("-" * 60)
-    
+
+    msg5 = f"\nRACCOMANDAZIONE FINALE: {final_recommendation} componenti PCA\nGiustificazione: {justification}\n"
+    print(msg5)
+    log_lines.append(msg5)
+
+    msg6 = (
+        f"\nDETTAGLIO PER CLIENT:\n"
+        f"{'Client':<8} {'Campioni':<10} {'Orig':<6} {'90%':<5} {'95%':<5} {'99%':<5} {'Kaiser':<7} {'Pratico':<8}\n"
+        + "-" * 60
+    )
+    print(msg6)
+    log_lines.append(msg6)
+
     for r in all_results:
-        print(f"{r['client_id']:<8} {r['total_samples']:<10} {r['original_features']:<6} "
-              f"{r['n_components_90']:<5} {r['n_components_95']:<5} {r['n_components_99']:<5} "
-              f"{r['n_components_kaiser']:<7} {r['max_practical']:<8}")
-    
-    recommendation = {
+        line = (f"{r['client_id']:<8} {r['total_samples']:<10} {r['original_features']:<6} "
+                f"{r['n_components_90']:<5} {r['n_components_95']:<5} {r['n_components_99']:<5} "
+                f"{r['n_components_kaiser']:<7} {r['max_practical']:<8}")
+        print(line)
+        log_lines.append(line)
+
+    return {
         'recommended_components': final_recommendation,
         'justification': justification,
         'stats': stats,
@@ -324,8 +324,6 @@ def summarize_pca_analysis(all_results):
         'all_results': all_results
     }
     
-    return recommendation
-
 def create_visualization(all_results, recommendation, output_dir):
     """
     Crea grafici di analisi PCA.
@@ -416,6 +414,15 @@ def create_visualization(all_results, recommendation, output_dir):
     except Exception as e:
         print(f"Errore nella creazione dei grafici: {e}")
 
+def save_selected_pca_log(log_lines, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_path = os.path.join(output_dir, f'pca_analysis_report_{timestamp}.txt')
+    with open(log_path, 'w') as f:
+        for line in log_lines:
+            f.write(line + "\n")
+    print(f"✅ Report PCA salvato in: {log_path}")
+
 def main():
     """
     Funzione principale per l'analisi PCA preliminare.
@@ -425,42 +432,35 @@ def main():
     project_root = os.path.dirname(script_dir)
     data_dir = os.path.join(project_root, "data", "SmartGrid")
     output_dir = os.path.join(project_root, "scripts", "results_pca")
-    
-    print("📊 ANALISI PCA PRELIMINARE PER DATASET SMART GRID")
+
+    print("📊 ANALISI PCA PER DATASET SMART GRID")
     print("=" * 70)
     print(f"Directory dati: {data_dir}")
     print(f"Directory output: {output_dir}")
-    
-    # Verifica esistenza directory dati
+
+    log_lines = []
+    log_lines.append("📊 ANALISI PCA PER DATASET SMART GRID")
+    log_lines.append("=" * 70)
+    log_lines.append(f"Directory dati: {data_dir}")
+    log_lines.append(f"Directory output: {output_dir}")
+
     if not os.path.exists(data_dir):
         print(f"❌ ERRORE: Directory dati non trovata: {data_dir}")
         print("Assicurati che la directory data/SmartGrid/ contenga i file data1.csv - data15.csv")
         return
-    
-    # Analizza tutti i client
-    all_results = analyze_all_clients_pca(data_dir, client_range=(1, 16))
-    
+
+    all_results = analyze_all_clients_pca(data_dir, client_range=(1, 16), log_lines=log_lines)
     if not all_results:
         print("❌ ERRORE: Nessun client analizzato con successo")
         return
-    
-    # Riassumi risultati e genera raccomandazioni
-    recommendation = summarize_pca_analysis(all_results)
-    
+
+    recommendation = summarize_pca_analysis(all_results, log_lines)
     if recommendation is None:
         print("❌ ERRORE: Impossibile generare raccomandazioni")
         return
-    
-    # Crea visualizzazioni
+
     create_visualization(all_results, recommendation, output_dir)
-    
-    print("\n" + "=" * 70)
-    print("ANALISI PCA COMPLETATA")
-    print("=" * 70)
-    print(f"🎯 NUMERO RACCOMANDATO DI COMPONENTI PCA: {recommendation['recommended_components']}")
-    print(f"📊 Giustificazione: {recommendation['justification']}")
-    print(f"📁 Grafici salvati in: {output_dir}")
-    print()
-    
+    save_selected_pca_log(log_lines, output_dir)
+
 if __name__ == "__main__":
     main()

@@ -23,15 +23,15 @@ PCA_COMPONENTS = 74
 PCA_RANDOM_STATE = 42
 
 # Configurazione modello DNN 
-ACTIVATION_FUNCTION = 'relu'  # 'relu', 'leaky_relu', 'selu'
+ACTIVATION_FUNCTION = 'leaky_relu'  # 'relu', 'leaky_relu', 'selu'
 USE_ADAMW = False
 EXTENDED_DROPOUT = True
 
 # Parametri ottimizzati (Optuna)
-DROPOUT_RATE = 0.2
-DROPOUT_FINAL = 0.15
-L2_REG = 0.0002726058480553248
-LEARNING_RATE = 0.006025741928842929
+DROPOUT_RATE = 0.4
+DROPOUT_FINAL = DROPOUT_RATE * 0.75
+L2_REG = 0.002063680713812367
+LEARNING_RATE = 0.00033732651610264363
 BATCH_SIZE = 32
 EPOCHS = 100
 
@@ -196,7 +196,7 @@ def create_smartgrid_dnn_model():
     """
     print(f"[Centralizzato] === CREAZIONE DNN ===")
     print(f"[Centralizzato] Input features: {PCA_COMPONENTS}")
-    print(f"[Centralizzato] Architettura: {PCA_COMPONENTS} → 112 → 64 → 12 → 10 → 1")
+    print(f"[Centralizzato] Architettura: {PCA_COMPONENTS} → ... → 1")
     print(f"[Centralizzato] Attivazione: {ACTIVATION_FUNCTION}")
     print(f"[Centralizzato] Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'}")
     print(f"[Centralizzato] Dropout esteso: {EXTENDED_DROPOUT}")
@@ -214,22 +214,22 @@ def create_smartgrid_dnn_model():
     
     model = keras.Sequential([
         layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
-        layers.Dense(112, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_1'),
+        layers.Dense(32, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_1'),
         activation_layer(),
         layers.BatchNormalization(name='batch_norm_1'),
         layers.Dropout(DROPOUT_RATE, name='dropout_1'),
 
-        layers.Dense(64, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_2'),
+        layers.Dense(48, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_2'),
         activation_layer(),
         layers.BatchNormalization(name='batch_norm_2'),
         layers.Dropout(DROPOUT_RATE if EXTENDED_DROPOUT else 0.0, name='dropout_2'),
 
-        layers.Dense(12, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_3'),
+        layers.Dense(16, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_3'),
         activation_layer(),
         layers.BatchNormalization(name='batch_norm_3'),
         layers.Dropout(DROPOUT_RATE, name='dropout_3'),
 
-        layers.Dense(10, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_4'),
+        layers.Dense(4, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_4'),
         activation_layer(),
         layers.BatchNormalization(name='batch_norm_4'),
         layers.Dropout(DROPOUT_FINAL, name='dropout_4'),
@@ -278,16 +278,16 @@ def create_training_callbacks():
     callbacks = [
         EarlyStopping(
             monitor='val_loss',
-            patience=3,
+            patience=8, #Aumentato, l'addestramento si ferma troppo presto
             restore_best_weights=True,
             verbose=1,
             mode='min',
-            min_delta=0.001
+            min_delta=0.001 #Si può aumentare un po' il delta per evitare early stopping troppo sensibile
         ),
         ReduceLROnPlateau(
             monitor='val_loss',
             factor=0.7,
-            patience=2,
+            patience=4, #Aumentato, l'addestramento si ferma troppo presto
             min_lr=1e-6,
             verbose=1,
             mode='min'
@@ -384,7 +384,7 @@ def save_centralized_training_report(history, X_val, y_val, model, feature_impor
 
     results_dir = os.path.join("centralized", "SmartGrid", "results")
     os.makedirs(results_dir, exist_ok=True)
-    timestamp = datetime.now().strftime('%Y%m%d')
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     report_path = os.path.join(results_dir, f"centralized_training_report_{timestamp}.txt")
 
     # Definisci le colonne e la larghezza

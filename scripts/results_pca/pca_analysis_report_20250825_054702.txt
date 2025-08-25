@@ -1,0 +1,230 @@
+📊 ANALISI PCA PER DATASET SMART GRID
+======================================================================
+Directory dati: /Users/carmine/Desktop/federated_flower/data/SmartGrid
+Directory output: /Users/carmine/Desktop/federated_flower/scripts/results_pca
+============================================================
+Determinazione numero ottimale di componenti PCA
+============================================================
+
+Analisi Client 1:
+  Campioni: 4966
+  Feature originali: 128
+  Distribuzione attacchi: 77.8%
+  Componenti per 90% varianza: 13
+  Componenti per 95% varianza: 21
+  Componenti per 99% varianza: 38
+  Kaiser criterion (λ>1): 12
+  Limite pratico: 70
+  Varianza totale post-PCA (attacchi): 87.83 su 3866 campioni
+  Varianza totale post-PCA (naturali): 91.23 su 1100 campioni
+
+Analisi Client 2:
+  Campioni: 5069
+  Feature originali: 128
+  Distribuzione attacchi: 69.5%
+  Componenti per 90% varianza: 14
+  Componenti per 95% varianza: 22
+  Componenti per 99% varianza: 40
+  Kaiser criterion (λ>1): 14
+  Limite pratico: 71
+  Varianza totale post-PCA (attacchi): 91.52 su 3525 campioni
+  Varianza totale post-PCA (naturali): 85.78 su 1544 campioni
+
+Analisi Client 3:
+  Campioni: 5415
+  Feature originali: 128
+  Distribuzione attacchi: 70.4%
+  Componenti per 90% varianza: 15
+  Componenti per 95% varianza: 23
+  Componenti per 99% varianza: 41
+  Kaiser criterion (λ>1): 14
+  Limite pratico: 73
+  Varianza totale post-PCA (attacchi): 94.87 su 3811 campioni
+  Varianza totale post-PCA (naturali): 84.81 su 1604 campioni
+
+Analisi Client 4:
+  Campioni: 5202
+  Feature originali: 128
+  Distribuzione attacchi: 65.4%
+  Componenti per 90% varianza: 14
+  Componenti per 95% varianza: 22
+  Componenti per 99% varianza: 40
+  Kaiser criterion (λ>1): 14
+  Limite pratico: 72
+  Varianza totale post-PCA (attacchi): 95.17 su 3402 campioni
+  Varianza totale post-PCA (naturali): 85.05 su 1800 campioni
+
+Analisi Client 5:
+  Campioni: 5161
+  Feature originali: 128
+  Distribuzione attacchi: 71.3%
+  Componenti per 90% varianza: 15
+  Componenti per 95% varianza: 24
+  Componenti per 99% varianza: 42
+  Kaiser criterion (λ>1): 13
+  Limite pratico: 71
+  Varianza totale post-PCA (attacchi): 91.75 su 3680 campioni
+  Varianza totale post-PCA (naturali): 90.45 su 1481 campioni
+
+Analisi Client 6:
+  Campioni: 4967
+  Feature originali: 128
+  Distribuzione attacchi: 70.3%
+  Componenti per 90% varianza: 14
+  Componenti per 95% varianza: 22
+  Componenti per 99% varianza: 40
+  Kaiser criterion (λ>1): 14
+  Limite pratico: 70
+  Varianza totale post-PCA (attacchi): 91.19 su 3490 campioni
+  Varianza totale post-PCA (naturali): 93.83 su 1477 campioni
+
+Analisi Client 7:
+  Campioni: 5236
+  Feature originali: 128
+  Distribuzione attacchi: 74.7%
+  Componenti per 90% varianza: 12
+  Componenti per 95% varianza: 19
+  Componenti per 99% varianza: 36
+  Kaiser criterion (λ>1): 11
+  Limite pratico: 72
+  Varianza totale post-PCA (attacchi): 84.29 su 3910 campioni
+  Varianza totale post-PCA (naturali): 85.71 su 1326 campioni
+
+Analisi Client 8:
+  Campioni: 5315
+  Feature originali: 128
+  Distribuzione attacchi: 71.0%
+  Componenti per 90% varianza: 11
+  Componenti per 95% varianza: 18
+  Componenti per 99% varianza: 34
+  Kaiser criterion (λ>1): 12
+  Limite pratico: 72
+  Varianza totale post-PCA (attacchi): 84.74 su 3771 campioni
+  Varianza totale post-PCA (naturali): 80.13 su 1544 campioni
+
+Analisi Client 9:
+  Campioni: 5340
+  Feature originali: 128
+  Distribuzione attacchi: 66.9%
+  Componenti per 90% varianza: 12
+  Componenti per 95% varianza: 19
+  Componenti per 99% varianza: 35
+  Kaiser criterion (λ>1): 11
+  Limite pratico: 73
+  Varianza totale post-PCA (attacchi): 83.70 su 3570 campioni
+  Varianza totale post-PCA (naturali): 83.84 su 1770 campioni
+
+Analisi Client 10:
+  Campioni: 5569
+  Feature originali: 128
+  Distribuzione attacchi: 70.4%
+  Componenti per 90% varianza: 13
+  Componenti per 95% varianza: 21
+  Componenti per 99% varianza: 39
+  Kaiser criterion (λ>1): 12
+  Limite pratico: 74
+  Varianza totale post-PCA (attacchi): 91.62 su 3921 campioni
+  Varianza totale post-PCA (naturali): 82.43 su 1648 campioni
+
+Analisi Client 11:
+  Campioni: 5251
+  Feature originali: 128
+  Distribuzione attacchi: 75.6%
+  Componenti per 90% varianza: 14
+  Componenti per 95% varianza: 22
+  Componenti per 99% varianza: 41
+  Kaiser criterion (λ>1): 13
+  Limite pratico: 72
+  Varianza totale post-PCA (attacchi): 90.21 su 3969 campioni
+  Varianza totale post-PCA (naturali): 97.11 su 1282 campioni
+
+Analisi Client 12:
+  Campioni: 5224
+  Feature originali: 128
+  Distribuzione attacchi: 66.1%
+  Componenti per 90% varianza: 12
+  Componenti per 95% varianza: 18
+  Componenti per 99% varianza: 34
+  Kaiser criterion (λ>1): 12
+  Limite pratico: 72
+  Varianza totale post-PCA (attacchi): 88.12 su 3453 campioni
+  Varianza totale post-PCA (naturali): 78.44 su 1771 campioni
+
+Analisi Client 13:
+  Campioni: 5271
+  Feature originali: 128
+  Distribuzione attacchi: 78.1%
+  Componenti per 90% varianza: 13
+  Componenti per 95% varianza: 21
+  Componenti per 99% varianza: 38
+  Kaiser criterion (λ>1): 12
+  Limite pratico: 72
+  Varianza totale post-PCA (attacchi): 90.40 su 4118 campioni
+  Varianza totale post-PCA (naturali): 78.21 su 1153 campioni
+
+Analisi Client 14:
+  Campioni: 5115
+  Feature originali: 128
+  Distribuzione attacchi: 73.5%
+  Componenti per 90% varianza: 13
+  Componenti per 95% varianza: 21
+  Componenti per 99% varianza: 38
+  Kaiser criterion (λ>1): 12
+  Limite pratico: 71
+  Varianza totale post-PCA (attacchi): 87.48 su 3762 campioni
+  Varianza totale post-PCA (naturali): 92.73 su 1353 campioni
+
+Analisi Client 15:
+  Campioni: 5276
+  Feature originali: 128
+  Distribuzione attacchi: 64.7%
+  Componenti per 90% varianza: 12
+  Componenti per 95% varianza: 18
+  Componenti per 99% varianza: 35
+  Kaiser criterion (λ>1): 11
+  Limite pratico: 72
+  Varianza totale post-PCA (attacchi): 86.35 su 3415 campioni
+  Varianza totale post-PCA (naturali): 81.20 su 1861 campioni
+
+============================================================
+RIASSUNTO ANALISI PCA
+============================================================
+Client analizzati: 15
+Feature originali: 128.0 ± 0.0 (range: 128-128)
+
+COMPONENTI PCA PER SOGLIA DI VARIANZA:
+  90% varianza: 13.1 ± 1.1 (range: 11-15)
+  95% varianza: 20.7 ± 1.8 (range: 18-24)
+  99% varianza: 38.1 ± 2.6 (range: 34-42)
+
+ALTRI CRITERI:
+  Kaiser (λ>1): 12.5 ± 1.1 (range: 11-14)
+  Limite pratico: 71.8 ± 1.0 (range: 70-74)
+
+COMPONENTI CONSIGLIATE:
+  Conservativa (95% varianza): 21 componenti
+  Bilanciata (90% varianza): 14 componenti
+  Kaiser criterion: 13 componenti
+
+RACCOMANDAZIONE FINALE: 21 componenti PCA
+Giustificazione: 95% varianza con bassa variabilità tra client (σ=1.8)
+
+
+DETTAGLIO PER CLIENT:
+Client   Campioni   Orig   90%   95%   99%   Kaiser  Pratico 
+------------------------------------------------------------
+1        4966       128    13    21    38    12      70      
+2        5069       128    14    22    40    14      71      
+3        5415       128    15    23    41    14      73      
+4        5202       128    14    22    40    14      72      
+5        5161       128    15    24    42    13      71      
+6        4967       128    14    22    40    14      70      
+7        5236       128    12    19    36    11      72      
+8        5315       128    11    18    34    12      72      
+9        5340       128    12    19    35    11      73      
+10       5569       128    13    21    39    12      74      
+11       5251       128    14    22    41    13      72      
+12       5224       128    12    18    34    12      72      
+13       5271       128    13    21    38    12      72      
+14       5115       128    13    21    38    12      71      
+15       5276       128    12    18    35    11      72      

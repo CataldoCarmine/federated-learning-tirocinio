@@ -5,16 +5,16 @@ TABELLA RIASSUNTIVA METRICHE:
 ============================================================================================================================================
 Epoch   Loss         Accuracy     BalancedAcc    AUC        F1_Score     F1_Natural   F1_Attack    Precision    Precision_Nat   Precision_Att   Recall       Recall_Nat    Recall_Att  
 --------------------------------------------------------------------------------------------------------------------------------------------
-1       0.580014     0.718636     0.556602       0.688706   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
-2       0.576154     0.714723     0.556602       0.688581   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
-3       0.564107     0.710726     0.556602       0.700341   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
-4       0.553448     0.715999     0.556602       0.711082   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
-5       0.552622     0.719316     0.556602       0.713399   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
-6       0.547106     0.715659     0.556602       0.708876   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
-7       0.543576     0.723484     0.556602       0.715369   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
-8       0.567337     0.712427     0.556602       0.700997   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
-9       0.544594     0.722803     0.556602       0.717683   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
-10      0.543002     0.719401     0.556602       0.712353   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
+1       0.591454     0.714213     0.540740       0.679343   0.644959     0.184500     0.832838     0.697270     0.622260        0.727875        0.722548     0.108306      0.973174    
+2       0.567595     0.719231     0.540740       0.698447   0.644959     0.184500     0.832838     0.697270     0.622260        0.727875        0.722548     0.108306      0.973174    
+3       0.562403     0.718210     0.540740       0.693704   0.644959     0.184500     0.832838     0.697270     0.622260        0.727875        0.722548     0.108306      0.973174    
+4       0.558723     0.715234     0.540740       0.706815   0.644959     0.184500     0.832838     0.697270     0.622260        0.727875        0.722548     0.108306      0.973174    
+5       0.563171     0.717955     0.540740       0.693669   0.644959     0.184500     0.832838     0.697270     0.622260        0.727875        0.722548     0.108306      0.973174    
+6       0.562820     0.720422     0.540740       0.701517   0.644959     0.184500     0.832838     0.697270     0.622260        0.727875        0.722548     0.108306      0.973174    
+7       0.543934     0.722548     0.540740       0.718610   0.644959     0.184500     0.832838     0.697270     0.622260        0.727875        0.722548     0.108306      0.973174    
+8       0.553534     0.721443     0.540740       0.708831   0.644959     0.184500     0.832838     0.697270     0.622260        0.727875        0.722548     0.108306      0.973174    
+9       0.548479     0.726036     0.540740       0.707937   0.644959     0.184500     0.832838     0.697270     0.622260        0.727875        0.722548     0.108306      0.973174    
+10      0.546615     0.720252     0.540740       0.720973   0.644959     0.184500     0.832838     0.697270     0.622260        0.727875        0.722548     0.108306      0.973174    
 ============================================================================================================================================
 
 STATISTICHE FINALI:
@@ -22,125 +22,125 @@ STATISTICHE FINALI:
 
 🔹 LOSS:
    Epoche disponibili  : 10
-   Valore iniziale     : 0.580014 
-   Valore finale       : 0.543002 
-   Valore minimo       : 0.543002 
-   Valore massimo      : 0.580014 
-   Valore medio        : 0.557196 
-   Miglioramento       : -0.037011 📉
+   Valore iniziale     : 0.591454 
+   Valore finale       : 0.546615 
+   Valore minimo       : 0.543934 
+   Valore massimo      : 0.591454 
+   Valore medio        : 0.559873 
+   Miglioramento       : -0.044839 📉
 
 🔹 ACCURACY:
    Epoche disponibili  : 10
-   Valore iniziale     : 0.718636 
-   Valore finale       : 0.719401 
-   Valore minimo       : 0.710726 
-   Valore massimo      : 0.723484 
-   Valore medio        : 0.717317 
-   Miglioramento       : 0.000766  📈
+   Valore iniziale     : 0.714213 
+   Valore finale       : 0.720252 
+   Valore minimo       : 0.714213 
+   Valore massimo      : 0.726036 
+   Valore medio        : 0.719554 
+   Miglioramento       : 0.006039  📈
 
 🔹 BALANCEDACC:
    Epoche disponibili  : 10
-   Valore iniziale     : 0.556602 
-   Valore finale       : 0.556602 
-   Valore minimo       : 0.556602 
-   Valore massimo      : 0.556602 
-   Valore medio        : 0.556602 
+   Valore iniziale     : 0.540740 
+   Valore finale       : 0.540740 
+   Valore minimo       : 0.540740 
+   Valore massimo      : 0.540740 
+   Valore medio        : 0.540740 
    Miglioramento       : 0.000000  
 
 🔹 AUC:
    Epoche disponibili  : 10
-   Valore iniziale     : 0.688706 
-   Valore finale       : 0.712353 
-   Valore minimo       : 0.688581 
-   Valore massimo      : 0.717683 
-   Valore medio        : 0.705739 
-   Miglioramento       : 0.023648  📈
+   Valore iniziale     : 0.679343 
+   Valore finale       : 0.720973 
+   Valore minimo       : 0.679343 
+   Valore massimo      : 0.720973 
+   Valore medio        : 0.702985 
+   Miglioramento       : 0.041630  📈
 
 🔹 F1_SCORE:
    Epoche disponibili  : 10
-   Valore iniziale     : 0.662466 
-   Valore finale       : 0.662466 
-   Valore minimo       : 0.662466 
-   Valore massimo      : 0.662466 
-   Valore medio        : 0.662466 
+   Valore iniziale     : 0.644959 
+   Valore finale       : 0.644959 
+   Valore minimo       : 0.644959 
+   Valore massimo      : 0.644959 
+   Valore medio        : 0.644959 
    Miglioramento       : 0.000000  
 
 🔹 F1_NATURAL:
    Epoche disponibili  : 10
-   Valore iniziale     : 0.250749 
-   Valore finale       : 0.250749 
-   Valore minimo       : 0.250749 
-   Valore massimo      : 0.250749 
-   Valore medio        : 0.250749 
+   Valore iniziale     : 0.184500 
+   Valore finale       : 0.184500 
+   Valore minimo       : 0.184500 
+   Valore massimo      : 0.184500 
+   Valore medio        : 0.184500 
    Miglioramento       : 0.000000  
 
 🔹 F1_ATTACK:
    Epoche disponibili  : 10
-   Valore iniziale     : 0.830456 
-   Valore finale       : 0.830456 
-   Valore minimo       : 0.830456 
-   Valore massimo      : 0.830456 
-   Valore medio        : 0.830456 
+   Valore iniziale     : 0.832838 
+   Valore finale       : 0.832838 
+   Valore minimo       : 0.832838 
+   Valore massimo      : 0.832838 
+   Valore medio        : 0.832838 
    Miglioramento       : 0.000000  
 
 🔹 PRECISION:
    Epoche disponibili  : 10
-   Valore iniziale     : 0.691522 
-   Valore finale       : 0.691522 
-   Valore minimo       : 0.691522 
-   Valore massimo      : 0.691522 
-   Valore medio        : 0.691522 
+   Valore iniziale     : 0.697270 
+   Valore finale       : 0.697270 
+   Valore minimo       : 0.697270 
+   Valore massimo      : 0.697270 
+   Valore medio        : 0.697270 
    Miglioramento       : 0.000000  
 
 🔹 PRECISION_NAT:
    Epoche disponibili  : 10
-   Valore iniziale     : 0.583691 
-   Valore finale       : 0.583691 
-   Valore minimo       : 0.583691 
-   Valore massimo      : 0.583691 
-   Valore medio        : 0.583691 
+   Valore iniziale     : 0.622260 
+   Valore finale       : 0.622260 
+   Valore minimo       : 0.622260 
+   Valore massimo      : 0.622260 
+   Valore medio        : 0.622260 
    Miglioramento       : 0.000000  
 
 🔹 PRECISION_ATT:
    Epoche disponibili  : 10
-   Valore iniziale     : 0.735520 
-   Valore finale       : 0.735520 
-   Valore minimo       : 0.735520 
-   Valore massimo      : 0.735520 
-   Valore medio        : 0.735520 
+   Valore iniziale     : 0.727875 
+   Valore finale       : 0.727875 
+   Valore minimo       : 0.727875 
+   Valore massimo      : 0.727875 
+   Valore medio        : 0.727875 
    Miglioramento       : 0.000000  
 
 🔹 RECALL:
    Epoche disponibili  : 10
-   Valore iniziale     : 0.723484 
-   Valore finale       : 0.723484 
-   Valore minimo       : 0.723484 
-   Valore massimo      : 0.723484 
-   Valore medio        : 0.723484 
+   Valore iniziale     : 0.722548 
+   Valore finale       : 0.722548 
+   Valore minimo       : 0.722548 
+   Valore massimo      : 0.722548 
+   Valore medio        : 0.722548 
    Miglioramento       : 0.000000  
 
 🔹 RECALL_NAT:
    Epoche disponibili  : 10
-   Valore iniziale     : 0.159671 
-   Valore finale       : 0.159671 
-   Valore minimo       : 0.159671 
-   Valore massimo      : 0.159671 
-   Valore medio        : 0.159671 
+   Valore iniziale     : 0.108306 
+   Valore finale       : 0.108306 
+   Valore minimo       : 0.108306 
+   Valore massimo      : 0.108306 
+   Valore medio        : 0.108306 
    Miglioramento       : 0.000000  
 
 🔹 RECALL_ATT:
    Epoche disponibili  : 10
-   Valore iniziale     : 0.953533 
-   Valore finale       : 0.953533 
-   Valore minimo       : 0.953533 
-   Valore massimo      : 0.953533 
-   Valore medio        : 0.953533 
+   Valore iniziale     : 0.973174 
+   Valore finale       : 0.973174 
+   Valore minimo       : 0.973174 
+   Valore massimo      : 0.973174 
+   Valore medio        : 0.973174 
    Miglioramento       : 0.000000  
 
 
 MATRICE DI CONFUSIONE SUL VALIDATION SET:
 ----------------------------------------
-tp: 7962  fp: 2863  fn: 388   tn: 544  
+tp: 8126  fp: 3038  fn: 224   tn: 369  
 
 
 FEATURE IMPORTANCE PRIMA DELLA PCA (RandomForest):
@@ -192,5 +192,3 @@ PCA_43                    0.014681
 PCA_9                     0.014660
 PCA_70                    0.014500
 PCA_11                    0.014479
-ADDESTRAMENTO COMPLETATO!
-

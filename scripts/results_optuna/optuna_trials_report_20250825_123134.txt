@@ -1,0 +1,45 @@
+=== REPORT OTTIMIZZAZIONE OPTUNA SMARTGRID ===
+Data: 2025-08-25 12:31:34
+
+Numero totale di trial: 300
+Trial riusciti: 300
+Trial falliti: 0
+
+Score (F1+BalAcc)/2   - Max: 0.6508 | Min: 0.4546 | Media: 0.5731 | Std: 0.0392
+
+Top 10 trial:
+  Trial 108: Score=0.6508 | Subset: ['data1.csv', 'data2.csv', 'data3.csv', 'data5.csv', 'data7.csv']
+    Parametri: {"neurons_layer_1": 32, "neurons_layer_2": 48, "neurons_layer_3": 16, "neurons_layer_4": 4, "dropout_rate": 0.4, "l2_reg": 0.002063680713812367, "extended_dropout": true, "activation_function": "leaky_relu", "optimizer_type": "adam", "learning_rate": 0.00033732651610264363, "batch_size": 32}
+  Trial 75: Score=0.6496 | Subset: ['data1.csv', 'data2.csv', 'data3.csv', 'data5.csv', 'data7.csv']
+    Parametri: {"neurons_layer_1": 128, "neurons_layer_2": 56, "neurons_layer_3": 16, "neurons_layer_4": 4, "dropout_rate": 0.4, "l2_reg": 0.0011351932123754693, "extended_dropout": true, "activation_function": "leaky_relu", "optimizer_type": "adam", "learning_rate": 0.0003474478346212331, "batch_size": 16}
+  Trial 296: Score=0.6488 | Subset: ['data1.csv', 'data2.csv', 'data3.csv', 'data5.csv', 'data7.csv']
+    Parametri: {"neurons_layer_1": 112, "neurons_layer_2": 64, "neurons_layer_3": 20, "neurons_layer_4": 10, "dropout_rate": 0.5, "l2_reg": 0.00026642451449537715, "extended_dropout": true, "activation_function": "leaky_relu", "optimizer_type": "adam", "learning_rate": 0.00033943039794734857, "batch_size": 16}
+  Trial 227: Score=0.6481 | Subset: ['data1.csv', 'data2.csv', 'data3.csv', 'data5.csv', 'data7.csv']
+    Parametri: {"neurons_layer_1": 128, "neurons_layer_2": 64, "neurons_layer_3": 24, "neurons_layer_4": 8, "dropout_rate": 0.4, "l2_reg": 0.0033996877575270534, "extended_dropout": false, "activation_function": "relu", "optimizer_type": "adamw", "learning_rate": 0.0004070461530679259, "batch_size": 16}
+  Trial 166: Score=0.6467 | Subset: ['data1.csv', 'data2.csv', 'data3.csv', 'data5.csv', 'data7.csv']
+    Parametri: {"neurons_layer_1": 112, "neurons_layer_2": 64, "neurons_layer_3": 28, "neurons_layer_4": 4, "dropout_rate": 0.5, "l2_reg": 0.0006166493436817941, "extended_dropout": true, "activation_function": "leaky_relu", "optimizer_type": "adam", "learning_rate": 0.0002236179466372049, "batch_size": 16}
+  Trial 97: Score=0.6460 | Subset: ['data1.csv', 'data2.csv', 'data3.csv', 'data5.csv', 'data7.csv']
+    Parametri: {"neurons_layer_1": 128, "neurons_layer_2": 56, "neurons_layer_3": 24, "neurons_layer_4": 8, "dropout_rate": 0.5, "l2_reg": 0.0017065108934751687, "extended_dropout": true, "activation_function": "relu", "optimizer_type": "adam", "learning_rate": 0.00014542088941823505, "batch_size": 16}
+  Trial 3: Score=0.6452 | Subset: ['data1.csv', 'data2.csv', 'data3.csv', 'data5.csv', 'data7.csv']
+    Parametri: {"neurons_layer_1": 112, "neurons_layer_2": 64, "neurons_layer_3": 32, "neurons_layer_4": 12, "dropout_rate": 0.6, "l2_reg": 0.00015030900645056822, "extended_dropout": true, "activation_function": "leaky_relu", "optimizer_type": "adam", "learning_rate": 0.0003646439558980723, "batch_size": 16}
+  Trial 289: Score=0.6443 | Subset: ['data1.csv', 'data2.csv', 'data3.csv', 'data5.csv', 'data7.csv']
+    Parametri: {"neurons_layer_1": 128, "neurons_layer_2": 56, "neurons_layer_3": 28, "neurons_layer_4": 8, "dropout_rate": 0.4, "l2_reg": 0.0007369210266005482, "extended_dropout": true, "activation_function": "relu", "optimizer_type": "adam", "learning_rate": 0.00030273073141162525, "batch_size": 16}
+  Trial 74: Score=0.6423 | Subset: ['data1.csv', 'data2.csv', 'data3.csv', 'data5.csv', 'data7.csv']
+    Parametri: {"neurons_layer_1": 128, "neurons_layer_2": 64, "neurons_layer_3": 28, "neurons_layer_4": 8, "dropout_rate": 0.5, "l2_reg": 0.00041618065544454406, "extended_dropout": true, "activation_function": "leaky_relu", "optimizer_type": "adam", "learning_rate": 0.0002942817555335511, "batch_size": 16}
+  Trial 121: Score=0.6400 | Subset: ['data1.csv', 'data2.csv', 'data3.csv', 'data5.csv', 'data7.csv']
+    Parametri: {"neurons_layer_1": 48, "neurons_layer_2": 48, "neurons_layer_3": 16, "neurons_layer_4": 4, "dropout_rate": 0.5, "l2_reg": 0.002278355709436968, "extended_dropout": false, "activation_function": "leaky_relu", "optimizer_type": "adam", "learning_rate": 0.00011863847289927871, "batch_size": 32}
+
+Miglioramento medio ultimi 10 vs primi 10 trial: -0.0083
+
+Parametri migliori trovati:
+  neurons_layer_1: 32
+  neurons_layer_2: 48
+  neurons_layer_3: 16
+  neurons_layer_4: 4
+  dropout_rate: 0.4
+  l2_reg: 0.002063680713812367
+  extended_dropout: True
+  activation_function: leaky_relu
+  optimizer_type: adam
+  learning_rate: 0.00033732651610264363
+  batch_size: 32

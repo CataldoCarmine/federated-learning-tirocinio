@@ -26,9 +26,15 @@ PCA_COMPONENTS = 74  # NUMERO FISSO - garantisce compatibilità automatica
 PCA_RANDOM_STATE = 42
 
 # CONFIGURAZIONE MODELLO DNN
-ACTIVATION_FUNCTION = 'relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
+ACTIVATION_FUNCTION = 'leaky_relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
 USE_ADAMW = False  # Ottimizzabile: True per AdamW, False per Adam
 EXTENDED_DROPOUT = True  # Ottimizzabile: True per dropout esteso
+
+LEARNING_RATE = 0.00033732651610264363
+DROPOUT_RATE = 0.4
+DROPOUT_FINAL = DROPOUT_RATE * 0.75
+L2_REG = 0.002063680713812367
+NUM_ROUNDS = 200  # Numero di round di addestramento federato
 
 def save_federated_metrics_report(metrics_list):
 
@@ -38,7 +44,7 @@ def save_federated_metrics_report(metrics_list):
 
     results_dir = os.path.join("results")
     os.makedirs(results_dir, exist_ok=True)
-    timestamp = datetime.now().strftime('%Y%m%d')
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     report_path = os.path.join(results_dir, f"metrics_complete_report_{timestamp}.txt")
 
     cols = [
@@ -281,9 +287,9 @@ def create_dnn_model():
     print(f"[Server] Dropout esteso: {EXTENDED_DROPOUT}")
 
     # Parametri IDENTICI ai client
-    dropout_rate = 0.2
-    dropout_final = 0.15
-    l2_reg = 0.0002726058480553248
+    dropout_rate = DROPOUT_RATE
+    dropout_final = DROPOUT_FINAL
+    l2_reg = L2_REG
 
     # Selezione funzione di attivazione
     if ACTIVATION_FUNCTION == 'leaky_relu':
@@ -301,8 +307,8 @@ def create_dnn_model():
         # Input layer esplicito
         layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
 
-        # Layer 1: 112 neuroni
-        layers.Dense(112, 
+        # Layer 1
+        layers.Dense(32, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_1'),
@@ -310,8 +316,8 @@ def create_dnn_model():
         layers.BatchNormalization(name='batch_norm_1'),
         layers.Dropout(dropout_rate, name='dropout_1'),
 
-        # Layer 2: 64 neuroni
-        layers.Dense(64, 
+        # Layer 2
+        layers.Dense(48, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_2'),
@@ -319,8 +325,8 @@ def create_dnn_model():
         layers.BatchNormalization(name='batch_norm_2'),
         layers.Dropout(dropout_rate if EXTENDED_DROPOUT else 0.0, name='dropout_2'),
 
-        # Layer 3: 12 neuroni
-        layers.Dense(12, 
+        # Layer 3
+        layers.Dense(16, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_3'),
@@ -328,8 +334,8 @@ def create_dnn_model():
         layers.BatchNormalization(name='batch_norm_3'),
         layers.Dropout(dropout_rate, name='dropout_3'),
 
-        # Layer 4: 10 neuroni
-        layers.Dense(10, 
+        # Layer 4
+        layers.Dense(4, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_4'),
@@ -347,7 +353,7 @@ def create_dnn_model():
     # OTTIMIZZATORE  
     if USE_ADAMW:
         optimizer = tf.keras.optimizers.AdamW(
-            learning_rate=0.006025741928842929,  
+            learning_rate=LEARNING_RATE,
             weight_decay=0.01,
             beta_1=0.9,
             beta_2=0.999,
@@ -357,7 +363,7 @@ def create_dnn_model():
         print(f"[Server] Ottimizzatore: AdamW")
     else:
         optimizer = tf.keras.optimizers.Adam(
-            learning_rate=0.006025741928842929,
+            learning_rate=LEARNING_RATE,
             beta_1=0.9,
             beta_2=0.999,
             epsilon=1e-7,
@@ -612,7 +618,6 @@ def print_client_metrics(fit_results):
     f1_list = []
     loss_list = []
     early_stopped_count = 0
-    compatibility_guaranteed_count = 0
     
     for i, (client_proxy, fit_res) in enumerate(fit_results):
         client_samples = fit_res.num_examples
@@ -762,11 +767,6 @@ def main():
     """
     print("=== SERVER FEDERATO SMARTGRID ===")
     print("Configurazione:")
-    print(f"  - PCA Components: {PCA_COMPONENTS}")
-    print(f"  - Architettura: {PCA_COMPONENTS} → 112 → 64 → 12 → 10 → 1")
-    print(f"  - Attivazione: {ACTIVATION_FUNCTION}")
-    print(f"  - Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'}")
-    print(f"  - Learning Rate: 0.0008")
     print("  - Rounds: 200")
     print("  - Client minimi: 2")
     print("  - Strategia: FedAvg personalizzata con architettura fissa")
@@ -777,7 +777,7 @@ def main():
     print("  - Callback: EarlyStopping + ReduceLROnPlateau sui client")
     
     # Configurazione del server
-    config = fl.server.ServerConfig(num_rounds=5)
+    config = fl.server.ServerConfig(NUM_ROUNDS)
     
     # Strategia Federated Averaging personalizzata con architettura fissa
     strategy = SmartGridDNNFedAvgFixed(

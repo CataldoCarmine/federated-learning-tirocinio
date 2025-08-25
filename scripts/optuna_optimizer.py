@@ -402,9 +402,9 @@ class SmartGridOptunaOptimizer:
 
     def _save_results(self, study):
         """
-        Salva i risultati:
+        Salva:
         - solo i parametri ottimali (senza epoche), sovrascrivendo sempre lo stesso file JSON
-        - report dettagliato dei trial in file di testo .txt con timestamp
+        - report sintetico dei trial in file di testo .txt con timestamp
         """
         os.makedirs(results_dir, exist_ok=True)
 
@@ -414,24 +414,43 @@ class SmartGridOptunaOptimizer:
             json.dump(self.best_params, f, indent=2)
         print(f"\n📁 Parametri ottimali salvati in: {params_file} (sovrascritto ogni run)")
 
-        # 2. Salva report dettagliato dei trial (file .txt con timestamp)
+        # 2. Salva report sintetico dei trial
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         trials_report_file = os.path.join(results_dir, f"optuna_trials_report_{timestamp}.txt")
+        trials = [t for t in study.trials if t.value is not None]
+        scores = [t.value for t in trials]
+
         with open(trials_report_file, 'w') as f:
-            for t in study.trials:
-                f.write(f"Trial n. {t.number} | Stato: {t.state}\n")
-                f.write(f"Score: {t.value}\n")
-                params = t.user_attrs.get('all_params', t.params)
-                # Rimuovi 'epochs' dal report dei parametri ottimizzabili
-                params_no_epochs = {k: v for k, v in params.items() if k != 'epochs'}
-                f.write(f"Parametri ottimizzati: {json.dumps(params_no_epochs, indent=2)}\n")
-                f.write(f"Epoche usate: {params.get('epochs', '-')}\n")
-                f.write(f"Batch size: {params.get('batch_size', '-')}\n")
-                f.write(f"Subset usato: {t.user_attrs.get('subset_used')}\n")
-                f.write(f"Precision/Recall [natural]: {t.user_attrs.get('precision_natural')}/{t.user_attrs.get('recall_natural')}\n")
-                f.write(f"Precision/Recall [attack]:  {t.user_attrs.get('precision_attack')}/{t.user_attrs.get('recall_attack')}\n")
-                f.write("-" * 60 + "\n")
-        print(f"📁 Report dettagliato dei trial salvato in: {trials_report_file}")
+            f.write("=== REPORT OTTIMIZZAZIONE OPTUNA SMARTGRID ===\n")
+            f.write(f"Data: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write(f"Numero totale di trial: {len(study.trials)}\n")
+            f.write(f"Trial riusciti: {len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])}\n")
+            f.write(f"Trial falliti: {len([t for t in study.trials if t.state == optuna.trial.TrialState.FAIL])}\n\n")
+
+            if scores:
+                f.write(f"Score (F1+BalAcc)/2   - Max: {np.max(scores):.4f} | Min: {np.min(scores):.4f} | Media: {np.mean(scores):.4f} | Std: {np.std(scores):.4f}\n")
+                top_idx = np.argsort(scores)[::-1][:10]
+                f.write(f"\nTop 10 trial:\n")
+                for idx in top_idx:
+                    t = trials[idx]
+                    params = t.user_attrs.get('all_params', t.params)
+                    params_no_epochs = {k: v for k, v in params.items() if k != 'epochs'}
+                    f.write(f"  Trial {t.number}: Score={t.value:.4f} | Subset: {t.user_attrs.get('subset_used')}\n")
+                    f.write(f"    Parametri: {json.dumps(params_no_epochs)}\n")
+                # Miglioramento progressivo
+                if len(scores) > 20:
+                    early_scores = scores[:10]
+                    recent_scores = scores[-10:]
+                    improvement = np.mean(recent_scores) - np.mean(early_scores)
+                    f.write(f"\nMiglioramento medio ultimi 10 vs primi 10 trial: {improvement:+.4f}\n")
+            else:
+                f.write("Nessun trial riuscito.\n")
+
+            f.write("\nParametri migliori trovati:\n")
+            for param, value in self.best_params.items():
+                f.write(f"  {param}: {value}\n")
+
+        print(f"📁 Report sintetico dei trial salvato in: {trials_report_file}")
 
 def main():
 

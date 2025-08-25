@@ -22,9 +22,17 @@ PCA_COMPONENTS = 74  # NUMERO FISSO - garantisce compatibilità automatica
 PCA_RANDOM_STATE = 42
 
 # CONFIGURAZIONE MODELLO DNN 
-ACTIVATION_FUNCTION = 'relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
+ACTIVATION_FUNCTION = 'leaky_relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
 USE_ADAMW = False  # Ottimizzabile: True per AdamW, False per Adam
 EXTENDED_DROPOUT = True  # Ottimizzabile: True per dropout esteso
+
+LEARNING_RATE = 0.00033732651610264363
+DROPOUT_RATE = 0.4
+DROPOUT_FINAL = DROPOUT_RATE * 0.75
+L2_REG = 0.002063680713812367
+NUM_ROUNDS = 100  
+LOCAL_EPOCHS = 15  
+BATCH_SIZE = 32  
 
 def fit_clip_outliers_iqr(X, k=5.0):
     """
@@ -234,16 +242,16 @@ def create_dnn_model():
     """
     print(f"[Client] === CREAZIONE DNN ===")
     print(f"[Client] Input features: {PCA_COMPONENTS}")
-    print(f"[Client] Architettura: {PCA_COMPONENTS} → 112 → 64 → 12 → 10 → 1")
+    print(f"[Client] Architettura: {PCA_COMPONENTS} → ... → 1")
     print(f"[Client] Attivazione: {ACTIVATION_FUNCTION}")
     print(f"[Client] Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'}")
     print(f"[Client] Dropout esteso: {EXTENDED_DROPOUT}")
     
     # PARAMETRI OTTIMIZZABILI
-    dropout_rate = 0.2         
-    dropout_final = 0.15         
-    l2_reg = 0.0002726058480553248             
-    
+    dropout_rate = DROPOUT_RATE
+    dropout_final = DROPOUT_FINAL
+    l2_reg = L2_REG
+
     # Selezione funzione di attivazione
     if ACTIVATION_FUNCTION == 'leaky_relu':
         activation_layer = lambda: layers.LeakyReLU(alpha=0.01)
@@ -262,8 +270,8 @@ def create_dnn_model():
         # Input layer esplicito 
         layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
 
-        # Layer 1: 112 neuroni
-        layers.Dense(112, 
+        # Layer 1
+        layers.Dense(32, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_1'),
@@ -271,8 +279,8 @@ def create_dnn_model():
         layers.BatchNormalization(name='batch_norm_1'),
         layers.Dropout(dropout_rate, name='dropout_1'),
 
-        # Layer 2: 64 neuroni
-        layers.Dense(64, 
+        # Layer 2
+        layers.Dense(48, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_2'),
@@ -280,8 +288,8 @@ def create_dnn_model():
         layers.BatchNormalization(name='batch_norm_2'),
         layers.Dropout(dropout_rate if EXTENDED_DROPOUT else 0.0, name='dropout_2'),
 
-        # Layer 3: 12 neuroni
-        layers.Dense(12, 
+        # Layer 3
+        layers.Dense(16, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_3'),
@@ -289,8 +297,8 @@ def create_dnn_model():
         layers.BatchNormalization(name='batch_norm_3'),
         layers.Dropout(dropout_rate, name='dropout_3'),
 
-        # Layer 4: 10 neuroni
-        layers.Dense(10, 
+        # Layer 4
+        layers.Dense(4, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_4'),
@@ -308,7 +316,7 @@ def create_dnn_model():
     # OTTIMIZZATORE CONFIGURABILE
     if USE_ADAMW:
         optimizer = tf.keras.optimizers.AdamW(
-            learning_rate=0.006025741928842929,  
+            learning_rate=LEARNING_RATE,  
             weight_decay=0.01,
             beta_1=0.9,
             beta_2=0.999,
@@ -318,7 +326,7 @@ def create_dnn_model():
         print(f"[Client] Ottimizzatore: AdamW")
     else:
         optimizer = tf.keras.optimizers.Adam(
-            learning_rate=0.006025741928842929, 
+            learning_rate=LEARNING_RATE, 
             beta_2=0.999,
             epsilon=1e-7,
             clipnorm=1.0
@@ -350,7 +358,7 @@ def create_training_callbacks():
         # Early Stopping
         EarlyStopping(
             monitor='val_loss',  # monitora val_loss invece che loss
-            patience=3,
+            patience=4, 
             restore_best_weights=True,
             verbose=0,
             mode='min',
@@ -411,8 +419,8 @@ class SmartGridClient(fl.client.NumPyClient):
             return model.get_weights(), 0, {}
         
         # Configurazione addestramento
-        local_epochs = 15
-        batch_size = 32
+        local_epochs = LOCAL_EPOCHS
+        batch_size = BATCH_SIZE
 
         # Class weights
         class_weights = dataset_info['class_weights']
