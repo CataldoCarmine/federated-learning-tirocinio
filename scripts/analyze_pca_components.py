@@ -424,7 +424,7 @@ def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
     data_dir = os.path.join(project_root, "data", "SmartGrid")
-    output_dir = os.path.join(project_root, "analysis", "pca")
+    output_dir = os.path.join(project_root, "scripts", "results_pca")
     
     print("📊 ANALISI PCA PRELIMINARE PER DATASET SMART GRID")
     print("=" * 70)

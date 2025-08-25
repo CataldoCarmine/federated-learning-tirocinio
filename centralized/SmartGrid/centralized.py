@@ -14,6 +14,7 @@ from sklearn.ensemble import RandomForestClassifier
 import sys
 import os
 import warnings
+from datetime import datetime
 warnings.filterwarnings('ignore')
 
 # ========== PARAMETRI GLOBALI (identici al federato) ==========
@@ -32,7 +33,7 @@ DROPOUT_FINAL = 0.15
 L2_REG = 0.0002726058480553248
 LEARNING_RATE = 0.006025741928842929
 BATCH_SIZE = 32
-EPOCHS = 15
+EPOCHS = 100
 
 # ========== FUNZIONI DI PREPROCESSING (identiche al federato) ==========
 
@@ -158,20 +159,29 @@ def centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw):
     """
     Pipeline identica a quella federata: clipping, imputazione, rimozione quasi-costanti, scaling.
     """
+    # Pulizia dei dati
     X_train_clean = clean_data_for_pca(X_train_raw)
     X_val_clean = clean_data_for_pca(X_val_raw)
     X_test_clean = clean_data_for_pca(X_test_raw)
+
+
     lower, upper = fit_clip_outliers_iqr(X_train_clean, k=5.0)
     X_train_clipped = transform_clip_outliers_iqr(X_train_clean, lower, upper)
     X_val_clipped = transform_clip_outliers_iqr(X_val_clean, lower, upper)
     X_test_clipped = transform_clip_outliers_iqr(X_test_clean, lower, upper)
+
+    # Imputazione dei valori mancanti
     imputer = SimpleImputer(strategy='median')
     X_train_imputed = imputer.fit_transform(X_train_clipped)
     X_val_imputed = imputer.transform(X_val_clipped)
     X_test_imputed = imputer.transform(X_test_clipped)
+
+    # Rimozione delle feature quasi-costanti
     X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed, threshold_var=1e-12, threshold_ratio=0.999)
     X_val_reduced = X_val_imputed[:, keep_mask]
     X_test_reduced = X_test_imputed[:, keep_mask]
+
+    # Scaling standard (mean=0, std=1)
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train_reduced)
     X_val_scaled = scaler.transform(X_val_reduced)
@@ -341,21 +351,190 @@ def evaluate_smartgrid_model(model, X_test, y_test, set_name="Test", threshold=0
         "tp": int(conf_matrix[1, 1])
     }
 
-# ========== FEATURE IMPORTANCE ANALYSIS (solo centralizzato) ==========
+# ========== FUNZIONE FEATURE IMPORTANCE (modificata per restituire i valori) ==========
 
 def feature_importance_analysis(X, y, feature_names=None, n_estimators=100, title="Feature Importance", max_show=20):
-    print("=== ANALISI FEATURE IMPORTANCE (RandomForest) ===")
+    """
+    Calcola la feature importance con RandomForestClassifier.
+    Restituisce una lista di tuple (feature_name, importance).
+    """
+    print(f"=== ANALISI FEATURE IMPORTANCE (RandomForest) ===")
     rf = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
     rf.fit(X, y)
     importances = rf.feature_importances_
     indices = np.argsort(importances)[::-1]
+    results = []
     print(f"{'Feature':<20} {'Importance':<12}")
     print("-" * 35)
     for i in range(min(max_show, len(importances))):
         fname = f"F{i+1}" if feature_names is None else feature_names[indices[i]]
-        print(f"{fname:<20} {importances[indices[i]]:.6f}")
+        importance = importances[indices[i]]
+        print(f"{fname:<20} {importance:.6f}")
+        results.append((fname, float(importance)))
     print()
-    return importances, indices
+    return results
+
+# ========== NUOVA FUNZIONE: SALVA METRICHE E FEATURE IMPORTANCE IN FILE TXT ==========
+
+def save_centralized_training_report(history, X_val, y_val, model, feature_importance_before=None, feature_importance_after=None):
+    """
+    Salva un file txt con una tabella delle metriche ad ogni epoca, statistiche per metrica,
+    e una sezione con la feature importance prima/dopo PCA.
+    """
+
+    results_dir = os.path.join("centralized", "SmartGrid", "results")
+    os.makedirs(results_dir, exist_ok=True)
+    timestamp = datetime.now().strftime('%Y%m%d')
+    report_path = os.path.join(results_dir, f"centralized_training_report_{timestamp}.txt")
+
+    # Definisci le colonne e la larghezza
+    cols = [
+        ("epoch", "Epoch", 6),
+        ("loss", "Loss", 11),
+        ("accuracy", "Accuracy", 11),
+        ("balanced_accuracy", "BalancedAcc", 13),
+        ("auc", "AUC", 9),
+        ("f1_score", "F1_Score", 11),
+        ("f1_natural", "F1_Natural", 11),
+        ("f1_attack", "F1_Attack", 11),
+        ("precision", "Precision", 11),
+        ("precision_natural", "Precision_Nat", 14),
+        ("precision_attack", "Precision_Att", 14),
+        ("recall", "Recall", 11),
+        ("recall_natural", "Recall_Nat", 12),
+        ("recall_attack", "Recall_Att", 12),
+    ]
+
+    def fmt(val, width):
+        if val is None or (isinstance(val, float) and np.isnan(val)):
+            return "N/A".ljust(width)
+        return f"{val:.6f}".ljust(width)
+
+    # Raccogli metriche per ogni epoca
+    n_epochs = len(history.history["loss"])
+    metric_rows = []
+    for i in range(n_epochs):
+        # Valuta su validation set il modello ai pesi salvati di quell'epoca
+        # In keras, model.fit non salva il modello ad ogni epoca, quindi dobbiamo stimare le metriche "extra" (f1, balanced acc, ecc.)
+        # usando le predizioni corrispondenti, se disponibili
+        # Per semplicità e didattica, usiamo le metriche di Keras per loss, accuracy, auc
+        # e calcoliamo le metriche custom (f1, balanced acc, ecc) usando il validation set e il modello finale
+        # NOTA: in keras, history salva solo le metriche standard; per metriche custom, le calcoliamo sul modello migliore
+
+        # Prendiamo i valori di loss, accuracy, auc da history
+        loss = history.history["val_loss"][i] if "val_loss" in history.history else np.nan
+        accuracy = history.history["val_accuracy"][i] if "val_accuracy" in history.history else np.nan
+        auc = history.history["val_auc"][i] if "val_auc" in history.history else np.nan
+
+        # Per metriche custom, usiamo il modello finale (approssimazione didattica)
+        y_pred_prob = model.predict(X_val, verbose=0)
+        y_pred_binary = (y_pred_prob > 0.5).astype(int).flatten()
+        balanced_acc = balanced_accuracy_score(y_val, y_pred_binary)
+        f1_score_val = f1_score(y_val, y_pred_binary)
+        report = classification_report(y_val, y_pred_binary, target_names=["natural", "attack"], output_dict=True, zero_division=0)
+        precision = report["weighted avg"]["precision"]
+        recall = report["weighted avg"]["recall"]
+        f1_score_macro = report["weighted avg"]["f1-score"]
+
+        metric_rows.append({
+            "epoch": i+1,
+            "loss": loss,
+            "accuracy": accuracy,
+            "balanced_accuracy": balanced_acc,
+            "auc": auc,
+            "f1_score": f1_score_macro,
+            "f1_natural": report["natural"]["f1-score"],
+            "f1_attack": report["attack"]["f1-score"],
+            "precision": precision,
+            "precision_natural": report["natural"]["precision"],
+            "precision_attack": report["attack"]["precision"],
+            "recall": recall,
+            "recall_natural": report["natural"]["recall"],
+            "recall_attack": report["attack"]["recall"],
+        })
+
+    # Header della tabella
+    title = "RESOCONTO ADDESTRAMENTO CENTRALIZZATO SMARTGRID"
+    n_epochs = len(metric_rows)
+    header = f"{title}\nEpoche totali: {n_epochs}\n\nTABELLA RIASSUNTIVA METRICHE:\n" + "="*140 + "\n"
+    col_headers = "  ".join([name.ljust(width) for _, name, width in cols])
+    sep = "-" * 140
+
+    table_lines = []
+    table_lines.append(col_headers)
+    table_lines.append(sep)
+    for row in metric_rows:
+        vals = []
+        for k, _, width in cols:
+            v = row.get(k, None)
+            if k == "epoch":
+                vals.append(str(v).ljust(width))
+            else:
+                vals.append(fmt(v, width))
+        table_lines.append("  ".join(vals))
+
+    # STATISTICHE FINALI
+    stats_lines = []
+    stats_lines.append("\nSTATISTICHE FINALI:\n" + "="*60 + "\n")
+    for k, name, width in cols:
+        if k == "epoch":
+            continue
+        vals = [row[k] for row in metric_rows if row[k] is not None and not (isinstance(row[k], float) and np.isnan(row[k]))]
+        if not vals:
+            continue
+        start = vals[0]
+        end = vals[-1]
+        minv = np.min(vals)
+        maxv = np.max(vals)
+        meanv = np.mean(vals)
+        miglioramento = end - start if isinstance(end, float) and isinstance(start, float) else 0
+        trend = "📈" if miglioramento > 0 else ("📉" if miglioramento < 0 else "")
+        stats_lines.append(f"🔹 {name.upper()}:")
+        stats_lines.append(f"   Epoche disponibili  : {len(vals)}")
+        stats_lines.append(f"   Valore iniziale     : {fmt(start, 9)}")
+        stats_lines.append(f"   Valore finale       : {fmt(end, 9)}")
+        stats_lines.append(f"   Valore minimo       : {fmt(minv, 9)}")
+        stats_lines.append(f"   Valore massimo      : {fmt(maxv, 9)}")
+        stats_lines.append(f"   Valore medio        : {fmt(meanv, 9)}")
+        stats_lines.append(f"   Miglioramento       : {fmt(miglioramento, 9)} {trend}")
+        stats_lines.append("")
+        
+    conf_matrix = confusion_matrix(y_val, (model.predict(X_val, verbose=0) > 0.5).astype(int).flatten())
+    conf_matrix_lines = []
+    conf_matrix_lines.append("\nMATRICE DI CONFUSIONE SUL VALIDATION SET:\n" + "-"*40)
+    conf_matrix_lines.append(f"{'tp:':<2} {conf_matrix[1, 1]:<5} {'fp:':<2} {conf_matrix[0, 1]:<5} {'fn:':<2} {conf_matrix[1, 0]:<5} {'tn:':<2} {conf_matrix[0, 0]:<5}\n")
+
+    # SEZIONE FEATURE IMPORTANCE (PRIMA E DOPO PCA)
+    fi_lines = []
+    fi_lines.append("\nFEATURE IMPORTANCE PRIMA DELLA PCA (RandomForest):\n" + "-"*60)
+    if feature_importance_before is not None:
+        fi_lines.append(f"{'Feature':<25} {'Importance':<12}")
+        fi_lines.append("-" * 40)
+        for fname, imp in feature_importance_before:
+            fi_lines.append(f"{fname:<25} {imp:.6f}")
+    else:
+        fi_lines.append("Non disponibile")
+    fi_lines.append("\nFEATURE IMPORTANCE DOPO LA PCA (RandomForest):\n" + "-"*60)
+    if feature_importance_after is not None:
+        fi_lines.append(f"{'PCA_Component':<25} {'Importance':<12}")
+        fi_lines.append("-" * 40)
+        for fname, imp in feature_importance_after:
+            fi_lines.append(f"{fname:<25} {imp:.6f}")
+    else:
+        fi_lines.append("Non disponibile")
+
+    with open(report_path, "w") as f:
+        f.write(header)
+        for line in table_lines:
+            f.write(line + "\n")
+        f.write("="*140 + "\n")
+        for line in stats_lines:
+            f.write(line + "\n")
+        for line in conf_matrix_lines:
+            f.write(line + "\n")
+        for line in fi_lines:
+            f.write(line + "\n")
+    print(f"\n[SERVER] ✅ Report addestramento centralizzato salvato in: {report_path}")
 
 # ========== MAIN ==========
 
@@ -370,7 +549,7 @@ def main():
 
         print("\n[Centralizzato] Feature importance PRIMA della PCA:")
         feature_names = list(X_train_raw.columns)
-        feature_importance_analysis(X_train_scaled, y_train, feature_names=feature_names, n_estimators=100, title="Prima della PCA", max_show=20)
+        feature_importance_before = feature_importance_analysis(X_train_scaled, y_train, feature_names=feature_names, n_estimators=100, title="Prima della PCA", max_show=20)
 
         X_train_pca, pca_object = apply_pca(X_train_scaled)
         X_val_pca = apply_pca(X_val_scaled, pca_obj=pca_object)
@@ -378,10 +557,13 @@ def main():
 
         print("\n[Centralizzato] Feature importance DOPO la PCA (componenti PCA):")
         pca_feature_names = [f"PCA_{i+1}" for i in range(X_train_pca.shape[1])]
-        feature_importance_analysis(X_train_pca, y_train, feature_names=pca_feature_names, n_estimators=100, title="Dopo la PCA", max_show=20)
+        feature_importance_after = feature_importance_analysis(X_train_pca, y_train, feature_names=pca_feature_names, n_estimators=100, title="Dopo la PCA", max_show=20)
 
         model = create_smartgrid_dnn_model()
         history = train_smartgrid_dnn_model(model, X_train_pca, y_train, X_val_pca, y_val)
+        # Salva report addestramento per tutte le epoche su validation set + feature importance
+        save_centralized_training_report(history, X_val_pca, y_val, model, feature_importance_before=feature_importance_before, feature_importance_after=feature_importance_after)
+
         print("\n" + "=" * 80)
         final_loss, final_accuracy, final_metrics = evaluate_smartgrid_model(model, X_test_pca, y_test, "Test", threshold=0.5)
 

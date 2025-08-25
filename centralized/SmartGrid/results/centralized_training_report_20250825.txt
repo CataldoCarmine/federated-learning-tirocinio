@@ -1,0 +1,196 @@
+RESOCONTO ADDESTRAMENTO CENTRALIZZATO SMARTGRID
+Epoche totali: 10
+
+TABELLA RIASSUNTIVA METRICHE:
+============================================================================================================================================
+Epoch   Loss         Accuracy     BalancedAcc    AUC        F1_Score     F1_Natural   F1_Attack    Precision    Precision_Nat   Precision_Att   Recall       Recall_Nat    Recall_Att  
+--------------------------------------------------------------------------------------------------------------------------------------------
+1       0.580014     0.718636     0.556602       0.688706   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
+2       0.576154     0.714723     0.556602       0.688581   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
+3       0.564107     0.710726     0.556602       0.700341   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
+4       0.553448     0.715999     0.556602       0.711082   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
+5       0.552622     0.719316     0.556602       0.713399   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
+6       0.547106     0.715659     0.556602       0.708876   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
+7       0.543576     0.723484     0.556602       0.715369   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
+8       0.567337     0.712427     0.556602       0.700997   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
+9       0.544594     0.722803     0.556602       0.717683   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
+10      0.543002     0.719401     0.556602       0.712353   0.662466     0.250749     0.830456     0.691522     0.583691        0.735520        0.723484     0.159671      0.953533    
+============================================================================================================================================
+
+STATISTICHE FINALI:
+============================================================
+
+🔹 LOSS:
+   Epoche disponibili  : 10
+   Valore iniziale     : 0.580014 
+   Valore finale       : 0.543002 
+   Valore minimo       : 0.543002 
+   Valore massimo      : 0.580014 
+   Valore medio        : 0.557196 
+   Miglioramento       : -0.037011 📉
+
+🔹 ACCURACY:
+   Epoche disponibili  : 10
+   Valore iniziale     : 0.718636 
+   Valore finale       : 0.719401 
+   Valore minimo       : 0.710726 
+   Valore massimo      : 0.723484 
+   Valore medio        : 0.717317 
+   Miglioramento       : 0.000766  📈
+
+🔹 BALANCEDACC:
+   Epoche disponibili  : 10
+   Valore iniziale     : 0.556602 
+   Valore finale       : 0.556602 
+   Valore minimo       : 0.556602 
+   Valore massimo      : 0.556602 
+   Valore medio        : 0.556602 
+   Miglioramento       : 0.000000  
+
+🔹 AUC:
+   Epoche disponibili  : 10
+   Valore iniziale     : 0.688706 
+   Valore finale       : 0.712353 
+   Valore minimo       : 0.688581 
+   Valore massimo      : 0.717683 
+   Valore medio        : 0.705739 
+   Miglioramento       : 0.023648  📈
+
+🔹 F1_SCORE:
+   Epoche disponibili  : 10
+   Valore iniziale     : 0.662466 
+   Valore finale       : 0.662466 
+   Valore minimo       : 0.662466 
+   Valore massimo      : 0.662466 
+   Valore medio        : 0.662466 
+   Miglioramento       : 0.000000  
+
+🔹 F1_NATURAL:
+   Epoche disponibili  : 10
+   Valore iniziale     : 0.250749 
+   Valore finale       : 0.250749 
+   Valore minimo       : 0.250749 
+   Valore massimo      : 0.250749 
+   Valore medio        : 0.250749 
+   Miglioramento       : 0.000000  
+
+🔹 F1_ATTACK:
+   Epoche disponibili  : 10
+   Valore iniziale     : 0.830456 
+   Valore finale       : 0.830456 
+   Valore minimo       : 0.830456 
+   Valore massimo      : 0.830456 
+   Valore medio        : 0.830456 
+   Miglioramento       : 0.000000  
+
+🔹 PRECISION:
+   Epoche disponibili  : 10
+   Valore iniziale     : 0.691522 
+   Valore finale       : 0.691522 
+   Valore minimo       : 0.691522 
+   Valore massimo      : 0.691522 
+   Valore medio        : 0.691522 
+   Miglioramento       : 0.000000  
+
+🔹 PRECISION_NAT:
+   Epoche disponibili  : 10
+   Valore iniziale     : 0.583691 
+   Valore finale       : 0.583691 
+   Valore minimo       : 0.583691 
+   Valore massimo      : 0.583691 
+   Valore medio        : 0.583691 
+   Miglioramento       : 0.000000  
+
+🔹 PRECISION_ATT:
+   Epoche disponibili  : 10
+   Valore iniziale     : 0.735520 
+   Valore finale       : 0.735520 
+   Valore minimo       : 0.735520 
+   Valore massimo      : 0.735520 
+   Valore medio        : 0.735520 
+   Miglioramento       : 0.000000  
+
+🔹 RECALL:
+   Epoche disponibili  : 10
+   Valore iniziale     : 0.723484 
+   Valore finale       : 0.723484 
+   Valore minimo       : 0.723484 
+   Valore massimo      : 0.723484 
+   Valore medio        : 0.723484 
+   Miglioramento       : 0.000000  
+
+🔹 RECALL_NAT:
+   Epoche disponibili  : 10
+   Valore iniziale     : 0.159671 
+   Valore finale       : 0.159671 
+   Valore minimo       : 0.159671 
+   Valore massimo      : 0.159671 
+   Valore medio        : 0.159671 
+   Miglioramento       : 0.000000  
+
+🔹 RECALL_ATT:
+   Epoche disponibili  : 10
+   Valore iniziale     : 0.953533 
+   Valore finale       : 0.953533 
+   Valore minimo       : 0.953533 
+   Valore massimo      : 0.953533 
+   Valore medio        : 0.953533 
+   Miglioramento       : 0.000000  
+
+
+MATRICE DI CONFUSIONE SUL VALIDATION SET:
+----------------------------------------
+tp: 7962  fp: 2863  fn: 388   tn: 544  
+
+
+FEATURE IMPORTANCE PRIMA DELLA PCA (RandomForest):
+------------------------------------------------------------
+Feature                   Importance  
+----------------------------------------
+R3-PM6:I                  0.021303
+R1-PM2:V                  0.020790
+R2-PA10:IH                0.020316
+R1-PM11:I                 0.016639
+R4-PA1:VH                 0.016392
+R3-PM11:I                 0.016027
+R1-PM5:I                  0.016000
+R2-PA2:VH                 0.015912
+R3-PM9:V                  0.015601
+R2:F                      0.015549
+R2-PA8:VH                 0.015319
+R3-PM4:I                  0.014223
+R3-PM7:V                  0.013874
+R1-PA3:VH                 0.013812
+R3-PA7:VH                 0.013606
+R2-PM12:I                 0.013603
+R3-PM5:I                  0.013447
+R2-PM7:V                  0.013439
+R3-PA6:IH                 0.013434
+R1-PA:ZH                  0.013274
+
+FEATURE IMPORTANCE DOPO LA PCA (RandomForest):
+------------------------------------------------------------
+PCA_Component             Importance  
+----------------------------------------
+PCA_63                    0.031360
+PCA_58                    0.022443
+PCA_74                    0.020923
+PCA_18                    0.017541
+PCA_10                    0.017458
+PCA_1                     0.017018
+PCA_73                    0.016993
+PCA_44                    0.016881
+PCA_4                     0.016521
+PCA_12                    0.016065
+PCA_16                    0.015906
+PCA_68                    0.015893
+PCA_6                     0.015837
+PCA_2                     0.015504
+PCA_57                    0.015477
+PCA_14                    0.015287
+PCA_43                    0.014681
+PCA_9                     0.014660
+PCA_70                    0.014500
+PCA_11                    0.014479
+ADDESTRAMENTO COMPLETATO!
+

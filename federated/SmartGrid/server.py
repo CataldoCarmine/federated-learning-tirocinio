@@ -15,7 +15,11 @@ from sklearn.pipeline import Pipeline
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score, classification_report, confusion_matrix
 import os
+from datetime import datetime
 warnings.filterwarnings('ignore')
+
+all_federated_metrics = []  # Lista di dict, uno per round
+last_confusion_matrix = None
 
 # CONFIGURAZIONE PCA STATICA 
 PCA_COMPONENTS = 74  # NUMERO FISSO - garantisce compatibilità automatica
@@ -25,6 +29,102 @@ PCA_RANDOM_STATE = 42
 ACTIVATION_FUNCTION = 'relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
 USE_ADAMW = False  # Ottimizzabile: True per AdamW, False per Adam
 EXTENDED_DROPOUT = True  # Ottimizzabile: True per dropout esteso
+
+def save_federated_metrics_report(metrics_list):
+
+    if not metrics_list:
+        print("[SERVER] ⚠️ Nessuna metrica da salvare.")
+        return
+
+    results_dir = os.path.join("results")
+    os.makedirs(results_dir, exist_ok=True)
+    timestamp = datetime.now().strftime('%Y%m%d')
+    report_path = os.path.join(results_dir, f"metrics_complete_report_{timestamp}.txt")
+
+    cols = [
+        ("round", "Round", 6),
+        ("loss_distribuita", "Loss", 11),
+        ("accuracy", "Accuracy", 11),
+        ("balanced_accuracy", "BalancedAcc", 13),
+        ("auc", "AUC", 9),
+        ("f1_score", "F1_Score", 11),
+        ("f1_natural", "F1_Natural", 11),
+        ("f1_attack", "F1_Attack", 11),
+        ("precision", "Precision", 11),
+        ("precision_natural", "Precision_Nat", 14),
+        ("precision_attack", "Precision_Att", 14),
+        ("recall", "Recall", 11),
+        ("recall_natural", "Recall_Nat", 12),
+        ("recall_attack", "Recall_Att", 12),
+    ]
+
+    def fmt(val, width):
+        if val is None or (isinstance(val, float) and np.isnan(val)):
+            return "N/A".ljust(width)
+        return f"{val:.6f}".ljust(width)
+
+    # HEADER
+    title = "RESOCONTO ADDESTRAMENTO FEDERATO SMARTGRID"
+    n_rounds = len(metrics_list)
+    header = f"{title}\nRounds totali: {n_rounds}\n\nTABELLA RIASSUNTIVA METRICHE:\n" + "="*140 + "\n"
+    col_headers = "  ".join([name.ljust(width) for _, name, width in cols])
+    sep = "-" * 140
+
+    table_lines = []
+    table_lines.append(col_headers)
+    table_lines.append(sep)
+    for row in metrics_list:
+        vals = []
+        for k, _, width in cols:
+            v = row.get(k, None)
+            if k == "round":
+                vals.append(str(v).ljust(width))
+            else:
+                vals.append(fmt(v, width))
+        table_lines.append("  ".join(vals))
+
+    # STATISTICHE FINALI
+    stats_lines = []
+    stats_lines.append("\nSTATISTICHE FINALI:\n" + "="*60 + "\n")
+    for k, name, width in cols:
+        if k == "round":
+            continue
+        vals = [row[k] for row in metrics_list if row[k] is not None and not (isinstance(row[k], float) and np.isnan(row[k]))]
+        if not vals:
+            continue
+        start = vals[0]
+        end = vals[-1]
+        minv = np.min(vals)
+        maxv = np.max(vals)
+        meanv = np.mean(vals)
+        miglioramento = end - start if isinstance(end, float) and isinstance(start, float) else 0
+        trend = "📈" if miglioramento > 0 else ("📉" if miglioramento < 0 else "")
+        stats_lines.append(f"🔹 {name.upper()}:")
+        stats_lines.append(f"   Rounds disponibili  : {len(vals)}")
+        stats_lines.append(f"   Valore iniziale     : {fmt(start, 9)}")
+        stats_lines.append(f"   Valore finale       : {fmt(end, 9)}")
+        stats_lines.append(f"   Valore minimo       : {fmt(minv, 9)}")
+        stats_lines.append(f"   Valore massimo      : {fmt(maxv, 9)}")
+        stats_lines.append(f"   Valore medio        : {fmt(meanv, 9)}")
+        stats_lines.append(f"   Miglioramento       : {fmt(miglioramento, 9)} {trend}")
+        stats_lines.append("")
+
+    # MATRICE DI CONFUSIONE FINALE
+    if last_confusion_matrix is not None:
+        conf_matrix_lines = []
+        conf_matrix_lines.append("\nMATRICE DI CONFUSIONE SUL VALIDATION SET:\n" + "-"*40)
+        conf_matrix_lines.append(f"{'tp:':<2} {last_confusion_matrix[1, 1]:<5} {'fp:':<2} {last_confusion_matrix[0, 1]:<5} {'fn:':<2} {last_confusion_matrix[1, 0]:<5} {'tn:':<2} {last_confusion_matrix[0, 0]:<5}\n")
+
+    with open(report_path, "w") as f:
+        f.write(header)
+        for line in table_lines:
+            f.write(line + "\n")
+        f.write("="*140 + "\n")
+        for line in conf_matrix_lines:
+            f.write(line + "\n")
+        for line in stats_lines:
+            f.write(line + "\n")
+    print(f"\n[SERVER] ✅ Tabella metriche federate salvata in: {report_path}")
 
 def clip_outliers_iqr(X, k=5.0):
     """
@@ -423,6 +523,30 @@ def get_smartgrid_evaluate_fn():
             print(f"Confusion matrix:")
             print(conf_matrix)
 
+            # --- RACCOLTA METRICHE PER REPORT TXT ---
+            metric_row = {
+                "round": server_round + 1,
+                "loss_distribuita": float(loss),
+                "accuracy": float(accuracy),
+                "balanced_accuracy": float(balanced_acc),
+                "auc": float(auc),
+                "f1_score": float(f1_score_val),
+                "f1_natural": report["natural"]["f1-score"],
+                "f1_attack": report["attack"]["f1-score"],
+                "precision": float(precision),
+                "precision_natural": report["natural"]["precision"],
+                "precision_attack": report["attack"]["precision"],
+                "recall": float(recall),
+                "recall_natural": report["natural"]["recall"],
+                "recall_attack": report["attack"]["recall"],
+            }
+            # Salva ultima confusion matrix per report finale
+            global last_confusion_matrix
+            last_confusion_matrix = conf_matrix
+
+            # Aggiungi alla lista globale delle metriche
+            global all_federated_metrics
+            all_federated_metrics.append(metric_row)
 
             return float(loss), {
                 # Metriche base
@@ -643,7 +767,7 @@ def main():
     print(f"  - Attivazione: {ACTIVATION_FUNCTION}")
     print(f"  - Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'}")
     print(f"  - Learning Rate: 0.0008")
-    print("  - Rounds: 100")
+    print("  - Rounds: 200")
     print("  - Client minimi: 2")
     print("  - Strategia: FedAvg personalizzata con architettura fissa")
     print("  - Valutazione: Dataset globale con PCA fissa (client 14-15)")
@@ -653,7 +777,7 @@ def main():
     print("  - Callback: EarlyStopping + ReduceLROnPlateau sui client")
     
     # Configurazione del server
-    config = fl.server.ServerConfig(num_rounds=100)
+    config = fl.server.ServerConfig(num_rounds=5)
     
     # Strategia Federated Averaging personalizzata con architettura fissa
     strategy = SmartGridDNNFedAvgFixed(
@@ -682,6 +806,13 @@ def main():
             config=config,
             strategy=strategy,
         )
+
+        global all_federated_metrics
+        if all_federated_metrics:
+            save_federated_metrics_report(all_federated_metrics)
+        else:
+            print("[SERVER] ⚠️ Nessuna metrica federata disponibile per il report finale.")
+        
     except Exception as e:
         print(f"Errore durante l'avvio del server: {e}")
         import traceback

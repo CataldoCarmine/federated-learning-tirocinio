@@ -406,7 +406,6 @@ class SmartGridOptunaOptimizer:
         - solo i parametri ottimali (senza epoche), sovrascrivendo sempre lo stesso file JSON
         - report dettagliato dei trial in file di testo .txt con timestamp
         """
-        results_dir = "hyperparameter_optimization/results"
         os.makedirs(results_dir, exist_ok=True)
 
         # 1. Salva SOLO i parametri ottimizzati (file sempre lo stesso)
@@ -435,6 +434,13 @@ class SmartGridOptunaOptimizer:
         print(f"📁 Report dettagliato dei trial salvato in: {trials_report_file}")
 
 def main():
+
+    #Configurazione path
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    global results_dir
+    results_dir = os.path.join(project_root, "scripts", "results_optuna")
+
     if len(sys.argv) != 2:
         print("❌ ERRORE: Numero di argomenti non corretto")
         print("")
