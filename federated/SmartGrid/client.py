@@ -17,9 +17,35 @@ from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score, classification_report, confusion_matrix
 warnings.filterwarnings('ignore')
 
-# CONFIGURAZIONE PCA STATICA 
-PCA_COMPONENTS = 74  # NUMERO FISSO - garantisce compatibilità automatica
-PCA_RANDOM_STATE = 42
+def set_reproducibility_seed(seed=42):
+    """Imposta tutti i seed per garantire riproducibilità"""
+    import random
+    import numpy as np
+    import tensorflow as tf
+    
+    random.seed(seed)
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
+    # Per TensorFlow deterministic operations
+    tf.config.experimental.enable_op_determinism()
+    
+    print(f"[Client] Seed riproducibilità impostato: {seed}")
+
+# Imposta seed di riproducibilità all'avvio
+set_reproducibility_seed(RANDOM_SEED)
+
+# ========== CONFIGURAZIONE ESPERIMENTO ==========
+# Controllo PCA e rimozione feature quasi-costanti
+ENABLE_PCA = True  # True/False per abilitare/disabilitare PCA
+ENABLE_REMOVE_NEAR_CONSTANT = True  # True/False per rimozione feature quasi-costanti
+RANDOM_SEED = 42  # Seed globale per riproducibilità
+
+# CONFIGURAZIONE PCA DINAMICA
+PCA_COMPONENTS = 74  # Numero componenti quando PCA è abilitata
+PCA_RANDOM_STATE = RANDOM_SEED
+
+# Numero di feature dinamico basato sulla configurazione
+INPUT_FEATURES = PCA_COMPONENTS if ENABLE_PCA else (128 if not ENABLE_REMOVE_NEAR_CONSTANT else 54)  # 54 è il numero tipico dopo rimozione quasi-costanti
 
 # CONFIGURAZIONE MODELLO DNN 
 ACTIVATION_FUNCTION = 'leaky_relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
@@ -193,10 +219,15 @@ def load_client_smartgrid_data(client_id):
     X_train_imputed = imputer.fit_transform(X_train_clipped)
     X_val_imputed = imputer.transform(X_val_clipped)
 
-    # STEP 4: Rimozione feature quasi-costanti (usando solo il train)
-    X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed, threshold_var=1e-12, threshold_ratio=0.999)
-    X_val_reduced = X_val_imputed[:, keep_mask]
-    print(f"[Client {client_id}] Feature dopo rimozione quasi-costanti: {X_train_reduced.shape[1]} (da {X_train.shape[1] if 'X_train' in locals() else X_train_imputed.shape[1]})")
+    # STEP 4: Rimozione feature quasi-costanti (condizionale)
+    if ENABLE_REMOVE_NEAR_CONSTANT:
+        X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed, threshold_var=1e-12, threshold_ratio=0.999)
+        X_val_reduced = X_val_imputed[:, keep_mask]
+        print(f"[Client {client_id}] Feature dopo rimozione quasi-costanti: {X_train_reduced.shape[1]} (da {X_train_imputed.shape[1]})")
+    else:
+        X_train_reduced = X_train_imputed
+        X_val_reduced = X_val_imputed
+        print(f"[Client {client_id}] Rimozione feature quasi-costanti DISABILITATA - mantenute {X_train_reduced.shape[1]} feature")
    
     # STEP 5: Scaling standard
     scaler = StandardScaler()
@@ -204,12 +235,24 @@ def load_client_smartgrid_data(client_id):
     X_val_scaled = scaler.transform(X_val_reduced)
     print(f"[Client {client_id}] Preprocessing completato (clipping, imputazione, costanti, scaling)")
    
-   # STEP 6: PCA
-    X_train_final = apply_pca(X_train_scaled, client_id=client_id)
-    X_val_final = apply_pca(X_val_scaled, client_id=client_id)
-    expected_shape = (len(X_train_final), PCA_COMPONENTS)
-    if X_train_final.shape[1] != PCA_COMPONENTS:
-        raise RuntimeError(f"Client {client_id}: PCA output shape inconsistente: {X_train_final.shape} vs {expected_shape}")
+   # STEP 6: PCA (condizionale)
+    if ENABLE_PCA:
+        X_train_final = apply_pca(X_train_scaled, client_id=client_id)
+        X_val_final = apply_pca(X_val_scaled, client_id=client_id)
+        expected_components = PCA_COMPONENTS
+        if X_train_final.shape[1] != expected_components:
+            raise RuntimeError(f"Client {client_id}: PCA output shape inconsistente: {X_train_final.shape[1]} vs {expected_components}")
+        actual_features = expected_components
+        print(f"[Client {client_id}] PCA applicata: {X_train_scaled.shape[1]} → {actual_features} feature")
+    else:
+        X_train_final = X_train_scaled
+        X_val_final = X_val_scaled
+        actual_features = X_train_scaled.shape[1]
+        print(f"[Client {client_id}] PCA DISABILITATA - mantenute {actual_features} feature")
+        
+    # Aggiorna INPUT_FEATURES dinamicamente
+    global INPUT_FEATURES
+    INPUT_FEATURES = actual_features
     class_weights = compute_class_weights(y_train)
    
     # Info dataset
@@ -224,8 +267,8 @@ def load_client_smartgrid_data(client_id):
         'train_attack_ratio': y_train.mean(),
         'val_attack_ratio': y_val.mean(),
         'original_features': X.shape[1],
-        'pca_features': X_train_final.shape[1],
-        'pca_components_fixed': PCA_COMPONENTS,
+        'pca_features': actual_features,
+        'pca_components_fixed': actual_features,
         'class_weights': class_weights,
         'preprocessing_method': 'iqr_clipping_impute_remove_constants_scaling',
         'compatibility_guaranteed': True
@@ -241,11 +284,12 @@ def create_dnn_model():
         Modello Keras compilato con architettura fissa
     """
     print(f"[Client] === CREAZIONE DNN ===")
-    print(f"[Client] Input features: {PCA_COMPONENTS}")
-    print(f"[Client] Architettura: {PCA_COMPONENTS} → ... → 1")
+    print(f"[Client] Input features: {INPUT_FEATURES}")
+    print(f"[Client] Architettura: {INPUT_FEATURES} → ... → 1")
     print(f"[Client] Attivazione: {ACTIVATION_FUNCTION}")
     print(f"[Client] Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'}")
     print(f"[Client] Dropout esteso: {EXTENDED_DROPOUT}")
+    print(f"[Client] Configurazione: PCA={ENABLE_PCA}, RemoveConstant={ENABLE_REMOVE_NEAR_CONSTANT}")
     
     # PARAMETRI OTTIMIZZABILI
     dropout_rate = DROPOUT_RATE
@@ -268,7 +312,7 @@ def create_dnn_model():
     # MODELLO 
     model = keras.Sequential([
         # Input layer esplicito 
-        layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
+        layers.Input(shape=(INPUT_FEATURES,), name='input_layer'),
 
         # Layer 1
         layers.Dense(32, 

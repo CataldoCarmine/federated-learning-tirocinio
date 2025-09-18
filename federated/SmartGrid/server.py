@@ -18,12 +18,38 @@ import os
 from datetime import datetime
 warnings.filterwarnings('ignore')
 
+def set_reproducibility_seed(seed=42):
+    """Imposta tutti i seed per garantire riproducibilità"""
+    import random
+    import numpy as np
+    import tensorflow as tf
+    
+    random.seed(seed)
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
+    # Per TensorFlow deterministic operations
+    tf.config.experimental.enable_op_determinism()
+    
+    print(f"[Server] Seed riproducibilità impostato: {seed}")
+
+# Imposta seed di riproducibilità all'avvio
+set_reproducibility_seed(RANDOM_SEED)
+
 all_federated_metrics = []  # Lista di dict, uno per round
 last_confusion_matrix = None
 
-# CONFIGURAZIONE PCA STATICA 
-PCA_COMPONENTS = 74  # NUMERO FISSO - garantisce compatibilità automatica
-PCA_RANDOM_STATE = 42
+# ========== CONFIGURAZIONE ESPERIMENTO ==========
+# Controllo PCA e rimozione feature quasi-costanti
+ENABLE_PCA = True  # True/False per abilitare/disabilitare PCA
+ENABLE_REMOVE_NEAR_CONSTANT = True  # True/False per rimozione feature quasi-costanti  
+RANDOM_SEED = 42  # Seed globale per riproducibilità
+
+# CONFIGURAZIONE PCA DINAMICA
+PCA_COMPONENTS = 74  # Numero componenti quando PCA è abilitata
+PCA_RANDOM_STATE = RANDOM_SEED
+
+# Numero di feature dinamico basato sulla configurazione
+INPUT_FEATURES = PCA_COMPONENTS if ENABLE_PCA else (128 if not ENABLE_REMOVE_NEAR_CONSTANT else 54)  # 54 è il numero tipico dopo rimozione quasi-costanti
 
 # CONFIGURAZIONE MODELLO DNN
 ACTIVATION_FUNCTION = 'leaky_relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
@@ -224,11 +250,12 @@ def apply_preprocessing_pipeline(X_global):
       - Pulizia inf/NaN
       - Clipping outlier per quantili (feature-wise)
       - Imputazione mediana
-      - Rimozione feature quasi-costanti
+      - Rimozione feature quasi-costanti (condizionale)
       - Scaling standard
-      - PCA fissa
+      - PCA (condizionale)
     """
     print(f"[Server] === PIPELINE PREPROCESSING SERVER ===")
+    print(f"[Server] Configurazione: PCA={ENABLE_PCA}, RemoveConstant={ENABLE_REMOVE_NEAR_CONSTANT}")
 
     # Pulizia preliminare (inf/NaN)
     X_cleaned = clean_data_for_pca(X_global)
@@ -237,20 +264,35 @@ def apply_preprocessing_pipeline(X_global):
     # Imputazione mediana
     imputer = SimpleImputer(strategy='median')
     X_imputed = imputer.fit_transform(X_clipped)
-    # Rimozione feature quasi-costanti
-    X_reduced, keep_mask = remove_near_constant_features(X_imputed, threshold_var=1e-12, threshold_ratio=0.999)
-    print(f"[Server] Feature dopo rimozione quasi-costanti: {X_reduced.shape[1]} (da {X_imputed.shape[1]})")
+    
+    # Rimozione feature quasi-costanti (condizionale)
+    if ENABLE_REMOVE_NEAR_CONSTANT:
+        X_reduced, keep_mask = remove_near_constant_features(X_imputed, threshold_var=1e-12, threshold_ratio=0.999)
+        print(f"[Server] Feature dopo rimozione quasi-costanti: {X_reduced.shape[1]} (da {X_imputed.shape[1]})")
+    else:
+        X_reduced = X_imputed
+        print(f"[Server] Rimozione feature quasi-costanti DISABILITATA - mantenute {X_reduced.shape[1]} feature")
+        
     # Scaling standard
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X_reduced)
     print(f"[Server] Preprocessing completato (clipping, imputazione, costanti, scaling)")
-    # PCA fissa identica ai client (garantisce compatibilità)
-    X_global_final = apply_pca(X_scaled)
-
-    # VERIFICA FINALE: Dimensioni corrette garantite
-    if X_global_final.shape[1] != PCA_COMPONENTS:
-        raise RuntimeError(f"Server PCA output shape inconsistente: {X_global_final.shape[1]} vs {PCA_COMPONENTS}")
-    print(f"[Server] ✅ Pipeline preprocessing con PCA fissa completata")
+    
+    # PCA (condizionale)
+    if ENABLE_PCA:
+        X_global_final = apply_pca(X_scaled)
+        expected_components = PCA_COMPONENTS
+        if X_global_final.shape[1] != expected_components:
+            raise RuntimeError(f"Server PCA output shape inconsistente: {X_global_final.shape[1]} vs {expected_components}")
+        print(f"[Server] ✅ Pipeline preprocessing con PCA completata")
+    else:
+        X_global_final = X_scaled
+        print(f"[Server] ✅ Pipeline preprocessing senza PCA completata")
+        
+    # Aggiorna INPUT_FEATURES dinamicamente
+    global INPUT_FEATURES
+    INPUT_FEATURES = X_global_final.shape[1]
+    
     print(f"[Server] Risultato finale: {X_global_final.shape}")
     return X_global_final
 
@@ -280,11 +322,12 @@ def create_dnn_model():
     Returns:
         Modello Keras compilato IDENTICO ai client
     """
-    print(f"[Server] === CREAZIONE DNN ARCHITETTURA FISSA SERVER ===")
-    print(f"[Server] Architettura: {PCA_COMPONENTS} → 112 → 64 → 12 → 10 → 1")
+    print(f"[Server] === CREAZIONE DNN ARCHITETTURA DINAMICA SERVER ===")
+    print(f"[Server] Input features: {INPUT_FEATURES}")
     print(f"[Server] Attivazione: {ACTIVATION_FUNCTION}")
     print(f"[Server] Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'}")
     print(f"[Server] Dropout esteso: {EXTENDED_DROPOUT}")
+    print(f"[Server] Configurazione: PCA={ENABLE_PCA}, RemoveConstant={ENABLE_REMOVE_NEAR_CONSTANT}")
 
     # Parametri IDENTICI ai client
     dropout_rate = DROPOUT_RATE
@@ -305,7 +348,7 @@ def create_dnn_model():
     # MODELLO
     model = tf.keras.Sequential([
         # Input layer esplicito
-        layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
+        layers.Input(shape=(INPUT_FEATURES,), name='input_layer'),
 
         # Layer 1
         layers.Dense(32, 
@@ -769,12 +812,17 @@ def main():
     print("Configurazione:")
     print("  - Rounds: 200")
     print("  - Client minimi: 2")
-    print("  - Strategia: FedAvg personalizzata con architettura fissa")
-    print("  - Valutazione: Dataset globale con PCA fissa (client 14-15)")
-    print("  - Pipeline: Pulizia → Imputazione → Normalizzazione → PCA fissa")
+    print("  - Strategia: FedAvg personalizzata con architettura dinamica")
+    print("  - Valutazione: Dataset globale con preprocessing dinamico (client 14-15)")
+    print("  - Pipeline: Pulizia → Imputazione → Normalizzazione → [Costanti] → [PCA]")
     print("  - Class weights: Automatici per compensare sbilanciamento")
     print("  - Regolarizzazione: Completa ma semplificata")
     print("  - Callback: EarlyStopping + ReduceLROnPlateau sui client")
+    print(f"  - CONFIGURAZIONE ESPERIMENTO:")
+    print(f"    * PCA abilitata: {ENABLE_PCA}")
+    print(f"    * Rimozione feature quasi-costanti: {ENABLE_REMOVE_NEAR_CONSTANT}")
+    print(f"    * Seed riproducibilità: {RANDOM_SEED}")
+    print(f"    * Input features attese: {INPUT_FEATURES}")
     
     # Configurazione del server
     config = fl.server.ServerConfig(NUM_ROUNDS)

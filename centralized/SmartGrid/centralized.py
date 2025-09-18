@@ -17,10 +17,35 @@ import warnings
 from datetime import datetime
 warnings.filterwarnings('ignore')
 
+def set_reproducibility_seed(seed=42):
+    """Imposta tutti i seed per garantire riproducibilità"""
+    import random
+    import numpy as np
+    import tensorflow as tf
+    
+    random.seed(seed)
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
+    # Per TensorFlow deterministic operations
+    tf.config.experimental.enable_op_determinism()
+    
+    print(f"[Centralizzato] Seed riproducibilità impostato: {seed}")
+
+# Imposta seed di riproducibilità all'avvio
+set_reproducibility_seed(RANDOM_SEED)
+
 # ========== PARAMETRI GLOBALI (identici al federato) ==========
-# PCA Statici
-PCA_COMPONENTS = 74
-PCA_RANDOM_STATE = 42
+# Configurazione esperimento
+ENABLE_PCA = True  # True/False per abilitare/disabilitare PCA
+ENABLE_REMOVE_NEAR_CONSTANT = True  # True/False per rimozione feature quasi-costanti
+RANDOM_SEED = 42  # Seed globale per riproducibilità
+
+# PCA Dinamici
+PCA_COMPONENTS = 74  # Numero componenti quando PCA è abilitata
+PCA_RANDOM_STATE = RANDOM_SEED
+
+# Numero di feature dinamico basato sulla configurazione
+INPUT_FEATURES = PCA_COMPONENTS if ENABLE_PCA else (128 if not ENABLE_REMOVE_NEAR_CONSTANT else 54)  # 54 è il numero tipico dopo rimozione quasi-costanti
 
 # Configurazione modello DNN 
 ACTIVATION_FUNCTION = 'leaky_relu'  # 'relu', 'leaky_relu', 'selu'
@@ -157,13 +182,14 @@ def split_train_validation_test(X, y, train_size=0.7, val_size=0.15, test_size=0
 
 def centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw):
     """
-    Pipeline identica a quella federata: clipping, imputazione, rimozione quasi-costanti, scaling.
+    Pipeline identica a quella federata: clipping, imputazione, rimozione quasi-costanti (condizionale), scaling.
     """
+    print(f"[Centralizzato] Configurazione: PCA={ENABLE_PCA}, RemoveConstant={ENABLE_REMOVE_NEAR_CONSTANT}")
+    
     # Pulizia dei dati
     X_train_clean = clean_data_for_pca(X_train_raw)
     X_val_clean = clean_data_for_pca(X_val_raw)
     X_test_clean = clean_data_for_pca(X_test_raw)
-
 
     lower, upper = fit_clip_outliers_iqr(X_train_clean, k=5.0)
     X_train_clipped = transform_clip_outliers_iqr(X_train_clean, lower, upper)
@@ -176,10 +202,17 @@ def centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw):
     X_val_imputed = imputer.transform(X_val_clipped)
     X_test_imputed = imputer.transform(X_test_clipped)
 
-    # Rimozione delle feature quasi-costanti
-    X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed, threshold_var=1e-12, threshold_ratio=0.999)
-    X_val_reduced = X_val_imputed[:, keep_mask]
-    X_test_reduced = X_test_imputed[:, keep_mask]
+    # Rimozione delle feature quasi-costanti (condizionale)
+    if ENABLE_REMOVE_NEAR_CONSTANT:
+        X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed, threshold_var=1e-12, threshold_ratio=0.999)
+        X_val_reduced = X_val_imputed[:, keep_mask]
+        X_test_reduced = X_test_imputed[:, keep_mask]
+        print(f"[Centralizzato] Feature dopo rimozione quasi-costanti: {X_train_reduced.shape[1]} (da {X_train_imputed.shape[1]})")
+    else:
+        X_train_reduced = X_train_imputed
+        X_val_reduced = X_val_imputed
+        X_test_reduced = X_test_imputed
+        print(f"[Centralizzato] Rimozione feature quasi-costanti DISABILITATA - mantenute {X_train_reduced.shape[1]} feature")
 
     # Scaling standard (mean=0, std=1)
     scaler = StandardScaler()
@@ -195,11 +228,12 @@ def create_smartgrid_dnn_model():
     Modello DNN identico a quello federato, parametri globali.
     """
     print(f"[Centralizzato] === CREAZIONE DNN ===")
-    print(f"[Centralizzato] Input features: {PCA_COMPONENTS}")
-    print(f"[Centralizzato] Architettura: {PCA_COMPONENTS} → ... → 1")
+    print(f"[Centralizzato] Input features: {INPUT_FEATURES}")
+    print(f"[Centralizzato] Architettura: {INPUT_FEATURES} → ... → 1")
     print(f"[Centralizzato] Attivazione: {ACTIVATION_FUNCTION}")
     print(f"[Centralizzato] Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'}")
     print(f"[Centralizzato] Dropout esteso: {EXTENDED_DROPOUT}")
+    print(f"[Centralizzato] Configurazione: PCA={ENABLE_PCA}, RemoveConstant={ENABLE_REMOVE_NEAR_CONSTANT}")
 
     # Selezione funzione di attivazione
     if ACTIVATION_FUNCTION == 'leaky_relu':
@@ -213,7 +247,7 @@ def create_smartgrid_dnn_model():
         initializer = 'he_normal'
     
     model = keras.Sequential([
-        layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
+        layers.Input(shape=(INPUT_FEATURES,), name='input_layer'),
         layers.Dense(32, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_1'),
         activation_layer(),
         layers.BatchNormalization(name='batch_norm_1'),
@@ -540,6 +574,8 @@ def save_centralized_training_report(history, X_val, y_val, model, feature_impor
 
 def main():
     print("INIZIO ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID (PIPELINE FEDERATA + FEATURE IMPORTANCE)")
+    print(f"Configurazione esperimento: PCA={ENABLE_PCA}, RemoveConstant={ENABLE_REMOVE_NEAR_CONSTANT}, Seed={RANDOM_SEED}")
+    
     try:
         X, y, dataset_info = load_centralized_smartgrid_data()
         X_train_raw, X_val_raw, X_test_raw, y_train, y_val, y_test = split_train_validation_test(
@@ -551,18 +587,30 @@ def main():
         feature_names = list(X_train_raw.columns)
         feature_importance_before = feature_importance_analysis(X_train_scaled, y_train, feature_names=feature_names, n_estimators=100, title="Prima della PCA", max_show=20)
 
-        X_train_pca, pca_object = apply_pca(X_train_scaled)
-        X_val_pca = apply_pca(X_val_scaled, pca_obj=pca_object)
-        X_test_pca = apply_pca(X_test_scaled, pca_obj=pca_object)
-
-        print("\n[Centralizzato] Feature importance DOPO la PCA (componenti PCA):")
-        pca_feature_names = [f"PCA_{i+1}" for i in range(X_train_pca.shape[1])]
-        feature_importance_after = feature_importance_analysis(X_train_pca, y_train, feature_names=pca_feature_names, n_estimators=100, title="Dopo la PCA", max_show=20)
+        # PCA condizionale
+        if ENABLE_PCA:
+            X_train_final, pca_object = apply_pca(X_train_scaled)
+            X_val_final = apply_pca(X_val_scaled, pca_obj=pca_object)
+            X_test_final = apply_pca(X_test_scaled, pca_obj=pca_object)
+            
+            print("\n[Centralizzato] Feature importance DOPO la PCA (componenti PCA):")
+            pca_feature_names = [f"PCA_{i+1}" for i in range(X_train_final.shape[1])]
+            feature_importance_after = feature_importance_analysis(X_train_final, y_train, feature_names=pca_feature_names, n_estimators=100, title="Dopo la PCA", max_show=20)
+        else:
+            X_train_final = X_train_scaled
+            X_val_final = X_val_scaled
+            X_test_final = X_test_scaled
+            feature_importance_after = None
+            print("\n[Centralizzato] PCA DISABILITATA - utilizzando feature originali scalate")
+            
+        # Aggiorna INPUT_FEATURES dinamicamente
+        global INPUT_FEATURES
+        INPUT_FEATURES = X_train_final.shape[1]
 
         model = create_smartgrid_dnn_model()
-        history = train_smartgrid_dnn_model(model, X_train_pca, y_train, X_val_pca, y_val)
+        history = train_smartgrid_dnn_model(model, X_train_final, y_train, X_val_final, y_val)
         # Salva report addestramento per tutte le epoche su validation set + feature importance
-        save_centralized_training_report(history, X_val_pca, y_val, model, feature_importance_before=feature_importance_before, feature_importance_after=feature_importance_after)
+        save_centralized_training_report(history, X_val_final, y_val, model, feature_importance_before=feature_importance_before, feature_importance_after=feature_importance_after)
 
         print("\n" + "=" * 80)
         final_loss, final_accuracy, final_metrics = evaluate_smartgrid_model(model, X_test_pca, y_test, "Test", threshold=0.5)
