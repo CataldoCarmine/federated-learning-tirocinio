@@ -45,7 +45,7 @@ PCA_COMPONENTS = 74  # Numero componenti quando PCA è abilitata
 PCA_RANDOM_STATE = RANDOM_SEED
 
 # Numero di feature dinamico basato sulla configurazione
-INPUT_FEATURES = PCA_COMPONENTS if ENABLE_PCA else (128 if not ENABLE_REMOVE_NEAR_CONSTANT else 54)  # 54 è il numero tipico dopo rimozione quasi-costanti
+INPUT_FEATURES = PCA_COMPONENTS if ENABLE_PCA else (128 if not ENABLE_REMOVE_NEAR_CONSTANT else 89)  # 89 è il numero tipico dopo rimozione quasi-costanti per SmartGrid
 
 # CONFIGURAZIONE MODELLO DNN 
 ACTIVATION_FUNCTION = 'leaky_relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
