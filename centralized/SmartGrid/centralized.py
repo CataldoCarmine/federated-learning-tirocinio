@@ -8,37 +8,46 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
-from sklearn.pipeline import Pipeline
+from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score, classification_report, confusion_matrix
-from sklearn.ensemble import RandomForestClassifier
 import sys
 import os
 import warnings
 from datetime import datetime
 warnings.filterwarnings('ignore')
 
-tf.random.set_seed(42)
-np.random.seed(42)
+# ========== CONFIGURAZIONE RIPRODUCIBILITÀ ==========
+RANDOM_SEED = 42
 
-# ========== PARAMETRI GLOBALI (identici al federato) ==========
-# PCA Statici
-PCA_COMPONENTS = 74
-PCA_RANDOM_STATE = 42
+# ========== FLAGS GLOBALI PER CONTROLLO PREPROCESSING ==========
+ENABLE_PCA = True  # Cambia a False per disabilitare la PCA
+ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = True  # Cambia a False per disabilitare rimozione feature quasi-costanti
 
-# Configurazione modello DNN 
-ACTIVATION_FUNCTION = 'leaky_relu'  # 'relu', 'leaky_relu', 'selu'
-USE_ADAMW = False
-EXTENDED_DROPOUT = True
+# CONFIGURAZIONE PCA STATICA
+PCA_COMPONENTS = 21  # NUMERO FISSO - garantisce compatibilità automatica
+PCA_RANDOM_SEED = 42  # Seme specifico per PCA
 
-# Parametri ottimizzati (Optuna)
+# ========== CONFIGURAZIONE MODELLO ==========
+ACTIVATION_FUNCTION = 'leaky_relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
+USE_ADAMW = False  # Ottimizzabile: True per AdamW, False per Adam
+EXTENDED_DROPOUT = True  # Ottimizzabile: True per dropout esteso
+
+LEARNING_RATE = 0.00033732651610264363
 DROPOUT_RATE = 0.4
 DROPOUT_FINAL = DROPOUT_RATE * 0.75
 L2_REG = 0.002063680713812367
-LEARNING_RATE = 0.00033732651610264363
 BATCH_SIZE = 32
 EPOCHS = 100
 
 # ========== FUNZIONI DI PREPROCESSING (identiche al federato) ==========
+def set_reproducibility_seeds():
+    """Imposta tutti i semi per garantire riproducibilità."""
+    np.random.seed(RANDOM_SEED)
+    tf.random.set_seed(RANDOM_SEED)
+    import random
+    random.seed(RANDOM_SEED)
+    os.environ['PYTHONHASHSEED'] = str(RANDOM_SEED)
+    tf.config.experimental.enable_op_determinism()
 
 def fit_clip_outliers_iqr(X, k=5.0):
     q1 = np.nanpercentile(X, 25, axis=0)
@@ -74,18 +83,30 @@ def clean_data_for_pca(X):
     return X_array
 
 def apply_pca(X, pca_obj=None):
+    """Applica PCA con numero FISSO di componenti."""
     if pca_obj is None:
-        pca = PCA(n_components=PCA_COMPONENTS, random_state=PCA_RANDOM_STATE)
+        n_components = min(PCA_COMPONENTS, X.shape[1], len(X))
+        pca = PCA(n_components=n_components, random_state=PCA_RANDOM_SEED)
         X_pca = pca.fit_transform(X)
         return X_pca, pca
     else:
         X_pca = pca_obj.transform(X)
         return X_pca
 
+def compute_class_weights(y):
+    """Calcola i pesi delle classi per compensare lo sbilanciamento."""
+    try:
+        unique_classes = np.unique(y)
+        class_weights = compute_class_weight('balanced', classes=unique_classes, y=y)
+        class_weight_dict = dict(zip(unique_classes, class_weights))
+        return class_weight_dict
+    except Exception as e:
+        unique_classes = np.unique(y)
+        return {cls: 1.0 for cls in unique_classes}
+
 def load_centralized_smartgrid_data():
-    """
-    Carica e unisce tutti i dati SmartGrid per l'addestramento centralizzato.
-    """
+    """Carica e unisce tutti i dati SmartGrid per l'addestramento centralizzato."""
+    set_reproducibility_seeds()
     print("=== CARICAMENTO DATASET SMARTGRID CENTRALIZZATO ===")
     script_dir = os.path.dirname(os.path.abspath(__file__))
     data_dir = os.path.join(script_dir, "..", "..", "data", "SmartGrid")
@@ -159,15 +180,18 @@ def split_train_validation_test(X, y, train_size=0.7, val_size=0.15, test_size=0
     return X_train, X_val, X_test, y_train, y_val, y_test
 
 def centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw):
-    """
-    Pipeline identica a quella federata: clipping, imputazione, rimozione quasi-costanti, scaling.
-    """
+    """Pipeline identica a quella federata, con flag dinamiche."""
+    set_reproducibility_seeds()
+    print(f"=== PREPROCESSING CENTRALIZZATO ===")
+    print(f"PCA: {'ABILITATA' if ENABLE_PCA else 'DISABILITATA'}")
+    print(f"Rimozione feature quasi-costanti: {'ABILITATA' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else 'DISABILITATA'}")
+
     # Pulizia dei dati
     X_train_clean = clean_data_for_pca(X_train_raw)
     X_val_clean = clean_data_for_pca(X_val_raw)
     X_test_clean = clean_data_for_pca(X_test_raw)
 
-
+    # Clipping outlier per quantili
     lower, upper = fit_clip_outliers_iqr(X_train_clean, k=5.0)
     X_train_clipped = transform_clip_outliers_iqr(X_train_clean, lower, upper)
     X_val_clipped = transform_clip_outliers_iqr(X_val_clean, lower, upper)
@@ -179,32 +203,51 @@ def centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw):
     X_val_imputed = imputer.transform(X_val_clipped)
     X_test_imputed = imputer.transform(X_test_clipped)
 
-    # Rimozione delle feature quasi-costanti
-    X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed, threshold_var=1e-12, threshold_ratio=0.999)
-    X_val_reduced = X_val_imputed[:, keep_mask]
-    X_test_reduced = X_test_imputed[:, keep_mask]
+    # Rimozione delle feature quasi-costanti (se abilitata)
+    if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES:
+        X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed, threshold_var=1e-12, threshold_ratio=0.999)
+        X_val_reduced = X_val_imputed[:, keep_mask]
+        X_test_reduced = X_test_imputed[:, keep_mask]
+        print(f"Feature dopo rimozione quasi-costanti: {X_train_reduced.shape[1]} (da {X_train_imputed.shape[1]})")
+    else:
+        X_train_reduced = X_train_imputed
+        X_val_reduced = X_val_imputed
+        X_test_reduced = X_test_imputed
+        print(f"Rimozione feature quasi-costanti DISABILITATA - mantenute {X_train_reduced.shape[1]} feature")
 
     # Scaling standard (mean=0, std=1)
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train_reduced)
     X_val_scaled = scaler.transform(X_val_reduced)
     X_test_scaled = scaler.transform(X_test_reduced)
-    return X_train_scaled, X_val_scaled, X_test_scaled
 
-# ========== FUNZIONI MODELLO/ CALLBACK (identici federato) ==========
+    # PCA (se abilitata)
+    if ENABLE_PCA:
+        X_train_final, pca_obj = apply_pca(X_train_scaled)
+        X_val_final = apply_pca(X_val_scaled, pca_obj=pca_obj)
+        X_test_final = apply_pca(X_test_scaled, pca_obj=pca_obj)
+        expected_features = PCA_COMPONENTS
+        if X_train_final.shape[1] != expected_features:
+            raise RuntimeError(f"PCA output shape inconsistente: {X_train_final.shape} vs {expected_features}")
+        print(f"PCA applicata: {X_train_final.shape[1]} componenti")
+    else:
+        X_train_final = X_train_scaled
+        X_val_final = X_val_scaled
+        X_test_final = X_test_scaled
+        print(f"PCA DISABILITATA - usando dati scalati direttamente: {X_train_final.shape}")
 
-def create_smartgrid_dnn_model():
-    """
-    Modello DNN identico a quello federato, parametri globali.
-    """
+    return X_train_final, X_val_final, X_test_final
+
+def create_smartgrid_dnn_model(input_features):
+    """Crea il modello DNN identico a quello federato, dinamico sul numero di input."""
+    set_reproducibility_seeds()
     print(f"[Centralizzato] === CREAZIONE DNN ===")
-    print(f"[Centralizzato] Input features: {PCA_COMPONENTS}")
-    print(f"[Centralizzato] Architettura: {PCA_COMPONENTS} → ... → 1")
+    print(f"[Centralizzato] Input features: {input_features}")
+    print(f"[Centralizzato] Architettura: {input_features} → ... → 1")
     print(f"[Centralizzato] Attivazione: {ACTIVATION_FUNCTION}")
     print(f"[Centralizzato] Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'}")
     print(f"[Centralizzato] Dropout esteso: {EXTENDED_DROPOUT}")
 
-    # Selezione funzione di attivazione
     if ACTIVATION_FUNCTION == 'leaky_relu':
         activation_layer = lambda: layers.LeakyReLU(alpha=0.01)
         initializer = 'he_normal'
@@ -216,23 +259,23 @@ def create_smartgrid_dnn_model():
         initializer = 'he_normal'
     
     model = keras.Sequential([
-        layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
-        layers.Dense(32, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_1'),
+        layers.Input(shape=(input_features,), name='input_layer'),
+        layers.Dense(256, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_1'),
         activation_layer(),
         layers.BatchNormalization(name='batch_norm_1'),
         layers.Dropout(DROPOUT_RATE, name='dropout_1'),
 
-        layers.Dense(48, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_2'),
+        layers.Dense(128, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_2'),
         activation_layer(),
         layers.BatchNormalization(name='batch_norm_2'),
         layers.Dropout(DROPOUT_RATE if EXTENDED_DROPOUT else 0.0, name='dropout_2'),
 
-        layers.Dense(16, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_3'),
+        layers.Dense(64, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_3'),
         activation_layer(),
         layers.BatchNormalization(name='batch_norm_3'),
         layers.Dropout(DROPOUT_RATE, name='dropout_3'),
 
-        layers.Dense(4, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_4'),
+        layers.Dense(32, kernel_regularizer=regularizers.l2(L2_REG), kernel_initializer=initializer, name='dense_4'),
         activation_layer(),
         layers.BatchNormalization(name='batch_norm_4'),
         layers.Dropout(DROPOUT_FINAL, name='dropout_4'),
@@ -275,22 +318,20 @@ def create_smartgrid_dnn_model():
     return model
 
 def create_training_callbacks():
-    """
-    Callback identici al federato.
-    """
+    """Crea i callback di training ottimizzati."""
     callbacks = [
         EarlyStopping(
             monitor='val_loss',
-            patience=8, #Aumentato, l'addestramento si ferma troppo presto
+            patience=8,
             restore_best_weights=True,
             verbose=1,
             mode='min',
-            min_delta=0.001 #Si può aumentare un po' il delta per evitare early stopping troppo sensibile
+            min_delta=0.001
         ),
         ReduceLROnPlateau(
             monitor='val_loss',
             factor=0.7,
-            patience=4, #Aumentato, l'addestramento si ferma troppo presto
+            patience=4,
             min_lr=1e-6,
             verbose=1,
             mode='min'
@@ -298,7 +339,7 @@ def create_training_callbacks():
     ]
     return callbacks
 
-def train_smartgrid_dnn_model(model, X_train, y_train, X_val, y_val):
+def train_smartgrid_dnn_model(model, X_train, y_train, X_val, y_val, class_weights):
     print("=== ADDESTRAMENTO DNN CENTRALIZZATO ===")
     callbacks = create_training_callbacks()
     history = model.fit(
@@ -308,7 +349,8 @@ def train_smartgrid_dnn_model(model, X_train, y_train, X_val, y_val):
         validation_data=(X_val, y_val),
         callbacks=callbacks,
         verbose=1,
-        shuffle=True
+        shuffle=True,
+        class_weight=class_weights
     )
     return history
 
@@ -417,13 +459,6 @@ def save_centralized_training_report(history, X_val, y_val, model, feature_impor
     n_epochs = len(history.history["loss"])
     metric_rows = []
     for i in range(n_epochs):
-        # Valuta su validation set il modello ai pesi salvati di quell'epoca
-        # In keras, model.fit non salva il modello ad ogni epoca, quindi dobbiamo stimare le metriche "extra" (f1, balanced acc, ecc.)
-        # usando le predizioni corrispondenti, se disponibili
-        # Per semplicità e didattica, usiamo le metriche di Keras per loss, accuracy, auc
-        # e calcoliamo le metriche custom (f1, balanced acc, ecc) usando il validation set e il modello finale
-        # NOTA: in keras, history salva solo le metriche standard; per metriche custom, le calcoliamo sul modello migliore
-
         # Prendiamo i valori di loss, accuracy, auc da history
         loss = history.history["val_loss"][i] if "val_loss" in history.history else np.nan
         accuracy = history.history["val_accuracy"][i] if "val_accuracy" in history.history else np.nan
@@ -548,27 +583,21 @@ def main():
         X_train_raw, X_val_raw, X_test_raw, y_train, y_val, y_test = split_train_validation_test(
             X, y, train_size=0.7, val_size=0.15, test_size=0.15, random_state=42
         )
-        X_train_scaled, X_val_scaled, X_test_scaled = centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw)
+        X_train_final, X_val_final, X_test_final = centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw)
 
-        print("\n[Centralizzato] Feature importance PRIMA della PCA:")
-        feature_names = list(X_train_raw.columns)
-        feature_importance_before = feature_importance_analysis(X_train_scaled, y_train, feature_names=feature_names, n_estimators=100, title="Prima della PCA", max_show=20)
+        # Determina dinamicamente il numero di feature in input
+        input_features = X_train_final.shape[1]
+        print(f"\n[Centralizzato] Feature: {dataset_info['features']} → {input_features}")
 
-        X_train_pca, pca_object = apply_pca(X_train_scaled)
-        X_val_pca = apply_pca(X_val_scaled, pca_obj=pca_object)
-        X_test_pca = apply_pca(X_test_scaled, pca_obj=pca_object)
+        # Calcola class weights
+        class_weights = compute_class_weights(y_train)
+        print(f"\n[Centralizzato] Class weights: {class_weights}")
 
-        print("\n[Centralizzato] Feature importance DOPO la PCA (componenti PCA):")
-        pca_feature_names = [f"PCA_{i+1}" for i in range(X_train_pca.shape[1])]
-        feature_importance_after = feature_importance_analysis(X_train_pca, y_train, feature_names=pca_feature_names, n_estimators=100, title="Dopo la PCA", max_show=20)
-
-        model = create_smartgrid_dnn_model()
-        history = train_smartgrid_dnn_model(model, X_train_pca, y_train, X_val_pca, y_val)
-        # Salva report addestramento per tutte le epoche su validation set + feature importance
-        save_centralized_training_report(history, X_val_pca, y_val, model, feature_importance_before=feature_importance_before, feature_importance_after=feature_importance_after)
-
+        # Crea modello
+        model = create_smartgrid_dnn_model(input_features)
+        history = train_smartgrid_dnn_model(model, X_train_final, y_train, X_val_final, y_val, class_weights)
         print("\n" + "=" * 80)
-        final_loss, final_accuracy, final_metrics = evaluate_smartgrid_model(model, X_test_pca, y_test, "Test", threshold=0.5)
+        final_loss, final_accuracy, final_metrics = evaluate_smartgrid_model(model, X_test_final, y_test, "Test", threshold=0.5)
 
         print("\nPipeline centralizzata completata.\n")
     except Exception as e:

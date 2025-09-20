@@ -19,14 +19,14 @@ warnings.filterwarnings('ignore')
 
 # CONFIGURAZIONE SEMI PER RIPRODUCIBILITÀ
 RANDOM_SEED = 42
-PCA_RANDOM_SEED = 42  # Seme specifico per PCA
 
 # ============== FLAGS GLOBALI PER CONTROLLO PREPROCESSING ==============
-ENABLE_PCA = True  # Cambia a False per disabilitare la PCA
+ENABLE_PCA = False  # Cambia a False per disabilitare la PCA
 ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = True  # Cambia a False per disabilitare rimozione feature quasi-costanti
 
 # CONFIGURAZIONE PCA STATICA
 PCA_COMPONENTS = 74  # NUMERO FISSO - garantisce compatibilità automatica
+PCA_RANDOM_SEED = 42  # Seme specifico per PCA
   
 # Quando PCA disabilitata, disabilita rimozione feature quasi-costanti per compatibilità dei modelli
 if ENABLE_PCA == False:
@@ -679,8 +679,9 @@ def main():
         print(f"[Client {client_id}] Dataset: {dataset_info['train_samples']} train, {dataset_info['val_samples']} val")
         print(f"[Client {client_id}] Distribuzione: {dataset_info['attack_ratio']*100:.1f}% attacchi")
         if ENABLE_PCA:
-            print(f"[Client {client_id}] Feature: {dataset_info['original_features']} → {dataset_info['pca_features']}")
-            print(f"[Client {client_id}] PCA: {dataset_info['pca_components_fixed']} componenti FISSI")
+            print(f"[Client {client_id}] Feature: {dataset_info['original_features']} → {dataset_info['final_features']} (PCA attiva)")
+        else:
+            print(f"[Client {client_id}] Feature: {dataset_info['original_features']} → {dataset_info['final_features']} (nessuna riduzione - PCA disattiva)")
         print(f"[Client {client_id}] Modello: {model.count_params():,} parametri")
         print(f"[Client {client_id}] Connessione al server su localhost:8080...")
         

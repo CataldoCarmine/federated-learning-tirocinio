@@ -20,14 +20,14 @@ warnings.filterwarnings('ignore')
 
 # CONFIGURAZIONE SEMI PER RIPRODUCIBILITÀ
 RANDOM_SEED = 42
-PCA_RANDOM_SEED = 42  # Seme specifico per PCA
 
 # ============== FLAGS GLOBALI PER CONTROLLO PREPROCESSING ==============
-ENABLE_PCA = True  # Cambia a False per disabilitare la PCA
+ENABLE_PCA = False  # Cambia a False per disabilitare la PCA
 ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = True  # Cambia a False per disabilitare rimozione feature quasi-costanti
 
 # CONFIGURAZIONE PCA STATICA
 PCA_COMPONENTS = 74  # NUMERO FISSO - garantisce compatibilità automatica
+PCA_RANDOM_SEED = 42  # Seme specifico per PCA
   
 # Quando PCA disabilitata, disabilita rimozione feature quasi-costanti per compatibilità dei modelli
 if ENABLE_PCA == False:
@@ -843,11 +843,11 @@ def main():
 
     print("=== SERVER FEDERATO SMARTGRID ===")
     print("Configurazione:")
-    print("  - Rounds: 200")
+    print("  - Rounds: " + str(NUM_ROUNDS))
     print("  - Client minimi: 2")
     print("  - Strategia: FedAvg personalizzata con architettura fissa")
-    print("  - Valutazione: Dataset globale con PCA fissa (client 14-15)")
-    print("  - Pipeline: Pulizia → Imputazione → Normalizzazione → PCA fissa")
+    print("  - Valutazione: Dataset globale " + ("con PCA fissa (client 14-15)" if ENABLE_PCA else "senza PCA (client 14-15)"))
+    print("  - Pipeline: Pulizia → Imputazione → Normalizzazione → " + ("PCA fissa" if ENABLE_PCA else "nessuna riduzione"))
     print("  - Class weights: Automatici per compensare sbilanciamento")
     print("  - Regolarizzazione: Completa ma semplificata")
     print("  - Callback: EarlyStopping + ReduceLROnPlateau sui client")
