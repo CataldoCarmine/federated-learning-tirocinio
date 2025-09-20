@@ -17,9 +17,21 @@ from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score, classification_report, confusion_matrix
 warnings.filterwarnings('ignore')
 
-# CONFIGURAZIONE PCA STATICA 
+# CONFIGURAZIONE SEMI PER RIPRODUCIBILITÀ
+RANDOM_SEED = 42
+PCA_RANDOM_SEED = 42  # Seme specifico per PCA
+
+# ============== FLAGS GLOBALI PER CONTROLLO PREPROCESSING ==============
+ENABLE_PCA = True  # Cambia a False per disabilitare la PCA
+ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = True  # Cambia a False per disabilitare rimozione feature quasi-costanti
+
+# CONFIGURAZIONE PCA STATICA
 PCA_COMPONENTS = 74  # NUMERO FISSO - garantisce compatibilità automatica
-PCA_RANDOM_STATE = 42
+  
+# Quando PCA disabilitata, disabilita rimozione feature quasi-costanti per compatibilità dei modelli
+if ENABLE_PCA == False:
+    ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False
+    PCA_COMPONENTS = None
 
 # CONFIGURAZIONE MODELLO DNN 
 ACTIVATION_FUNCTION = 'leaky_relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
@@ -33,6 +45,25 @@ L2_REG = 0.002063680713812367
 NUM_ROUNDS = 100  
 LOCAL_EPOCHS = 15  
 BATCH_SIZE = 32  
+
+def set_reproducibility_seeds():
+    """
+    Imposta tutti i semi per garantire riproducibilità.
+    Da chiamare all'inizio di ogni funzione critica.
+    """
+    # Seed per NumPy
+    np.random.seed(RANDOM_SEED)
+    
+    # Seed per TensorFlow
+    tf.random.set_seed(RANDOM_SEED)
+    
+    # Seed per Python random (usato da alcune librerie)
+    import random
+    random.seed(RANDOM_SEED)
+    
+    # Configurazioni TensorFlow per determinismo
+    os.environ['PYTHONHASHSEED'] = str(RANDOM_SEED)
+    tf.config.experimental.enable_op_determinism()
 
 def fit_clip_outliers_iqr(X, k=5.0):
     """
@@ -103,7 +134,7 @@ def apply_pca(X_preprocessed, client_id=None):
     try:
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore', category=RuntimeWarning)
-            pca = PCA(n_components=n_components, random_state=PCA_RANDOM_STATE)
+            pca = PCA(n_components=n_components, random_state=PCA_RANDOM_SEED)
             X_pca = pca.fit_transform(X_preprocessed)
 
             # VERIFICA: Output senza NaN/inf e dimensioni corrette
@@ -154,6 +185,9 @@ def load_client_smartgrid_data(client_id):
       - Scaling standard
       - PCA
     """
+    # Imposta semi per riproducibilità del preprocessing
+    set_reproducibility_seeds()
+
     script_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(script_dir, "..", "..", "data", "SmartGrid", f"data{client_id}.csv")
     if not os.path.exists(file_path):
@@ -161,6 +195,8 @@ def load_client_smartgrid_data(client_id):
     
     df = pd.read_csv(file_path)
     print(f"[Client {client_id}] === CARICAMENTO E PREPROCESSING DATI ===")
+    print(f"[Client {client_id}] PCA: {'ABILITATA' if ENABLE_PCA else 'DISABILITATA'}")
+    print(f"[Client {client_id}] Rimozione feature quasi-costanti: {'ABILITATA' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else 'DISABILITATA'}")
     print(f"[Client {client_id}] Dataset caricato: {len(df)} campioni")
 
     X = df.drop(columns=["marker"])
@@ -172,6 +208,7 @@ def load_client_smartgrid_data(client_id):
     
     # Pulizia preliminare: solo inf/NaN
     X_cleaned = clean_data_for_pca(X)
+
     # STEP 1: Suddivisione train/validation
     X_train_raw, X_val_raw, y_train, y_val = train_test_split(
         X_cleaned, y,
@@ -198,18 +235,34 @@ def load_client_smartgrid_data(client_id):
     X_val_reduced = X_val_imputed[:, keep_mask]
     print(f"[Client {client_id}] Feature dopo rimozione quasi-costanti: {X_train_reduced.shape[1]} (da {X_train.shape[1] if 'X_train' in locals() else X_train_imputed.shape[1]})")
    
+    # STEP 4: Rimozione feature quasi-costanti (CONDIZIONALE)
+    if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES:
+        X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed, threshold_var=1e-12, threshold_ratio=0.999)
+        X_val_reduced = X_val_imputed[:, keep_mask]
+        print(f"[Client {client_id}] Feature dopo rimozione quasi-costanti: {X_train_reduced.shape[1]} (da {X_train_imputed.shape[1]})")
+    else:
+        X_train_reduced = X_train_imputed
+        X_val_reduced = X_val_imputed
+        print(f"[Client {client_id}] Rimozione feature quasi-costanti DISABILITATA - mantenute {X_train_reduced.shape[1]} feature")
+   
     # STEP 5: Scaling standard
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train_reduced)
     X_val_scaled = scaler.transform(X_val_reduced)
-    print(f"[Client {client_id}] Preprocessing completato (clipping, imputazione, costanti, scaling)")
+    print(f"[Client {client_id}] Preprocessing completato (clipping, imputazione, {('costanti, ' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else '')}scaling)")
    
-   # STEP 6: PCA
-    X_train_final = apply_pca(X_train_scaled, client_id=client_id)
-    X_val_final = apply_pca(X_val_scaled, client_id=client_id)
-    expected_shape = (len(X_train_final), PCA_COMPONENTS)
-    if X_train_final.shape[1] != PCA_COMPONENTS:
-        raise RuntimeError(f"Client {client_id}: PCA output shape inconsistente: {X_train_final.shape} vs {expected_shape}")
+    # STEP 6: PCA (CONDIZIONALE)
+    if ENABLE_PCA:
+        X_train_final = apply_pca(X_train_scaled, client_id=client_id)
+        X_val_final = apply_pca(X_val_scaled, client_id=client_id)
+        expected_features = PCA_COMPONENTS
+        if X_train_final.shape[1] != expected_features:
+            raise RuntimeError(f"Client {client_id}: PCA output shape inconsistente: {X_train_final.shape} vs {expected_features}")
+    else:
+        X_train_final = X_train_scaled
+        X_val_final = X_val_scaled
+        print(f"[Client {client_id}] PCA DISABILITATA - usando dati scalati direttamente: {X_train_final.shape}")
+        
     class_weights = compute_class_weights(y_train)
    
     # Info dataset
@@ -224,10 +277,12 @@ def load_client_smartgrid_data(client_id):
         'train_attack_ratio': y_train.mean(),
         'val_attack_ratio': y_val.mean(),
         'original_features': X.shape[1],
-        'pca_features': X_train_final.shape[1],
-        'pca_components_fixed': PCA_COMPONENTS,
+        'final_features': X_train_final.shape[1],
+        'pca_enabled': ENABLE_PCA,
+        'remove_near_constant_enabled': ENABLE_REMOVE_NEAR_CONSTANT_FEATURES,
+        'pca_components_fixed': PCA_COMPONENTS if ENABLE_PCA else None,
         'class_weights': class_weights,
-        'preprocessing_method': 'iqr_clipping_impute_remove_constants_scaling',
+        'preprocessing_method': f"iqr_clipping_impute{'_remove_constants' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else ''}_scaling{'_pca' if ENABLE_PCA else ''}",
         'compatibility_guaranteed': True
     }
     print(f"[Client {client_id}] === CARICAMENTO COMPLETATO ===")
@@ -240,9 +295,23 @@ def create_dnn_model():
     Returns:
         Modello Keras compilato con architettura fissa
     """
+    # Imposta semi per riproducibilità del modello
+    set_reproducibility_seeds()
+
+    # Determina il numero di feature di input basato sulla configurazione
+    if ENABLE_PCA:
+        input_features = PCA_COMPONENTS
+        architecture_type = f"PCA_{PCA_COMPONENTS}"
+    else:
+        # Assumiamo 128 feature originali meno quelle rimosse (circa 74-128)
+        # Per sicurezza, questo valore dovrebbe essere calcolato dinamicamente
+        # o passato come parametro globale
+        input_features = 128  # Valore di default - dovrebbe essere aggiornato dinamicamente
+        architecture_type = f"RAW_{input_features}"
+    
     print(f"[Client] === CREAZIONE DNN ===")
-    print(f"[Client] Input features: {PCA_COMPONENTS}")
-    print(f"[Client] Architettura: {PCA_COMPONENTS} → ... → 1")
+    print(f"[Client] Input features: {input_features} ({architecture_type})")
+    print(f"[Client] Architettura: {input_features} → ... → 1")
     print(f"[Client] Attivazione: {ACTIVATION_FUNCTION}")
     print(f"[Client] Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'}")
     print(f"[Client] Dropout esteso: {EXTENDED_DROPOUT}")
@@ -267,11 +336,11 @@ def create_dnn_model():
     
     # MODELLO 
     model = keras.Sequential([
-        # Input layer esplicito 
-        layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
+        # Input layer dinamico
+        layers.Input(shape=(input_features,), name='input_layer'),
 
         # Layer 1
-        layers.Dense(32, 
+        layers.Dense(256, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_1'),
@@ -280,7 +349,7 @@ def create_dnn_model():
         layers.Dropout(dropout_rate, name='dropout_1'),
 
         # Layer 2
-        layers.Dense(48, 
+        layers.Dense(128, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_2'),
@@ -289,7 +358,7 @@ def create_dnn_model():
         layers.Dropout(dropout_rate if EXTENDED_DROPOUT else 0.0, name='dropout_2'),
 
         # Layer 3
-        layers.Dense(16, 
+        layers.Dense(64, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_3'),
@@ -298,7 +367,7 @@ def create_dnn_model():
         layers.Dropout(dropout_rate, name='dropout_3'),
 
         # Layer 4
-        layers.Dense(4, 
+        layers.Dense(32, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_4'),
@@ -403,6 +472,9 @@ class SmartGridClient(fl.client.NumPyClient):
         Addestra il modello.
         """
         global model, X_train, y_train, dataset_info
+
+        # Imposta semi per riproducibilità dell'addestramento
+        set_reproducibility_seeds()
         
         print(f"[Client {client_id}] Round di addestramento ...")
         
@@ -499,6 +571,9 @@ class SmartGridClient(fl.client.NumPyClient):
         Valuta il modello con architettura fissa.
         """
         global model, X_val, y_val
+
+        # Imposta semi per riproducibilità della valutazione
+        set_reproducibility_seeds()
         
         # Impostazione pesi semplificata
         try:
@@ -568,7 +643,11 @@ def main():
     """
     Funzione principale per avviare il client SmartGrid.
     """
+
     global client_id, model, X_train, y_train, X_val, y_val, dataset_info
+
+    # Imposta semi all'avvio del client
+    set_reproducibility_seeds()
     
     if len(sys.argv) != 2:
         print("Usa: python client.py <client_id>")
@@ -590,14 +669,18 @@ def main():
         print(f"[Client {client_id}] Caricamento dati con PCA ...")
         X_train, y_train, X_val, y_val, dataset_info = load_client_smartgrid_data(client_id)
         
+        # Imposta semi all'avvio del client
+        set_reproducibility_seeds()
+
         # Crea il modello con architettura fissa
         model = create_dnn_model()
 
         print(f"[Client {client_id}] === RIASSUNTO CLIENT ===")
         print(f"[Client {client_id}] Dataset: {dataset_info['train_samples']} train, {dataset_info['val_samples']} val")
         print(f"[Client {client_id}] Distribuzione: {dataset_info['attack_ratio']*100:.1f}% attacchi")
-        print(f"[Client {client_id}] Feature: {dataset_info['original_features']} → {dataset_info['pca_features']}")
-        print(f"[Client {client_id}] PCA: {dataset_info['pca_components_fixed']} componenti FISSI")
+        if ENABLE_PCA:
+            print(f"[Client {client_id}] Feature: {dataset_info['original_features']} → {dataset_info['pca_features']}")
+            print(f"[Client {client_id}] PCA: {dataset_info['pca_components_fixed']} componenti FISSI")
         print(f"[Client {client_id}] Modello: {model.count_params():,} parametri")
         print(f"[Client {client_id}] Connessione al server su localhost:8080...")
         

@@ -17,6 +17,9 @@ import warnings
 from datetime import datetime
 warnings.filterwarnings('ignore')
 
+tf.random.set_seed(42)
+np.random.seed(42)
+
 # ========== PARAMETRI GLOBALI (identici al federato) ==========
 # PCA Statici
 PCA_COMPONENTS = 74

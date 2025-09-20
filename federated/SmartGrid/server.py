@@ -18,12 +18,24 @@ import os
 from datetime import datetime
 warnings.filterwarnings('ignore')
 
+# CONFIGURAZIONE SEMI PER RIPRODUCIBILITÀ
+RANDOM_SEED = 42
+PCA_RANDOM_SEED = 42  # Seme specifico per PCA
+
+# ============== FLAGS GLOBALI PER CONTROLLO PREPROCESSING ==============
+ENABLE_PCA = True  # Cambia a False per disabilitare la PCA
+ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = True  # Cambia a False per disabilitare rimozione feature quasi-costanti
+
+# CONFIGURAZIONE PCA STATICA
+PCA_COMPONENTS = 74  # NUMERO FISSO - garantisce compatibilità automatica
+  
+# Quando PCA disabilitata, disabilita rimozione feature quasi-costanti per compatibilità dei modelli
+if ENABLE_PCA == False:
+    ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False
+    PCA_COMPONENTS = None
+
 all_federated_metrics = []  # Lista di dict, uno per round
 last_confusion_matrix = None
-
-# CONFIGURAZIONE PCA STATICA 
-PCA_COMPONENTS = 74  # NUMERO FISSO - garantisce compatibilità automatica
-PCA_RANDOM_STATE = 42
 
 # CONFIGURAZIONE MODELLO DNN
 ACTIVATION_FUNCTION = 'leaky_relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
@@ -34,7 +46,26 @@ LEARNING_RATE = 0.00033732651610264363
 DROPOUT_RATE = 0.4
 DROPOUT_FINAL = DROPOUT_RATE * 0.75
 L2_REG = 0.002063680713812367
-NUM_ROUNDS = 200  # Numero di round di addestramento federato
+NUM_ROUNDS = 50  # Numero di round di addestramento federato
+
+def set_reproducibility_seeds():
+    """
+    Imposta tutti i semi per garantire riproducibilità.
+    Da chiamare all'inizio di ogni funzione critica.
+    """
+    # Seed per NumPy
+    np.random.seed(RANDOM_SEED)
+    
+    # Seed per TensorFlow
+    tf.random.set_seed(RANDOM_SEED)
+    
+    # Seed per Python random (usato da alcune librerie)
+    import random
+    random.seed(RANDOM_SEED)
+    
+    # Configurazioni TensorFlow per determinismo
+    os.environ['PYTHONHASHSEED'] = str(RANDOM_SEED)
+    tf.config.experimental.enable_op_determinism()
 
 def save_federated_metrics_report(metrics_list):
 
@@ -195,7 +226,7 @@ def apply_pca(X_preprocessed):
     try:
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore', category=RuntimeWarning)
-            pca = PCA(n_components=n_components, random_state=PCA_RANDOM_STATE)
+            pca = PCA(n_components=n_components, random_state=PCA_RANDOM_SEED)
             X_pca = pca.fit_transform(X_preprocessed)
 
             # VERIFICA: Output senza NaN/inf e dimensioni corrette
@@ -228,7 +259,12 @@ def apply_preprocessing_pipeline(X_global):
       - Scaling standard
       - PCA fissa
     """
+    # Imposta semi per riproducibilità PCA
+    set_reproducibility_seeds()
+
     print(f"[Server] === PIPELINE PREPROCESSING SERVER ===")
+    print(f"[Server] PCA: {'ABILITATA' if ENABLE_PCA else 'DISABILITATA'}")
+    print(f"[Server] Rimozione feature quasi-costanti: {'ABILITATA' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else 'DISABILITATA'}")
 
     # Pulizia preliminare (inf/NaN)
     X_cleaned = clean_data_for_pca(X_global)
@@ -237,22 +273,34 @@ def apply_preprocessing_pipeline(X_global):
     # Imputazione mediana
     imputer = SimpleImputer(strategy='median')
     X_imputed = imputer.fit_transform(X_clipped)
-    # Rimozione feature quasi-costanti
-    X_reduced, keep_mask = remove_near_constant_features(X_imputed, threshold_var=1e-12, threshold_ratio=0.999)
-    print(f"[Server] Feature dopo rimozione quasi-costanti: {X_reduced.shape[1]} (da {X_imputed.shape[1]})")
+    
+    # Rimozione feature quasi-costanti (CONDIZIONALE)
+    if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES:
+        X_reduced, keep_mask = remove_near_constant_features(X_imputed, threshold_var=1e-12, threshold_ratio=0.999)
+        print(f"[Server] Feature dopo rimozione quasi-costanti: {X_reduced.shape[1]} (da {X_imputed.shape[1]})")
+    else:
+        X_reduced = X_imputed
+        print(f"[Server] Rimozione feature quasi-costanti DISABILITATA - mantenute {X_reduced.shape[1]} feature")
+    
     # Scaling standard
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X_reduced)
-    print(f"[Server] Preprocessing completato (clipping, imputazione, costanti, scaling)")
-    # PCA fissa identica ai client (garantisce compatibilità)
-    X_global_final = apply_pca(X_scaled)
-
-    # VERIFICA FINALE: Dimensioni corrette garantite
-    if X_global_final.shape[1] != PCA_COMPONENTS:
-        raise RuntimeError(f"Server PCA output shape inconsistente: {X_global_final.shape[1]} vs {PCA_COMPONENTS}")
-    print(f"[Server] ✅ Pipeline preprocessing con PCA fissa completata")
+    print(f"[Server] Preprocessing completato (clipping, imputazione, {('costanti, ' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else '')}scaling)")
+    
+    # PCA fissa identica ai client (CONDIZIONALE)
+    if ENABLE_PCA:
+        X_global_final = apply_pca(X_scaled)
+        # VERIFICA FINALE: Dimensioni corrette garantite
+        if X_global_final.shape[1] != PCA_COMPONENTS:
+            raise RuntimeError(f"Server PCA output shape inconsistente: {X_global_final.shape[1]} vs {PCA_COMPONENTS}")
+        print(f"[Server] ✅ Pipeline preprocessing con PCA fissa completata")
+    else:
+        X_global_final = X_scaled
+        print(f"[Server] ✅ Pipeline preprocessing SENZA PCA completata")
+    
     print(f"[Server] Risultato finale: {X_global_final.shape}")
     return X_global_final
+
 
 def compute_class_weights(y_global):
     """
@@ -280,8 +328,21 @@ def create_dnn_model():
     Returns:
         Modello Keras compilato IDENTICO ai client
     """
-    print(f"[Server] === CREAZIONE DNN ARCHITETTURA FISSA SERVER ===")
-    print(f"[Server] Architettura: {PCA_COMPONENTS} → 112 → 64 → 12 → 10 → 1")
+    # Imposta semi per riproducibilità del modello
+    set_reproducibility_seeds()
+
+    # Determina il numero di feature di input basato sulla configurazione
+    if ENABLE_PCA:
+        input_features = PCA_COMPONENTS
+        architecture_type = f"PCA_{PCA_COMPONENTS}"
+    else:
+        # Assumiamo le feature originali meno quelle eventualmente rimosse
+        input_features = 128  # Valore di default - dovrebbe essere calcolato dinamicamente
+        architecture_type = f"RAW_{input_features}"
+    
+    print(f"[Server] === CREAZIONE DNN ARCHITETTURA CONFIGURABILE SERVER ===")
+    print(f"[Server] Input features: {input_features} ({architecture_type})")
+    print(f"[Server] Architettura: {input_features} → ... → 1")
     print(f"[Server] Attivazione: {ACTIVATION_FUNCTION}")
     print(f"[Server] Ottimizzatore: {'AdamW' if USE_ADAMW else 'Adam'}")
     print(f"[Server] Dropout esteso: {EXTENDED_DROPOUT}")
@@ -304,11 +365,11 @@ def create_dnn_model():
     
     # MODELLO
     model = tf.keras.Sequential([
-        # Input layer esplicito
-        layers.Input(shape=(PCA_COMPONENTS,), name='input_layer'),
+       # Input layer dinamico
+        layers.Input(shape=(input_features,), name='input_layer'),
 
         # Layer 1
-        layers.Dense(32, 
+        layers.Dense(256, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_1'),
@@ -317,7 +378,7 @@ def create_dnn_model():
         layers.Dropout(dropout_rate, name='dropout_1'),
 
         # Layer 2
-        layers.Dense(48, 
+        layers.Dense(128, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_2'),
@@ -326,7 +387,7 @@ def create_dnn_model():
         layers.Dropout(dropout_rate if EXTENDED_DROPOUT else 0.0, name='dropout_2'),
 
         # Layer 3
-        layers.Dense(16, 
+        layers.Dense(64, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_3'),
@@ -335,7 +396,7 @@ def create_dnn_model():
         layers.Dropout(dropout_rate, name='dropout_3'),
 
         # Layer 4
-        layers.Dense(4, 
+        layers.Dense(32, 
                     kernel_regularizer=regularizers.l2(l2_reg),
                     kernel_initializer=initializer,
                     name='dense_4'),
@@ -397,6 +458,9 @@ def get_smartgrid_evaluate_fn():
         Carica un dataset globale di test per la valutazione del server.
         Usa PCA fissa identica ai client.
         """
+        # Imposta semi per riproducibilità del preprocessing
+        set_reproducibility_seeds()
+
         print("=== CARICAMENTO DATASET GLOBALE TEST SERVER ===")
         
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -475,6 +539,9 @@ def get_smartgrid_evaluate_fn():
         Funzione di valutazione chiamata ad ogni round con architettura FISSA.
         SEMPLIFICATO: Compatibilità garantita automaticamente.
         """
+        # Imposta semi per riproducibilità PCA
+        set_reproducibility_seeds()
+
         print(f"\n=== VALUTAZIONE GLOBALE - ROUND {server_round + 1} ===")
         
         try:
@@ -697,6 +764,9 @@ class SmartGridDNNFedAvgFixed(FedAvg):
         Aggrega i risultati dell'addestramento DNN con architettura FISSA.
         SEMPLIFICATO: Nessun controllo di compatibilità necessario.
         """
+        # Imposta semi per riproducibilità PCA
+        set_reproducibility_seeds()
+
         print(f"\n=== AGGREGAZIONE TRAINING - ROUND {server_round} ===")
         print(f"Client partecipanti: {len(results)}")
         print(f"Client falliti: {len(failures)}")
@@ -736,6 +806,9 @@ class SmartGridDNNFedAvgFixed(FedAvg):
         Aggrega i risultati della valutazione DNN con architettura FISSA.
         SEMPLIFICATO: Compatibilità garantita automaticamente.
         """
+        # Imposta semi per riproducibilità PCA
+        set_reproducibility_seeds()
+
         print(f"\n=== AGGREGAZIONE VALUTAZIONE ROUND {server_round} ===")
         print(f"Client che hanno valutato: {len(results)}")
         
@@ -765,6 +838,9 @@ def main():
     Funzione principale per avviare il server SmartGrid federato DNN con architettura FISSA.
     SEMPLIFICATO: Controlli di compatibilità rimossi (non necessari).
     """
+    # Imposta semi per riproducibilità PCA
+    set_reproducibility_seeds()
+
     print("=== SERVER FEDERATO SMARTGRID ===")
     print("Configurazione:")
     print("  - Rounds: 200")
