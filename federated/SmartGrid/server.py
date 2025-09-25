@@ -46,7 +46,7 @@ LEARNING_RATE = 0.00033732651610264363
 DROPOUT_RATE = 0.4
 DROPOUT_FINAL = DROPOUT_RATE * 0.75
 L2_REG = 0.002063680713812367
-NUM_ROUNDS = 50  # Numero di round di addestramento federato
+NUM_ROUNDS = 200  # Numero di round di addestramento federato
 
 def set_reproducibility_seeds():
     """

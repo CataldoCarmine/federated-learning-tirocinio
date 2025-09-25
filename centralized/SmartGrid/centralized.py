@@ -20,11 +20,11 @@ warnings.filterwarnings('ignore')
 RANDOM_SEED = 42
 
 # ========== FLAGS GLOBALI PER CONTROLLO PREPROCESSING ==========
-ENABLE_PCA = True  # Cambia a False per disabilitare la PCA
-ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = True  # Cambia a False per disabilitare rimozione feature quasi-costanti
+ENABLE_PCA = False  # Cambia a False per disabilitare la PCA
+ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Cambia a False per disabilitare rimozione feature quasi-costanti
 
 # CONFIGURAZIONE PCA STATICA
-PCA_COMPONENTS = 21  # NUMERO FISSO - garantisce compatibilità automatica
+PCA_COMPONENTS = 71  # NUMERO FISSO - garantisce compatibilità automatica
 PCA_RANDOM_SEED = 42  # Seme specifico per PCA
 
 # ========== CONFIGURAZIONE MODELLO ==========
