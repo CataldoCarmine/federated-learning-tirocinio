@@ -21,12 +21,12 @@ warnings.filterwarnings('ignore')
 RANDOM_SEED = 42
 
 # ========== FLAGS GLOBALI PER CONTROLLO PREPROCESSING ==========
-ENABLE_CLEAN_INF_NAN = False           # Pulizia inf/NaN
-ENABLE_CLIPPING_OUTLIERS = False       # Clipping outlier per quantili (IQR)
+ENABLE_CLEAN_INF_NAN = True           # Pulizia inf/NaN
+ENABLE_CLIPPING_OUTLIERS = True       # Clipping outlier per quantili (IQR)
 ENABLE_IMPUTATION = True              # Imputazione mediana
-ENABLE_SCALING = False                 # StandardScaler (mean=0, std=1)
-ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Cambia a False per disabilitare rimozione feature quasi-costanti
-ENABLE_PCA = False  # Cambia a False per disabilitare la PCA
+ENABLE_SCALING = True                 # StandardScaler (mean=0, std=1)
+ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = True  # Cambia a False per disabilitare rimozione feature quasi-costanti
+ENABLE_PCA = True  # Cambia a False per disabilitare la PCA
 
 if ENABLE_PCA:
     ENABLE_IMPUTATION= True # Per eseguire la PCA non si possono avere NaN
@@ -35,17 +35,14 @@ if ENABLE_PCA:
 PCA_COMPONENTS = 71  # NUMERO FISSO - garantisce compatibilità automatica
 PCA_RANDOM_SEED = 42  # Seme specifico per PCA
 
-# ========== CONFIGURAZIONE MODELLO ==========
-ACTIVATION_FUNCTION = 'leaky_relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'
-USE_ADAMW = False  # Ottimizzabile: True per AdamW, False per Adam
-EXTENDED_DROPOUT = True  # Ottimizzabile: True per dropout esteso
-
-LEARNING_RATE = 0.00033732651610264363
-DROPOUT_RATE = 0.4
-DROPOUT_FINAL = DROPOUT_RATE * 0.75
-L2_REG = 0.002063680713812367
-BATCH_SIZE = 32
-EPOCHS = 100
+# ========== CONFIGURAZIONE MODELLO RANDOM FOREST ==========
+RF_N_ESTIMATORS = 100          # Numero di alberi nella foresta
+RF_MAX_DEPTH = None            # Profondità massima degli alberi (None = illimitata)
+RF_MIN_SAMPLES_SPLIT = 2       # Campioni minimi per effettuare uno split
+RF_MIN_SAMPLES_LEAF = 1        # Campioni minimi in una foglia
+RF_MAX_FEATURES = 'sqrt'       # Feature da considerare per ogni split
+RF_BOOTSTRAP = True            # Usa bootstrap sampling
+RF_CLASS_WEIGHT = 'balanced'   # Gestione automatica dello sbilanciamento
 
 # ========== FUNZIONI DI PREPROCESSING (identiche al federato) ==========
 def set_reproducibility_seeds():
@@ -198,7 +195,7 @@ def centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw):
     print(f"Scaling standard: {'ABILITATA' if ENABLE_SCALING else 'DISABILITATA'}")
     print(f"PCA: {'ABILITATA' if ENABLE_PCA else 'DISABILITATA'}")
 
-    # Pulizia dei dati
+    # STEP 1: Pulizia dei dati
     if ENABLE_CLEAN_INF_NAN:
         X_train_clean = clean_data_for_pca(X_train_raw)
         X_val_clean = clean_data_for_pca(X_val_raw)
@@ -208,7 +205,7 @@ def centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw):
         X_val_clean = X_val_raw.values if hasattr(X_val_raw, 'values') else X_val_raw
         X_test_clean = X_test_raw.values if hasattr(X_test_raw, 'values') else X_test_raw
 
-    # Clipping outlier per quantili
+    # STEP 2: Clipping outlier per quantili
     if ENABLE_CLIPPING_OUTLIERS:
         lower, upper = fit_clip_outliers_iqr(X_train_clean, k=5.0)
         X_train_clipped = transform_clip_outliers_iqr(X_train_clean, lower, upper)
@@ -219,7 +216,7 @@ def centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw):
         X_val_clipped = X_val_clean
         X_test_clipped = X_test_clean
 
-    # Imputazione dei valori mancanti
+    # STEP 3: Imputazione dei valori mancanti
     if ENABLE_IMPUTATION:
         imputer = SimpleImputer(strategy='median')
         X_train_imputed = imputer.fit_transform(X_train_clipped)
@@ -230,7 +227,7 @@ def centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw):
         X_val_imputed = X_val_clipped
         X_test_imputed = X_test_clipped
 
-    # Rimozione delle feature quasi-costanti (se abilitata)
+    # STEP 4: Rimozione delle feature quasi-costanti
     if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES:
         X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed, threshold_var=1e-12, threshold_ratio=0.999)
         X_val_reduced = X_val_imputed[:, keep_mask]
@@ -242,7 +239,7 @@ def centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw):
         X_test_reduced = X_test_imputed
         print(f"Rimozione feature quasi-costanti DISABILITATA - mantenute {X_train_reduced.shape[1]} feature")
 
-    # Scaling standard (mean=0, std=1)
+    # STEP 5: Scaling standard 
     if ENABLE_SCALING:
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train_reduced)
@@ -255,7 +252,7 @@ def centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw):
         X_test_scaled = X_test_reduced
         print("Scaling DISABILITATO")
 
-    # PCA (se abilitata)
+    # STEP 6: PCA
     if ENABLE_PCA:
         X_train_final, pca_obj = apply_pca(X_train_scaled)
         X_val_final = apply_pca(X_val_scaled, pca_obj=pca_obj)
@@ -273,92 +270,130 @@ def centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw):
     return X_train_final, X_val_final, X_test_final
 
 def create_smartgrid_random_forest_model(input_features):
-    """Crea il modello Random Forest per SmartGrid."""
+    """
+    Crea il modello Random Forest per SmartGrid.
+    
+    Args:
+        input_features: Numero di feature in input (per coerenza con la funzione precedente)
+        
+    Returns:
+        Modello Random Forest configurato
+    """
     set_reproducibility_seeds()
     print(f"[Centralizzato] === CREAZIONE RANDOM FOREST ===")
     print(f"[Centralizzato] Input features: {input_features}")
+    print(f"[Centralizzato] Architettura: Random Forest con {RF_N_ESTIMATORS} alberi")
     
-    # Parametri ottimizzati per Random Forest
+    # Crea il modello Random Forest con i parametri configurati
     model = RandomForestClassifier(
-        n_estimators=100,           # Numero di alberi
-        max_depth=None,             # Profondità massima (None = illimitata)
-        min_samples_split=2,        # Campioni minimi per split
-        min_samples_leaf=1,         # Campioni minimi per foglia
-        max_features='sqrt',        # Feature da considerare per ogni split
-        bootstrap=True,             # Bootstrap sampling
-        random_state=RANDOM_SEED,   # Per riproducibilità
-        n_jobs=-1,                  # Usa tutti i core disponibili
-        class_weight='balanced'     # Gestione automatica dello sbilanciamento
+        n_estimators=RF_N_ESTIMATORS,           # Numero di alberi nella foresta
+        max_depth=RF_MAX_DEPTH,                 # Profondità massima degli alberi
+        min_samples_split=RF_MIN_SAMPLES_SPLIT, # Campioni minimi per split
+        min_samples_leaf=RF_MIN_SAMPLES_LEAF,   # Campioni minimi per foglia
+        max_features=RF_MAX_FEATURES,           # Feature da considerare per ogni split
+        bootstrap=RF_BOOTSTRAP,                 # Bootstrap sampling
+        random_state=RANDOM_SEED,               # Per riproducibilità
+        n_jobs=-1,                              # Usa tutti i core disponibili
+        class_weight=RF_CLASS_WEIGHT            # Gestione automatica dello sbilanciamento
     )
     
-    print(f"[Centralizzato] Modello Random Forest creato")
-    print(f"[Centralizzato] N. estimatori: 100")
-    print(f"[Centralizzato] Class weight: balanced")
+    print(f"[Centralizzato] Parametri Random Forest:")
+    print(f"  - N. estimatori: {RF_N_ESTIMATORS}")
+    print(f"  - Max depth: {RF_MAX_DEPTH}")
+    print(f"  - Min samples split: {RF_MIN_SAMPLES_SPLIT}")
+    print(f"  - Min samples leaf: {RF_MIN_SAMPLES_LEAF}")
+    print(f"  - Max features: {RF_MAX_FEATURES}")
+    print(f"  - Bootstrap: {RF_BOOTSTRAP}")
+    print(f"  - Class weight: {RF_CLASS_WEIGHT}")
+    print(f"  - Random state: {RANDOM_SEED}")
     
     return model
 
-def create_training_callbacks():
-    """Crea i callback di training ottimizzati."""
-    callbacks = [
-        EarlyStopping(
-            monitor='val_loss',
-            patience=8,
-            restore_best_weights=True,
-            verbose=1,
-            mode='min',
-            min_delta=0.001
-        ),
-        ReduceLROnPlateau(
-            monitor='val_loss',
-            factor=0.7,
-            patience=4,
-            min_lr=1e-6,
-            verbose=1,
-            mode='min'
-        )
-    ]
-    return callbacks
-
 def train_smartgrid_random_forest_model(model, X_train, y_train, X_val, y_val):
-    """Addestra il modello Random Forest."""
+    """
+    Addestra il modello Random Forest.
+    
+    Args:
+        model: Modello Random Forest da addestrare
+        X_train: Dati di training
+        y_train: Etichette di training
+        X_val: Dati di validation
+        y_val: Etichette di validation
+        
+    Returns:
+        None (Random Forest non ha history come le reti neurali)
+    """
     print("=== ADDESTRAMENTO RANDOM FOREST CENTRALIZZATO ===")
     
-    # Random Forest non ha bisogno di class_weights espliciti se usa class_weight='balanced'
     print(f"Training su {len(X_train)} campioni")
     print(f"Validation su {len(X_val)} campioni")
+    print(f"Distribuzione training - Attacchi: {y_train.sum()}/{len(y_train)} ({y_train.mean()*100:.1f}%)")
+    print(f"Distribuzione validation - Attacchi: {y_val.sum()}/{len(y_val)} ({y_val.mean()*100:.1f}%)")
     
-    # Addestramento (molto più semplice del DNN)
+    print("Inizio addestramento Random Forest...")
     model.fit(X_train, y_train)
     
     print("✅ Addestramento Random Forest completato")
     
-    # Nessuna history da restituire (Random Forest non ha epoche)
+    # Valutazione rapida sul training set per dare feedback
+    train_score = model.score(X_train, y_train)
+    val_score = model.score(X_val, y_val)
+    print(f"Accuracy training: {train_score:.4f}")
+    print(f"Accuracy validation: {val_score:.4f}")
+    
+    # Random Forest non ha history come le reti neurali, restituiamo None
     return None
 
 def evaluate_smartgrid_random_forest_model(model, X_test, y_test, set_name="Test", threshold=0.5):
-    """Valuta il modello Random Forest."""
+    """
+    Valuta il modello Random Forest.
+    
+    Args:
+        model: Modello Random Forest addestrato
+        X_test: Dati di test
+        y_test: Etichette di test
+        set_name: Nome del set per il logging
+        threshold: Soglia per la classificazione (per compatibilità, non usata)
+        
+    Returns:
+        Tuple con (loss_simulata, accuracy, metriche_dict)
+    """
     print(f"=== VALUTAZIONE FINALE RANDOM FOREST SMARTGRID - {set_name.upper()} SET ===")
     
-    # Predizioni
+    # Random Forest produce direttamente predizioni binarie e probabilità
     y_pred_binary = model.predict(X_test)
-    y_pred_prob = model.predict_proba(X_test)[:, 1]  # Probabilità classe positiva
+    y_pred_prob = model.predict_proba(X_test)[:, 1]  # Probabilità della classe positiva (attacco)
     
-    # Metriche base
+    # Calcolo delle metriche base
     accuracy = (y_pred_binary == y_test).mean()
-    precision = precision_score(y_test, y_pred_binary, zero_division=0) if len(np.unique(y_test)) > 1 else 0
-    recall = recall_score(y_test, y_pred_binary, zero_division=0) if len(np.unique(y_test)) > 1 else 0
-    auc = roc_auc_score(y_test, y_pred_prob) if len(np.unique(y_test)) > 1 else 0
     
+    # Metriche che richiedono gestione dei casi edge
+    if len(np.unique(y_test)) > 1:
+        precision = precision_score(y_test, y_pred_binary, zero_division=0)
+        recall = recall_score(y_test, y_pred_binary, zero_division=0)
+        auc = roc_auc_score(y_test, y_pred_prob)
+    else:
+        precision = 0.0
+        recall = 0.0
+        auc = 0.0
+    
+    # F1-score e Balanced Accuracy
     f1_score_val = f1_score(y_test, y_pred_binary, zero_division=0)
     balanced_acc = balanced_accuracy_score(y_test, y_pred_binary)
     
-    # Report per classe
-    report = classification_report(y_test, y_pred_binary, target_names=["natural", "attack"], output_dict=True, zero_division=0)
+    # Report dettagliato per classe
+    report = classification_report(
+        y_test, y_pred_binary, 
+        target_names=["natural", "attack"], 
+        output_dict=True, 
+        zero_division=0
+    )
     conf_matrix = confusion_matrix(y_test, y_pred_binary)
     
-    # Loss simulata (Random Forest non ha loss, usiamo 1 - accuracy)
+    # Loss simulata (Random Forest non ha una loss specifica, usiamo 1 - accuracy)
     loss = 1 - accuracy
     
+    # Stampa risultati
     print(f"  Loss (simulata): {loss:.4f}")
     print(f"  Accuracy: {accuracy:.4f}")
     print(f"  F1-Score: {f1_score_val:.4f}")
@@ -366,11 +401,21 @@ def evaluate_smartgrid_random_forest_model(model, X_test, y_test, set_name="Test
     print(f"  Precision: {precision:.4f}")
     print(f"  Recall: {recall:.4f}")
     print(f"  AUC: {auc:.4f}")
+    
     print(f"Classification report (per classe):")
     print(classification_report(y_test, y_pred_binary, target_names=["natural", "attack"], zero_division=0))
     print(f"Confusion matrix:")
     print(conf_matrix)
     
+    # Feature importance
+    if hasattr(model, 'feature_importances_'):
+        feature_importances = model.feature_importances_
+        top_features = np.argsort(feature_importances)[::-1][:10]
+        print(f"\nTop 10 Feature Importance:")
+        for i, idx in enumerate(top_features):
+            print(f"  Feature {idx}: {feature_importances[idx]:.4f}")
+    
+    # Restituisce le metriche in formato compatibile con il codice esistente
     return loss, accuracy, {
         "accuracy": accuracy,
         "precision": precision,
@@ -415,132 +460,100 @@ def feature_importance_analysis(X, y, feature_names=None, n_estimators=100, titl
     print()
     return results
 
-# ========== NUOVA FUNZIONE: SALVA METRICHE E FEATURE IMPORTANCE IN FILE TXT ==========
+# ========== FUNZIONE SALVATAGGIO REPORT ==========
 
-def save_centralized_training_report(history, X_val, y_val, model, feature_importance_before=None, feature_importance_after=None):
+def save_centralized_random_forest_report(X_val, y_val, model, final_metrics, feature_importance_before=None, feature_importance_after=None):
     """
-    Salva un file txt con una tabella delle metriche ad ogni epoca, statistiche per metrica,
-    e una sezione con la feature importance prima/dopo PCA.
+    Salva un report per Random Forest centralizzato.
+    Diverso dalla versione DNN perché Random Forest non ha epoche di training.
+    
+    Args:
+        X_val: Dati di validation
+        y_val: Etichette di validation
+        model: Modello Random Forest addestrato
+        final_metrics: Metriche finali del modello
+        feature_importance_before: Feature importance prima del preprocessing
+        feature_importance_after: Feature importance dopo il preprocessing
     """
-
     results_dir = os.path.join("results")
     os.makedirs(results_dir, exist_ok=True)
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    report_path = os.path.join(results_dir, f"centralized_training_report_{timestamp}.txt")
+    report_path = os.path.join(results_dir, f"centralized_random_forest_report_{timestamp}.txt")
 
-    # Definisci le colonne e la larghezza
-    cols = [
-        ("epoch", "Epoch", 6),
-        ("loss", "Loss", 11),
-        ("accuracy", "Accuracy", 11),
-        ("balanced_accuracy", "BalancedAcc", 13),
-        ("auc", "AUC", 9),
-        ("f1_score", "F1_Score", 11),
-        ("f1_natural", "F1_Natural", 11),
-        ("f1_attack", "F1_Attack", 11),
-        ("precision", "Precision", 11),
-        ("precision_natural", "Precision_Nat", 14),
-        ("precision_attack", "Precision_Att", 14),
-        ("recall", "Recall", 11),
-        ("recall_natural", "Recall_Nat", 12),
-        ("recall_attack", "Recall_Att", 12),
-    ]
+    # Predizioni per matrice di confusione
+    y_pred_binary = model.predict(X_val)
+    conf_matrix = confusion_matrix(y_val, y_pred_binary)
+    
+    # Header del report
+    title = "RESOCONTO ADDESTRAMENTO CENTRALIZZATO SMARTGRID - RANDOM FOREST"
+    header_lines = []
+    header_lines.append(title)
+    header_lines.append("=" * len(title))
+    header_lines.append(f"Data: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    header_lines.append(f"Modello: Random Forest")
+    header_lines.append(f"N. Estimatori: {model.n_estimators}")
+    header_lines.append(f"Max Depth: {model.max_depth}")
+    header_lines.append(f"Random State: {model.random_state}")
+    header_lines.append("")
 
-    def fmt(val, width):
-        if val is None or (isinstance(val, float) and np.isnan(val)):
-            return "N/A".ljust(width)
-        return f"{val:.6f}".ljust(width)
+    # Metriche finali
+    metrics_lines = []
+    metrics_lines.append("METRICHE FINALI:")
+    metrics_lines.append("=" * 40)
+    metrics_lines.append(f"Accuracy: {final_metrics['accuracy']:.6f}")
+    metrics_lines.append(f"F1-Score: {final_metrics['f1_score']:.6f}")
+    metrics_lines.append(f"Balanced Accuracy: {final_metrics['balanced_accuracy']:.6f}")
+    metrics_lines.append(f"Precision: {final_metrics['precision']:.6f}")
+    metrics_lines.append(f"Recall: {final_metrics['recall']:.6f}")
+    metrics_lines.append(f"AUC: {final_metrics['auc']:.6f}")
+    metrics_lines.append("")
+    
+    # Metriche per classe
+    metrics_lines.append("METRICHE PER CLASSE:")
+    metrics_lines.append("-" * 30)
+    metrics_lines.append("CLASSE NATURAL:")
+    metrics_lines.append(f"  Precision: {final_metrics['precision_natural']:.6f}")
+    metrics_lines.append(f"  Recall: {final_metrics['recall_natural']:.6f}")
+    metrics_lines.append(f"  F1-Score: {final_metrics['f1_natural']:.6f}")
+    metrics_lines.append(f"  Support: {final_metrics['support_natural']}")
+    metrics_lines.append("")
+    metrics_lines.append("CLASSE ATTACK:")
+    metrics_lines.append(f"  Precision: {final_metrics['precision_attack']:.6f}")
+    metrics_lines.append(f"  Recall: {final_metrics['recall_attack']:.6f}")
+    metrics_lines.append(f"  F1-Score: {final_metrics['f1_attack']:.6f}")
+    metrics_lines.append(f"  Support: {final_metrics['support_attack']}")
+    metrics_lines.append("")
 
-    # Raccogli metriche per ogni epoca
-    n_epochs = len(history.history["loss"])
-    metric_rows = []
-    for i in range(n_epochs):
-        # Prendiamo i valori di loss, accuracy, auc da history
-        loss = history.history["val_loss"][i] if "val_loss" in history.history else np.nan
-        accuracy = history.history["val_accuracy"][i] if "val_accuracy" in history.history else np.nan
-        auc = history.history["val_auc"][i] if "val_auc" in history.history else np.nan
-
-        # Per metriche custom, usiamo il modello finale (approssimazione didattica)
-        y_pred_prob = model.predict(X_val, verbose=0)
-        y_pred_binary = (y_pred_prob > 0.5).astype(int).flatten()
-        balanced_acc = balanced_accuracy_score(y_val, y_pred_binary)
-        f1_score_val = f1_score(y_val, y_pred_binary)
-        report = classification_report(y_val, y_pred_binary, target_names=["natural", "attack"], output_dict=True, zero_division=0)
-        precision = report["weighted avg"]["precision"]
-        recall = report["weighted avg"]["recall"]
-        f1_score_macro = report["weighted avg"]["f1-score"]
-
-        metric_rows.append({
-            "epoch": i+1,
-            "loss": loss,
-            "accuracy": accuracy,
-            "balanced_accuracy": balanced_acc,
-            "auc": auc,
-            "f1_score": f1_score_macro,
-            "f1_natural": report["natural"]["f1-score"],
-            "f1_attack": report["attack"]["f1-score"],
-            "precision": precision,
-            "precision_natural": report["natural"]["precision"],
-            "precision_attack": report["attack"]["precision"],
-            "recall": recall,
-            "recall_natural": report["natural"]["recall"],
-            "recall_attack": report["attack"]["recall"],
-        })
-
-    # Header della tabella
-    title = "RESOCONTO ADDESTRAMENTO CENTRALIZZATO SMARTGRID"
-    n_epochs = len(metric_rows)
-    header = f"{title}\nEpoche totali: {n_epochs}\n\nTABELLA RIASSUNTIVA METRICHE:\n" + "="*140 + "\n"
-    col_headers = "  ".join([name.ljust(width) for _, name, width in cols])
-    sep = "-" * 140
-
-    table_lines = []
-    table_lines.append(col_headers)
-    table_lines.append(sep)
-    for row in metric_rows:
-        vals = []
-        for k, _, width in cols:
-            v = row.get(k, None)
-            if k == "epoch":
-                vals.append(str(v).ljust(width))
-            else:
-                vals.append(fmt(v, width))
-        table_lines.append("  ".join(vals))
-
-    # STATISTICHE FINALI
-    stats_lines = []
-    stats_lines.append("\nSTATISTICHE FINALI:\n" + "="*60 + "\n")
-    for k, name, width in cols:
-        if k == "epoch":
-            continue
-        vals = [row[k] for row in metric_rows if row[k] is not None and not (isinstance(row[k], float) and np.isnan(row[k]))]
-        if not vals:
-            continue
-        start = vals[0]
-        end = vals[-1]
-        minv = np.min(vals)
-        maxv = np.max(vals)
-        meanv = np.mean(vals)
-        miglioramento = end - start if isinstance(end, float) and isinstance(start, float) else 0
-        trend = "📈" if miglioramento > 0 else ("📉" if miglioramento < 0 else "")
-        stats_lines.append(f"🔹 {name.upper()}:")
-        stats_lines.append(f"   Epoche disponibili  : {len(vals)}")
-        stats_lines.append(f"   Valore iniziale     : {fmt(start, 9)}")
-        stats_lines.append(f"   Valore finale       : {fmt(end, 9)}")
-        stats_lines.append(f"   Valore minimo       : {fmt(minv, 9)}")
-        stats_lines.append(f"   Valore massimo      : {fmt(maxv, 9)}")
-        stats_lines.append(f"   Valore medio        : {fmt(meanv, 9)}")
-        stats_lines.append(f"   Miglioramento       : {fmt(miglioramento, 9)} {trend}")
-        stats_lines.append("")
-        
-    conf_matrix = confusion_matrix(y_val, (model.predict(X_val, verbose=0) > 0.5).astype(int).flatten())
+    # Matrice di confusione
     conf_matrix_lines = []
-    conf_matrix_lines.append("\nMATRICE DI CONFUSIONE SUL VALIDATION SET:\n" + "-"*40)
-    conf_matrix_lines.append(f"{'tp:':<2} {conf_matrix[1, 1]:<5} {'fp:':<2} {conf_matrix[0, 1]:<5} {'fn:':<2} {conf_matrix[1, 0]:<5} {'tn:':<2} {conf_matrix[0, 0]:<5}\n")
+    conf_matrix_lines.append("MATRICE DI CONFUSIONE SUL VALIDATION SET:")
+    conf_matrix_lines.append("-" * 40)
+    conf_matrix_lines.append(f"True Positive (TP):  {conf_matrix[1, 1]}")
+    conf_matrix_lines.append(f"False Positive (FP): {conf_matrix[0, 1]}")
+    conf_matrix_lines.append(f"False Negative (FN): {conf_matrix[1, 0]}")
+    conf_matrix_lines.append(f"True Negative (TN):  {conf_matrix[0, 0]}")
+    conf_matrix_lines.append("")
 
-    # SEZIONE FEATURE IMPORTANCE (PRIMA E DOPO PCA)
+    # Feature importance del modello Random Forest
+    model_fi_lines = []
+    model_fi_lines.append("FEATURE IMPORTANCE DEL MODELLO RANDOM FOREST:")
+    model_fi_lines.append("-" * 60)
+    if hasattr(model, 'feature_importances_'):
+        importances = model.feature_importances_
+        indices = np.argsort(importances)[::-1]
+        model_fi_lines.append(f"{'Rank':<6} {'Feature':<15} {'Importance':<12}")
+        model_fi_lines.append("-" * 35)
+        for i in range(min(20, len(importances))):
+            idx = indices[i]
+            model_fi_lines.append(f"{i+1:<6} Feature_{idx:<10} {importances[idx]:.6f}")
+    else:
+        model_fi_lines.append("Feature importance non disponibile")
+    model_fi_lines.append("")
+
+    # Feature importance prima e dopo preprocessing 
     fi_lines = []
-    fi_lines.append("\nFEATURE IMPORTANCE PRIMA DELLA PCA (RandomForest):\n" + "-"*60)
+    fi_lines.append("FEATURE IMPORTANCE PRIMA DELLA PREPROCESSING:")
+    fi_lines.append("-" * 60)
     if feature_importance_before is not None:
         fi_lines.append(f"{'Feature':<25} {'Importance':<12}")
         fi_lines.append("-" * 40)
@@ -548,33 +561,41 @@ def save_centralized_training_report(history, X_val, y_val, model, feature_impor
             fi_lines.append(f"{fname:<25} {imp:.6f}")
     else:
         fi_lines.append("Non disponibile")
-    fi_lines.append("\nFEATURE IMPORTANCE DOPO LA PCA (RandomForest):\n" + "-"*60)
+    fi_lines.append("")
+    
+    fi_lines.append("FEATURE IMPORTANCE DOPO LA PREPROCESSING:")
+    fi_lines.append("-" * 60)
     if feature_importance_after is not None:
-        fi_lines.append(f"{'PCA_Component':<25} {'Importance':<12}")
+        fi_lines.append(f"{'Feature/Componente':<25} {'Importance':<12}")
         fi_lines.append("-" * 40)
         for fname, imp in feature_importance_after:
             fi_lines.append(f"{fname:<25} {imp:.6f}")
     else:
         fi_lines.append("Non disponibile")
+    fi_lines.append("")
 
+    # Scrivi il file
     with open(report_path, "w") as f:
-        f.write(header)
-        for line in table_lines:
+        # Scrivi tutte le sezioni
+        for line in header_lines:
             f.write(line + "\n")
-        f.write("="*140 + "\n")
-        for line in stats_lines:
+        for line in metrics_lines:
             f.write(line + "\n")
         for line in conf_matrix_lines:
             f.write(line + "\n")
+        for line in model_fi_lines:
+            f.write(line + "\n")
         for line in fi_lines:
             f.write(line + "\n")
-    print(f"\n[SERVER] ✅ Report addestramento centralizzato salvato in: {report_path}")
+    
+    print(f"\n[SERVER] ✅ Report Random Forest centralizzato salvato in: {report_path}")
 
 # ========== MAIN ==========
 
 def main():
-    print("INIZIO ADDESTRAMENTO DNN CENTRALIZZATO SMARTGRID (PIPELINE FEDERATA + FEATURE IMPORTANCE)")
+    print("INIZIO ADDESTRAMENTO RANDOM FOREST CENTRALIZZATO SMARTGRID")
     try:
+        # Carica e prepara i dati
         X, y, dataset_info = load_centralized_smartgrid_data()
         X_train_raw, X_val_raw, X_test_raw, y_train, y_val, y_test = split_train_validation_test(
             X, y, train_size=0.7, val_size=0.15, test_size=0.15, random_state=42
@@ -588,24 +609,50 @@ def main():
         # Random Forest gestisce automaticamente i class weights con class_weight='balanced'
         print(f"\n[Centralizzato] Class weights: gestiti automaticamente da Random Forest")
 
-        # Crea modello
+        # Crea e addestra il modello Random Forest
         model = create_smartgrid_random_forest_model(input_features)
         history = train_smartgrid_random_forest_model(model, X_train_final, y_train, X_val_final, y_val)
+        
         print("\n" + "=" * 80)
-        inal_loss, final_accuracy, final_metrics = evaluate_smartgrid_random_forest_model(model, X_test_final, y_test, "Test", threshold=0.5)
+        
+        # Valutazione finale
+        final_loss, final_accuracy, final_metrics = evaluate_smartgrid_random_forest_model(
+            model, X_test_final, y_test, "Test", threshold=0.5
+        )
 
-        # Calcola feature importance PRIMA e DOPO la PCA (se vuoi, puoi modificarlo secondo le tue esigenze)
+        # Calcola feature importance PRIMA e DOPO la preprocessing
+        print("\n" + "=" * 60)
         feature_importance_before = feature_importance_analysis(
             X_train_raw.values, y_train, feature_names=list(X_train_raw.columns), 
             title="Feature Importance (prima del preprocessing)", max_show=20
         )
+        
         feature_importance_after = feature_importance_analysis(
-            X_train_final, y_train, feature_names=[f"F{i+1}" for i in range(X_train_final.shape[1])],
+            X_train_final, y_train, 
+            feature_names=[f"F{i+1}" for i in range(X_train_final.shape[1])],
             title="Feature Importance (dopo preprocessing/PCA)", max_show=20
         )
-        save_centralized_training_report(history, X_val_final, y_val, model, feature_importance_before, feature_importance_after)
 
-        print("\nPipeline centralizzata completata.\n")
+        # Salva il report 
+        save_centralized_random_forest_report(
+            X_val_final, y_val, model, final_metrics, 
+            feature_importance_before, feature_importance_after
+        )
+
+        print("\nPipeline Random Forest centralizzata completata.\n")
+        
+        # Riassunto finale
+        print("=" * 80)
+        print("RIASSUNTO FINALE:")
+        print(f"  Modello: Random Forest ({model.n_estimators} alberi)")
+        print(f"  Campioni training: {len(X_train_final)}")
+        print(f"  Campioni test: {len(X_test_final)}")
+        print(f"  Feature finali: {input_features}")
+        print(f"  Accuracy test: {final_accuracy:.4f}")
+        print(f"  F1-Score test: {final_metrics['f1_score']:.4f}")
+        print(f"  Balanced Accuracy test: {final_metrics['balanced_accuracy']:.4f}")
+        print("=" * 80)
+        
     except Exception as e:
         print(f"Errore durante l'esecuzione: {e}")
         import traceback
