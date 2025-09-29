@@ -10,6 +10,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score, classification_report, confusion_matrix
+from sklearn.ensemble import RandomForestClassifier
 import sys
 import os
 import warnings
@@ -20,8 +21,15 @@ warnings.filterwarnings('ignore')
 RANDOM_SEED = 42
 
 # ========== FLAGS GLOBALI PER CONTROLLO PREPROCESSING ==========
-ENABLE_PCA = False  # Cambia a False per disabilitare la PCA
+ENABLE_CLEAN_INF_NAN = True           # Pulizia inf/NaN
+ENABLE_CLIPPING_OUTLIERS = True       # Clipping outlier per quantili (IQR)
+ENABLE_IMPUTATION = True              # Imputazione mediana
+ENABLE_SCALING = False                 # StandardScaler (mean=0, std=1)
 ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Cambia a False per disabilitare rimozione feature quasi-costanti
+ENABLE_PCA = False  # Cambia a False per disabilitare la PCA
+
+if ENABLE_PCA:
+    ENABLE_IMPUTATION= True # Per eseguire la PCA non si possono avere NaN
 
 # CONFIGURAZIONE PCA STATICA
 PCA_COMPONENTS = 71  # NUMERO FISSO - garantisce compatibilità automatica
@@ -183,25 +191,44 @@ def centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw):
     """Pipeline identica a quella federata, con flag dinamiche."""
     set_reproducibility_seeds()
     print(f"=== PREPROCESSING CENTRALIZZATO ===")
-    print(f"PCA: {'ABILITATA' if ENABLE_PCA else 'DISABILITATA'}")
+    print(f"Pulizia inf/NaN: {'ABILITATA' if ENABLE_CLEAN_INF_NAN else 'DISABILITATA'}")
+    print(f"Clipping outlier: {'ABILITATA' if ENABLE_CLIPPING_OUTLIERS else 'DISABILITATA'}")
+    print(f"Imputazione mediana: {'ABILITATA' if ENABLE_IMPUTATION else 'DISABILITATA'}")
     print(f"Rimozione feature quasi-costanti: {'ABILITATA' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else 'DISABILITATA'}")
+    print(f"Scaling standard: {'ABILITATA' if ENABLE_SCALING else 'DISABILITATA'}")
+    print(f"PCA: {'ABILITATA' if ENABLE_PCA else 'DISABILITATA'}")
 
     # Pulizia dei dati
-    X_train_clean = clean_data_for_pca(X_train_raw)
-    X_val_clean = clean_data_for_pca(X_val_raw)
-    X_test_clean = clean_data_for_pca(X_test_raw)
+    if ENABLE_CLEAN_INF_NAN:
+        X_train_clean = clean_data_for_pca(X_train_raw)
+        X_val_clean = clean_data_for_pca(X_val_raw)
+        X_test_clean = clean_data_for_pca(X_test_raw)
+    else:
+        X_train_clean = X_train_raw.values if hasattr(X_train_raw, 'values') else X_train_raw
+        X_val_clean = X_val_raw.values if hasattr(X_val_raw, 'values') else X_val_raw
+        X_test_clean = X_test_raw.values if hasattr(X_test_raw, 'values') else X_test_raw
 
     # Clipping outlier per quantili
-    lower, upper = fit_clip_outliers_iqr(X_train_clean, k=5.0)
-    X_train_clipped = transform_clip_outliers_iqr(X_train_clean, lower, upper)
-    X_val_clipped = transform_clip_outliers_iqr(X_val_clean, lower, upper)
-    X_test_clipped = transform_clip_outliers_iqr(X_test_clean, lower, upper)
+    if ENABLE_CLIPPING_OUTLIERS:
+        lower, upper = fit_clip_outliers_iqr(X_train_clean, k=5.0)
+        X_train_clipped = transform_clip_outliers_iqr(X_train_clean, lower, upper)
+        X_val_clipped = transform_clip_outliers_iqr(X_val_clean, lower, upper)
+        X_test_clipped = transform_clip_outliers_iqr(X_test_clean, lower, upper)
+    else:
+        X_train_clipped = X_train_clean
+        X_val_clipped = X_val_clean
+        X_test_clipped = X_test_clean
 
     # Imputazione dei valori mancanti
-    imputer = SimpleImputer(strategy='median')
-    X_train_imputed = imputer.fit_transform(X_train_clipped)
-    X_val_imputed = imputer.transform(X_val_clipped)
-    X_test_imputed = imputer.transform(X_test_clipped)
+    if ENABLE_IMPUTATION:
+        imputer = SimpleImputer(strategy='median')
+        X_train_imputed = imputer.fit_transform(X_train_clipped)
+        X_val_imputed = imputer.transform(X_val_clipped)
+        X_test_imputed = imputer.transform(X_test_clipped)
+    else:
+        X_train_imputed = X_train_clipped
+        X_val_imputed = X_val_clipped
+        X_test_imputed = X_test_clipped
 
     # Rimozione delle feature quasi-costanti (se abilitata)
     if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES:
@@ -216,10 +243,17 @@ def centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw):
         print(f"Rimozione feature quasi-costanti DISABILITATA - mantenute {X_train_reduced.shape[1]} feature")
 
     # Scaling standard (mean=0, std=1)
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train_reduced)
-    X_val_scaled = scaler.transform(X_val_reduced)
-    X_test_scaled = scaler.transform(X_test_reduced)
+    if ENABLE_SCALING:
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train_reduced)
+        X_val_scaled = scaler.transform(X_val_reduced)
+        X_test_scaled = scaler.transform(X_test_reduced)
+        print("Scaling standard applicato")
+    else:
+        X_train_scaled = X_train_reduced
+        X_val_scaled = X_val_reduced
+        X_test_scaled = X_test_reduced
+        print("Scaling DISABILITATO")
 
     # PCA (se abilitata)
     if ENABLE_PCA:
@@ -427,7 +461,7 @@ def save_centralized_training_report(history, X_val, y_val, model, feature_impor
     e una sezione con la feature importance prima/dopo PCA.
     """
 
-    results_dir = os.path.join("centralized", "SmartGrid", "results")
+    results_dir = os.path.join("results")
     os.makedirs(results_dir, exist_ok=True)
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     report_path = os.path.join(results_dir, f"centralized_training_report_{timestamp}.txt")
@@ -598,6 +632,17 @@ def main():
         history = train_smartgrid_dnn_model(model, X_train_final, y_train, X_val_final, y_val, class_weights)
         print("\n" + "=" * 80)
         final_loss, final_accuracy, final_metrics = evaluate_smartgrid_model(model, X_test_final, y_test, "Test", threshold=0.5)
+
+        # Calcola feature importance PRIMA e DOPO la PCA (se vuoi, puoi modificarlo secondo le tue esigenze)
+        feature_importance_before = feature_importance_analysis(
+            X_train_raw.values, y_train, feature_names=list(X_train_raw.columns), 
+            title="Feature Importance (prima del preprocessing)", max_show=20
+        )
+        feature_importance_after = feature_importance_analysis(
+            X_train_final, y_train, feature_names=[f"F{i+1}" for i in range(X_train_final.shape[1])],
+            title="Feature Importance (dopo preprocessing/PCA)", max_show=20
+        )
+        save_centralized_training_report(history, X_val_final, y_val, model, feature_importance_before, feature_importance_after)
 
         print("\nPipeline centralizzata completata.\n")
     except Exception as e:

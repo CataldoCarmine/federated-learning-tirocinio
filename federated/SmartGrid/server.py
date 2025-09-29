@@ -22,8 +22,15 @@ warnings.filterwarnings('ignore')
 RANDOM_SEED = 42
 
 # ============== FLAGS GLOBALI PER CONTROLLO PREPROCESSING ==============
+ENABLE_CLEAN_INF_NAN = True           # Pulizia inf/NaN
+ENABLE_CLIPPING_OUTLIERS = True       # Clipping outlier per quantili (IQR)
+ENABLE_IMPUTATION = True              # Imputazione mediana
+ENABLE_SCALING = False                 # StandardScaler (mean=0, std=1)
+ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Cambia a False per disabilitare rimozione feature quasi-costanti
 ENABLE_PCA = False  # Cambia a False per disabilitare la PCA
-ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = True  # Cambia a False per disabilitare rimozione feature quasi-costanti
+
+if ENABLE_PCA:
+    ENABLE_IMPUTATION= True # Per eseguire la PCA non si possono avere NaN
 
 # CONFIGURAZIONE PCA STATICA
 PCA_COMPONENTS = 74  # NUMERO FISSO - garantisce compatibilità automatica
@@ -46,7 +53,7 @@ LEARNING_RATE = 0.00033732651610264363
 DROPOUT_RATE = 0.4
 DROPOUT_FINAL = DROPOUT_RATE * 0.75
 L2_REG = 0.002063680713812367
-NUM_ROUNDS = 200  # Numero di round di addestramento federato
+NUM_ROUNDS = 50  # Numero di round di addestramento federato
 
 def set_reproducibility_seeds():
     """
@@ -263,18 +270,33 @@ def apply_preprocessing_pipeline(X_global):
     set_reproducibility_seeds()
 
     print(f"[Server] === PIPELINE PREPROCESSING SERVER ===")
-    print(f"[Server] PCA: {'ABILITATA' if ENABLE_PCA else 'DISABILITATA'}")
-    print(f"[Server] Rimozione feature quasi-costanti: {'ABILITATA' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else 'DISABILITATA'}")
+    print(f"Pulizia inf/NaN: {'ABILITATA' if ENABLE_CLEAN_INF_NAN else 'DISABILITATA'}")
+    print(f"Clipping outlier: {'ABILITATA' if ENABLE_CLIPPING_OUTLIERS else 'DISABILITATA'}")
+    print(f"Imputazione mediana: {'ABILITATA' if ENABLE_IMPUTATION else 'DISABILITATA'}")
+    print(f"Rimozione feature quasi-costanti: {'ABILITATA' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else 'DISABILITATA'}")
+    print(f"Scaling standard: {'ABILITATA' if ENABLE_SCALING else 'DISABILITATA'}")
+    print(f"PCA: {'ABILITATA' if ENABLE_PCA else 'DISABILITATA'}")
 
-    # Pulizia preliminare (inf/NaN)
-    X_cleaned = clean_data_for_pca(X_global)
-    # Clipping outlier feature-wise usando limiti calcolati sui dati di test globali
-    X_clipped = clip_outliers_iqr(np.array(X_cleaned, dtype=float))
-    # Imputazione mediana
-    imputer = SimpleImputer(strategy='median')
-    X_imputed = imputer.fit_transform(X_clipped)
-    
-    # Rimozione feature quasi-costanti (CONDIZIONALE)
+    # STEP 1: Pulizia inf/NaN
+    if ENABLE_CLEAN_INF_NAN:
+        X_cleaned = clean_data_for_pca(X_global)
+    else:
+        X_cleaned = X_global if hasattr(X_global, 'values') else X_global
+        
+    # STEP 2: Clipping outlier feature-wise usando limiti calcolati sui dati di test globali
+    if ENABLE_CLIPPING_OUTLIERS:
+        X_clipped = clip_outliers_iqr(np.array(X_cleaned, dtype=float))
+    else:
+        X_clipped = X_cleaned
+
+    # STEP 3: Imputazione mediana
+    if ENABLE_IMPUTATION:
+        imputer = SimpleImputer(strategy='median')
+        X_imputed = imputer.fit_transform(X_clipped)
+    else:
+        X_imputed = X_clipped
+
+    # STEP 4: Rimozione feature quasi-costanti (CONDIZIONALE)
     if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES:
         X_reduced, keep_mask = remove_near_constant_features(X_imputed, threshold_var=1e-12, threshold_ratio=0.999)
         print(f"[Server] Feature dopo rimozione quasi-costanti: {X_reduced.shape[1]} (da {X_imputed.shape[1]})")
@@ -282,12 +304,16 @@ def apply_preprocessing_pipeline(X_global):
         X_reduced = X_imputed
         print(f"[Server] Rimozione feature quasi-costanti DISABILITATA - mantenute {X_reduced.shape[1]} feature")
     
-    # Scaling standard
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_reduced)
+    # STEP 5: Scaling standard
+    if ENABLE_SCALING:
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_reduced)
+    else:
+        X_scaled = X_reduced
+
     print(f"[Server] Preprocessing completato (clipping, imputazione, {('costanti, ' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else '')}scaling)")
-    
-    # PCA fissa identica ai client (CONDIZIONALE)
+
+    # STEP 6: PCA fissa identica ai client (CONDIZIONALE)
     if ENABLE_PCA:
         X_global_final = apply_pca(X_scaled)
         # VERIFICA FINALE: Dimensioni corrette garantite

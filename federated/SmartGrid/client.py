@@ -21,8 +21,15 @@ warnings.filterwarnings('ignore')
 RANDOM_SEED = 42
 
 # ============== FLAGS GLOBALI PER CONTROLLO PREPROCESSING ==============
+ENABLE_CLEAN_INF_NAN = True           # Pulizia inf/NaN
+ENABLE_CLIPPING_OUTLIERS = True       # Clipping outlier per quantili (IQR)
+ENABLE_IMPUTATION = True              # Imputazione mediana
+ENABLE_SCALING = False                 # StandardScaler (mean=0, std=1)
+ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Cambia a False per disabilitare rimozione feature quasi-costanti
 ENABLE_PCA = False  # Cambia a False per disabilitare la PCA
-ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = True  # Cambia a False per disabilitare rimozione feature quasi-costanti
+
+if ENABLE_PCA:
+    ENABLE_IMPUTATION= True # Per eseguire la PCA non si possono avere NaN
 
 # CONFIGURAZIONE PCA STATICA
 PCA_COMPONENTS = 74  # NUMERO FISSO - garantisce compatibilità automatica
@@ -194,10 +201,13 @@ def load_client_smartgrid_data(client_id):
         raise FileNotFoundError(f"File {file_path} non trovato per il client {client_id}")
     
     df = pd.read_csv(file_path)
-    print(f"[Client {client_id}] === CARICAMENTO E PREPROCESSING DATI ===")
-    print(f"[Client {client_id}] PCA: {'ABILITATA' if ENABLE_PCA else 'DISABILITATA'}")
-    print(f"[Client {client_id}] Rimozione feature quasi-costanti: {'ABILITATA' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else 'DISABILITATA'}")
-    print(f"[Client {client_id}] Dataset caricato: {len(df)} campioni")
+    print(f"=== PREPROCESSING FEDERATO ===")
+    print(f"Pulizia inf/NaN: {'ABILITATA' if ENABLE_CLEAN_INF_NAN else 'DISABILITATA'}")
+    print(f"Clipping outlier: {'ABILITATA' if ENABLE_CLIPPING_OUTLIERS else 'DISABILITATA'}")
+    print(f"Imputazione mediana: {'ABILITATA' if ENABLE_IMPUTATION else 'DISABILITATA'}")
+    print(f"Rimozione feature quasi-costanti: {'ABILITATA' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else 'DISABILITATA'}")
+    print(f"Scaling standard: {'ABILITATA' if ENABLE_SCALING else 'DISABILITATA'}")
+    print(f"PCA: {'ABILITATA' if ENABLE_PCA else 'DISABILITATA'}")
 
     X = df.drop(columns=["marker"])
     y = (df["marker"] != "Natural").astype(int)
@@ -206,10 +216,13 @@ def load_client_smartgrid_data(client_id):
     attack_ratio = y.mean()
     print(f"[Client {client_id}] Distribuzione: {attack_samples} attacchi ({attack_ratio*100:.1f}%), {natural_samples} naturali")
     
-    # Pulizia preliminare: solo inf/NaN
-    X_cleaned = clean_data_for_pca(X)
+    # STEP 1: Pulizia inf/NaN
+    if ENABLE_CLEAN_INF_NAN:
+        X_cleaned = clean_data_for_pca(X)
+    else:
+        X_cleaned = X.values if hasattr(X, 'values') else X
 
-    # STEP 1: Suddivisione train/validation
+    #Suddivisione train/validation
     X_train_raw, X_val_raw, y_train, y_val = train_test_split(
         X_cleaned, y,
         test_size=0.3,
@@ -219,22 +232,25 @@ def load_client_smartgrid_data(client_id):
     print(f"[Client {client_id}] Suddivisione: {len(X_train_raw)} training, {len(X_val_raw)} validation")
 
     # STEP 2: Clipping outlier per quantili SOLO su training, applicato anche a validation usando limiti del train
-    X_train_np = np.array(X_train_raw, dtype=float)
-    X_val_np = np.array(X_val_raw, dtype=float)
-    lower, upper = fit_clip_outliers_iqr(X_train_np, k=5.0)
-    X_train_clipped = transform_clip_outliers_iqr(X_train_np, lower, upper)
-    X_val_clipped = transform_clip_outliers_iqr(X_val_np, lower, upper)
-    
-    # STEP 3: Imputazione mediana
-    imputer = SimpleImputer(strategy='median')
-    X_train_imputed = imputer.fit_transform(X_train_clipped)
-    X_val_imputed = imputer.transform(X_val_clipped)
+    if ENABLE_CLIPPING_OUTLIERS:
+        X_train_np = np.array(X_train_raw, dtype=float)
+        X_val_np = np.array(X_val_raw, dtype=float)
+        lower, upper = fit_clip_outliers_iqr(X_train_np, k=5.0)
+        X_train_clipped = transform_clip_outliers_iqr(X_train_np, lower, upper)
+        X_val_clipped = transform_clip_outliers_iqr(X_val_np, lower, upper)
+    else:
+        X_train_clipped = X_train_raw
+        X_val_clipped = X_val_raw
 
-    # STEP 4: Rimozione feature quasi-costanti (usando solo il train)
-    X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed, threshold_var=1e-12, threshold_ratio=0.999)
-    X_val_reduced = X_val_imputed[:, keep_mask]
-    print(f"[Client {client_id}] Feature dopo rimozione quasi-costanti: {X_train_reduced.shape[1]} (da {X_train.shape[1] if 'X_train' in locals() else X_train_imputed.shape[1]})")
-   
+    # STEP 3: Imputazione mediana
+    if ENABLE_IMPUTATION:
+        imputer = SimpleImputer(strategy='median')
+        X_train_imputed = imputer.fit_transform(X_train_clipped)
+        X_val_imputed = imputer.transform(X_val_clipped)
+    else:
+        X_train_imputed = X_train_clipped
+        X_val_imputed = X_val_clipped
+
     # STEP 4: Rimozione feature quasi-costanti (CONDIZIONALE)
     if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES:
         X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed, threshold_var=1e-12, threshold_ratio=0.999)
@@ -244,13 +260,18 @@ def load_client_smartgrid_data(client_id):
         X_train_reduced = X_train_imputed
         X_val_reduced = X_val_imputed
         print(f"[Client {client_id}] Rimozione feature quasi-costanti DISABILITATA - mantenute {X_train_reduced.shape[1]} feature")
-   
+
     # STEP 5: Scaling standard
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train_reduced)
-    X_val_scaled = scaler.transform(X_val_reduced)
-    print(f"[Client {client_id}] Preprocessing completato (clipping, imputazione, {('costanti, ' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else '')}scaling)")
-   
+    if ENABLE_SCALING:
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train_reduced)
+        X_val_scaled = scaler.transform(X_val_reduced)
+        print(f"[Client {client_id}] Preprocessing completato (clipping, imputazione, {('costanti, ' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else '')}scaling)")
+    else:
+        X_train_scaled = X_train_reduced
+        X_val_scaled = X_val_reduced
+        print(f"[Client {client_id}] Scaling DISABILITATO - usando dati preprocessati direttamente: {X_train_scaled.shape}")
+
     # STEP 6: PCA (CONDIZIONALE)
     if ENABLE_PCA:
         X_train_final = apply_pca(X_train_scaled, client_id=client_id)
