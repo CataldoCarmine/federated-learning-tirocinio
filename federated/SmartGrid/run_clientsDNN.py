@@ -4,7 +4,7 @@ import os
 
 def run_client(client_id):
     # Avvia il client con il suo ID
-    os.system(f"python3 client.py {client_id}")
+    os.system(f"python3 clientDNN.py {client_id}")
 
 if __name__ == "__main__":
     num_clients = 13

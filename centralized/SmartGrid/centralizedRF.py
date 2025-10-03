@@ -21,12 +21,12 @@ warnings.filterwarnings('ignore')
 RANDOM_SEED = 42
 
 # ========== FLAGS GLOBALI PER CONTROLLO PREPROCESSING ==========
-ENABLE_CLEAN_INF_NAN = True           # Pulizia inf/NaN
-ENABLE_CLIPPING_OUTLIERS = True       # Clipping outlier per quantili (IQR)
-ENABLE_IMPUTATION = True              # Imputazione mediana
-ENABLE_SCALING = True                 # StandardScaler (mean=0, std=1)
-ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = True  # Cambia a False per disabilitare rimozione feature quasi-costanti
-ENABLE_PCA = True  # Cambia a False per disabilitare la PCA
+ENABLE_CLEAN_INF_NAN = False           # Pulizia inf/NaN
+ENABLE_CLIPPING_OUTLIERS = False       # Clipping outlier per quantili (IQR)
+ENABLE_IMPUTATION = False              # Imputazione mediana
+ENABLE_SCALING = False                 # StandardScaler (mean=0, std=1)
+ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Cambia a False per disabilitare rimozione feature quasi-costanti
+ENABLE_PCA = False  # Cambia a False per disabilitare la PCA
 
 if ENABLE_PCA:
     ENABLE_IMPUTATION= True # Per eseguire la PCA non si possono avere NaN
@@ -36,7 +36,7 @@ PCA_COMPONENTS = 71  # NUMERO FISSO - garantisce compatibilità automatica
 PCA_RANDOM_SEED = 42  # Seme specifico per PCA
 
 # ========== CONFIGURAZIONE MODELLO RANDOM FOREST ==========
-RF_N_ESTIMATORS = 100          # Numero di alberi nella foresta
+RF_N_ESTIMATORS = 100          # Numero di alberi nella foresta (stesse prestazioni di 50)
 RF_MAX_DEPTH = None            # Profondità massima degli alberi (None = illimitata)
 RF_MIN_SAMPLES_SPLIT = 2       # Campioni minimi per effettuare uno split
 RF_MIN_SAMPLES_LEAF = 1        # Campioni minimi in una foglia
@@ -98,16 +98,7 @@ def apply_pca(X, pca_obj=None):
         X_pca = pca_obj.transform(X)
         return X_pca
 
-def compute_class_weights(y):
-    """Calcola i pesi delle classi per compensare lo sbilanciamento."""
-    try:
-        unique_classes = np.unique(y)
-        class_weights = compute_class_weight('balanced', classes=unique_classes, y=y)
-        class_weight_dict = dict(zip(unique_classes, class_weights))
-        return class_weight_dict
-    except Exception as e:
-        unique_classes = np.unique(y)
-        return {cls: 1.0 for cls in unique_classes}
+# Non utilizziamo la funzione di calcolo class weights perché Random Forest lo gestisce internamente con class_weight='balanced' dando maggiore maggiore peso agli errori fatti sulla classe minoritariaa
 
 def load_centralized_smartgrid_data():
     """Carica e unisce tutti i dati SmartGrid per l'addestramento centralizzato."""
