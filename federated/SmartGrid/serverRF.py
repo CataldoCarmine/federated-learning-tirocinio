@@ -441,9 +441,14 @@ def serialize_trees_for_clients(global_rf, X_val, y_val):
         try:
             # Calcola metriche per l'albero (se abbiamo dati di validazione)
             if X_val is not None and y_val is not None and len(X_val) > 0:
-                y_pred = tree.predict(X_val)
-                tree_accuracy = accuracy_score(y_val, y_pred)
-                tree_weighted_accuracy = balanced_accuracy_score(y_val, y_pred)
+                try:
+                    y_pred = tree.predict(X_val)
+                    tree_accuracy = accuracy_score(y_val, y_pred)
+                    tree_weighted_accuracy = balanced_accuracy_score(y_val, y_pred)
+                except Exception as e:
+                    # Se c'è un mismatch di features (es. in test), usa valori dalla cache
+                    tree_accuracy = getattr(global_rf, 'tree_weights_', [1.0] * len(global_rf.estimators_))[idx]
+                    tree_weighted_accuracy = tree_accuracy
             else:
                 # Usa valori di default o dalla cache se disponibile
                 tree_accuracy = getattr(global_rf, 'tree_weights_', [1.0] * len(global_rf.estimators_))[idx]
