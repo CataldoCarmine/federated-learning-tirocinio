@@ -1,14 +1,11 @@
 import tensorflow as tf
 from tensorflow import keras
-from tensorflow.keras import layers, regularizers
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
-from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score, classification_report, confusion_matrix, precision_score, recall_score
 from sklearn.ensemble import RandomForestClassifier
 import sys
@@ -36,7 +33,7 @@ PCA_COMPONENTS = 71  # NUMERO FISSO - garantisce compatibilità automatica
 PCA_RANDOM_SEED = 42  # Seme specifico per PCA
 
 # ========== CONFIGURAZIONE MODELLO RANDOM FOREST ==========
-RF_N_ESTIMATORS = 100          # Numero di alberi nella foresta (stesse prestazioni di 50)
+RF_N_ESTIMATORS = 100          # Numero di alberi nella foresta (stesse prestazioni di 50, ma più stabile)
 RF_MAX_DEPTH = None            # Profondità massima degli alberi (None = illimitata)
 RF_MIN_SAMPLES_SPLIT = 2       # Campioni minimi per effettuare uno split
 RF_MIN_SAMPLES_LEAF = 1        # Campioni minimi in una foglia
