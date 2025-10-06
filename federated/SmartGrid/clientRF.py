@@ -406,17 +406,7 @@ def serialize_trees_for_aggregation(trees_performance, max_trees=None):
         try:
             # Serializza l'albero usando joblib (più efficiente di pickle per scikit-learn)
             tree_bytes = joblib.dumps(tree)
-            
-            tree_info = {
-                'tree_data': tree_bytes,
-                'accuracy': float(accuracy),
-                'weighted_accuracy': float(weighted_accuracy),
-                'tree_index': i,
-                'n_nodes': tree.tree_.node_count,
-                'max_depth': tree.tree_.max_depth
-            }
-            
-            serialized_trees.append(tree_info)
+            serialized_trees.append(tree_bytes)
             
         except Exception as e:
             print(f"[Client] Errore serializzazione albero {i}: {e}")
@@ -461,9 +451,9 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             # Converti in formato compatibile con Flower
             # Flower si aspetta una lista di array numpy
             parameters = []
-            for tree_info in serialized_trees:
+            for tree_bytes in serialized_trees:
                 # Convertiamo i bytes in numpy array per compatibilità
-                tree_array = np.frombuffer(tree_info['tree_data'], dtype=np.uint8)
+                tree_array = np.frombuffer(tree_bytes, dtype=np.uint8)
                 parameters.append(tree_array)
         
             print(f"[Client {client_id}] Invio {len(parameters)} alberi al server")

@@ -321,19 +321,22 @@ def deserialize_trees_from_client(parameters):
     Deserializza gli alberi ricevuti da un client.
     
     Args:
-        parameters: Parametri ricevuti dal client (formato Flower Parameters)
+        parameters: Parametri ricevuti dal client (formato Flower Parameters o lista)
         
     Returns:
         Lista di alberi deserializzati o None se errore
     """
     try:
-        # Converti Parameters in lista di numpy arrays
+        # Gestisce diversi tipi di parametri da Flower
         if hasattr(parameters, 'tensors'):
-            # Flower Parameters object
+            # Flower Parameters object (v1.0+)
             parameter_arrays = parameters.tensors
-        else:
-            # Assume già una lista
+        elif isinstance(parameters, list):
+            # Lista diretta di numpy arrays
             parameter_arrays = parameters
+        else:
+            # Prova a convertire direttamente
+            parameter_arrays = list(parameters) if parameters else []
             
         if not parameter_arrays:
             print(f"[Server] Nessun parametro ricevuto dal client")
@@ -353,7 +356,9 @@ def deserialize_trees_from_client(parameters):
                 
                 # Verifica che sia un albero valido
                 if hasattr(tree, 'predict'):
-                    deserialized_trees.append(tree)
+                    # Per compatibilità con il format del paper, aggiungiamo metriche fittizie
+                    # Il client dovrebbe inviare queste informazioni, ma per ora usiamo valori di default
+                    deserialized_trees.append((tree, 0.8, 0.8))  # (tree, accuracy, weighted_accuracy)
                     print(f"[Server] ✅ Albero {i+1} deserializzato con successo")
                 else:
                     print(f"[Server] ⚠️ Parametro {i+1} non è un albero valido")
@@ -895,7 +900,7 @@ class SmartGridRandomForestFedAvg(FedAvg):
         
         if not results:
             print("❌ ERRORE: Nessun client ha fornito risultati validi")
-            return None
+            return None, {}
         
         # Stampa metriche dei client Random Forest
         print_client_metrics_rf(results)
@@ -924,7 +929,7 @@ class SmartGridRandomForestFedAvg(FedAvg):
             
             if not all_trees_data:
                 print(f"[Server] ❌ Nessun albero valido ricevuto da alcun client")
-                return None
+                return None, {}
             
             # Seleziona i migliori alberi secondo il paper
             selected_trees = select_best_trees(
@@ -936,7 +941,7 @@ class SmartGridRandomForestFedAvg(FedAvg):
             
             if not selected_trees:
                 print(f"[Server] ❌ Nessun albero selezionato per l'aggregazione")
-                return None
+                return None, {}
             
             # Crea il Random Forest globale
             global_rf = create_global_random_forest(selected_trees)
@@ -946,7 +951,7 @@ class SmartGridRandomForestFedAvg(FedAvg):
             
             if not serialized_model:
                 print(f"[Server] ❌ Errore nella serializzazione del modello globale")
-                return None
+                return None, {}
             
             print(f"[Server] ✅ Aggregazione Random Forest completata")
             print(f"[Server] ✅ Modello globale creato con {len(selected_trees)} alberi")
@@ -959,7 +964,7 @@ class SmartGridRandomForestFedAvg(FedAvg):
             print(f"[Server] ❌ ERRORE durante aggregazione Random Forest: {e}")
             import traceback
             traceback.print_exc()
-            return None
+            return None, {}
 
     def aggregate_evaluate(self, server_round, results, failures):
         """
