@@ -405,19 +405,11 @@ def extract_trees_from_forest(model, X_val, y_val):
 def serialize_trees_for_aggregation(trees_performance, max_trees=None):
     """
     Serializza gli alberi per l'invio al server.
-    Implementa la metodologia del paper per la selezione degli alberi da inviare.
-    
-    Args:
-        trees_performance: Lista di tuple (tree, accuracy, weighted_accuracy)
-        max_trees: Numero massimo di alberi da inviare (None = tutti)
-        
-    Returns:
-        Lista di alberi serializzati con le loro performance
+    Usa pickle per compatibilità con numpy arrays e Flower.
     """
     print(f"[Client] === SERIALIZZAZIONE ALBERI ===")
     
     if max_trees is not None:
-        # Seleziona solo i migliori alberi basandosi sulla weighted accuracy
         selected_trees = trees_performance[:max_trees]
         print(f"[Client] Selezionati {len(selected_trees)} migliori alberi su {len(trees_performance)}")
     else:
@@ -428,8 +420,8 @@ def serialize_trees_for_aggregation(trees_performance, max_trees=None):
     
     for i, (tree, accuracy, weighted_accuracy) in enumerate(selected_trees):
         try:
-            # Serializza l'albero usando joblib DIRETTAMENTE in bytes
-            tree_bytes = joblib.dumps(tree)
+            # Usa pickle.dumps() invece di joblib.dumps()
+            tree_bytes = pickle.dumps(tree)
             serialized_trees.append(tree_bytes)
             
         except Exception as e:
@@ -479,8 +471,7 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
 
     def set_parameters(self, parameters):
         """
-        Per Random Forest federato, questo metodo riceve il modello aggregato dal server.
-        Il server invia un nuovo Random Forest composto dai migliori alberi di tutti i client.
+        Riceve il modello aggregato dal server.
         """
         global model
 
@@ -490,10 +481,9 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
 
         try:
             # Il server invia il modello Random Forest aggregato
-            # Assumiamo che il primo parametro sia il modello serializzato
             if len(parameters) > 0:
                 aggregated_model_bytes = parameters[0].tobytes()
-                model = joblib.loads(aggregated_model_bytes)
+                model = pickle.loads(aggregated_model_bytes)
             
                 print(f"[Client {client_id}] ✅ Modello aggregato ricevuto dal server")
                 print(f"[Client {client_id}] Nuovo modello ha {model.n_estimators} alberi")
