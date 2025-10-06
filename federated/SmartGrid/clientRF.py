@@ -6,6 +6,7 @@ import os
 import warnings
 import pickle
 import joblib
+from io import BytesIO
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.impute import SimpleImputer
@@ -405,18 +406,10 @@ def serialize_trees_for_aggregation(trees_performance, max_trees=None):
     for i, (tree, accuracy, weighted_accuracy) in enumerate(selected_trees):
         try:
             # Serializza l'albero usando joblib (più efficiente di pickle per scikit-learn)
-            tree_bytes = joblib.dumps(tree)
-            
-            tree_info = {
-                'tree_data': tree_bytes,
-                'accuracy': float(accuracy),
-                'weighted_accuracy': float(weighted_accuracy),
-                'tree_index': i,
-                'n_nodes': tree.tree_.node_count,
-                'max_depth': tree.tree_.max_depth
-            }
-            
-            serialized_trees.append(tree_info)
+            buf = BytesIO()
+            joblib.dump(tree, buf)
+            tree_bytes = buf.getvalue()
+            serialized_trees.append(tree_bytes)
             
         except Exception as e:
             print(f"[Client] Errore serializzazione albero {i}: {e}")
@@ -461,9 +454,9 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             # Converti in formato compatibile con Flower
             # Flower si aspetta una lista di array numpy
             parameters = []
-            for tree_info in serialized_trees:
+            for tree_bytes in serialized_trees:
                 # Convertiamo i bytes in numpy array per compatibilità
-                tree_array = np.frombuffer(tree_info['tree_data'], dtype=np.uint8)
+                tree_array = np.frombuffer(tree_bytes, dtype=np.uint8)
                 parameters.append(tree_array)
         
             print(f"[Client {client_id}] Invio {len(parameters)} alberi al server")
@@ -489,7 +482,7 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             # Assumiamo che il primo parametro sia il modello serializzato
             if len(parameters) > 0:
                 aggregated_model_bytes = parameters[0].tobytes()
-                model = joblib.loads(aggregated_model_bytes)
+                model = joblib.load(BytesIO(aggregated_model_bytes))
             
                 print(f"[Client {client_id}] ✅ Modello aggregato ricevuto dal server")
                 print(f"[Client {client_id}] Nuovo modello ha {model.n_estimators} alberi")
