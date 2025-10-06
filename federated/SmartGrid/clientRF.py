@@ -5,25 +5,25 @@ import sys
 import os
 import warnings
 import pickle
+import joblib
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score, classification_report, confusion_matrix, accuracy_score
+from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score, classification_report, confusion_matrix, accuracy_score, precision_score, recall_score
 warnings.filterwarnings('ignore')
 
 # CONFIGURAZIONE SEMI PER RIPRODUCIBILITÀ
 RANDOM_SEED = 42
 
 # ============== FLAGS GLOBALI PER CONTROLLO PREPROCESSING ==============
-ENABLE_CLEAN_INF_NAN = True           # Pulizia inf/NaN
-ENABLE_CLIPPING_OUTLIERS = True       # Clipping outlier per quantili (IQR)
-ENABLE_IMPUTATION = True              # Imputazione mediana
+ENABLE_CLEAN_INF_NAN = False           # Pulizia inf/NaN
+ENABLE_CLIPPING_OUTLIERS = False       # Clipping outlier per quantili (IQR)
+ENABLE_IMPUTATION = False              # Imputazione mediana
 ENABLE_SCALING = False                 # StandardScaler (mean=0, std=1)
 ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Rimozione feature quasi-costanti
-ENABLE_PCA = False  # PCA
+ENABLE_PCA = False  # PCA per riduzione dimensionalità
 
 if ENABLE_PCA:
     ENABLE_IMPUTATION = True # Per eseguire la PCA non si possono avere NaN
@@ -31,23 +31,30 @@ if ENABLE_PCA:
 # CONFIGURAZIONE PCA STATICA
 PCA_COMPONENTS = 74  # NUMERO FISSO - garantisce compatibilità automatica
 PCA_RANDOM_SEED = 42  # Seme specifico per PCA
-
+  
 # Quando PCA disabilitata, disabilita rimozione feature quasi-costanti per compatibilità dei modelli
 if ENABLE_PCA == False:
     ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False
     PCA_COMPONENTS = None
 
-# ============== CONFIGURAZIONE RANDOM FOREST ==============
-RF_N_ESTIMATORS = 100          # Numero di alberi nella foresta (come nel paper)
-RF_MAX_DEPTH = None            # Profondità massima degli alberi (None = illimitata)
-RF_MIN_SAMPLES_SPLIT = 2       # Campioni minimi per effettuare uno split
-RF_MIN_SAMPLES_LEAF = 1        # Campioni minimi in una foglia
-RF_MAX_FEATURES = 'sqrt'       # Feature da considerare per ogni split
-RF_BOOTSTRAP = True            # Usa bootstrap sampling
-RF_CLASS_WEIGHT = 'balanced'   # Gestione automatica dello sbilanciamento
-RF_CRITERION = 'gini'          # Splitting rule: 'gini' o 'entropy'
+# CONFIGURAZIONE MODELLO RANDOM FOREST
+# Basato sui risultati del paper: hyperparameter tuning per ottimizzare performance
+RF_N_ESTIMATORS = 65      # Numero di alberi nella foresta (dal paper: ottimo tra 65-93)
+RF_MAX_DEPTH = None       # Profondità massima degli alberi (None = illimitata)
+RF_MIN_SAMPLES_SPLIT = 2  # Campioni minimi per effettuare uno split
+RF_MIN_SAMPLES_LEAF = 1   # Campioni minimi in una foglia
+RF_MAX_FEATURES = 'sqrt'  # Feature da considerare per ogni split ('sqrt' dal paper)
+RF_BOOTSTRAP = True       # Usa bootstrap sampling
+RF_CLASS_WEIGHT = 'balanced'  # Gestione automatica dello sbilanciamento
+RF_CRITERION = 'entropy'  # Criterio di splitting (dal paper: entropy migliore di gini per molti dataset)
 
-# ============== FUNZIONI DI RIPRODUCIBILITÀ ==============
+# CONFIGURAZIONE ENSEMBLE PER FEDERATED RANDOM FOREST
+# Basato sulla metodologia del paper per aggregazione degli alberi
+ENSEMBLE_METHOD = 'weighted_voting'  # 'simple_voting' o 'weighted_voting'
+TREE_SELECTION_METHOD = 'accuracy_based'  # Come selezionare i migliori alberi per l'aggregazione
+
+NUM_ROUNDS = 100  # Numero di round di addestramento federato
+
 def set_reproducibility_seeds():
     """
     Imposta tutti i semi per garantire riproducibilità.
@@ -55,15 +62,14 @@ def set_reproducibility_seeds():
     """
     # Seed per NumPy
     np.random.seed(RANDOM_SEED)
-
+    
     # Seed per Python random (usato da scikit-learn)
     import random
     random.seed(RANDOM_SEED)
-
+    
     # Configurazioni per determinismo
     os.environ['PYTHONHASHSEED'] = str(RANDOM_SEED)
 
-# ============== FUNZIONI DI PREPROCESSING ==============
 def fit_clip_outliers_iqr(X, k=5.0):
     """
     Calcola i limiti inferiori e superiori per ogni feature
@@ -98,7 +104,7 @@ def remove_near_constant_features(X, threshold_var=1e-12, threshold_ratio=0.999)
         max_count = np.max(counts)
         ratio = max_count / n
         var = np.nanvar(col_data)
-
+        
         # Tiene solo se NON è costante al 99.9% e varianza > threshold_var
         keep = not (ratio >= threshold_ratio or var < threshold_var)
         keep_mask.append(keep)
@@ -109,8 +115,6 @@ def clean_data_for_pca(X):
     """
     Pulizia robusta dei dati per prevenire problemi numerici in PCA:
     - Sostituisce inf/-inf con NaN
-    - NON usa threshold fissi
-    - NON azzera valori piccoli
     """
     if hasattr(X, 'values'):
         X_array = X.values.copy()
@@ -141,12 +145,12 @@ def apply_pca(X_preprocessed, client_id=None):
                 raise ValueError(f"PCA client {client_id} ha prodotto output con NaN o inf")
             if X_pca.shape[1] != n_components:
                 raise ValueError(f"PCA output shape inconsistente: {X_pca.shape[1]} vs {n_components}")
-
+            
             variance_explained = np.sum(pca.explained_variance_ratio_)
             print(f"[Client {client_id}] ✅ PCA fissa applicata: {X_pca.shape}")
             print(f"[Client {client_id}] Varianza spiegata: {variance_explained*100:.2f}%")
             return X_pca
-
+        
     except Exception as e:
         print(f"[Client {client_id}] ERRORE PCA: {e}")
         print(f"[Client {client_id}] Attivazione fallback semplificato...")
@@ -155,11 +159,10 @@ def apply_pca(X_preprocessed, client_id=None):
         print(f"[Client {client_id}] ✅ Fallback: {X_fallback.shape}")
         return X_fallback
 
-# ============== CARICAMENTO DATI ==============
 def load_client_smartgrid_data(client_id):
     """
-    Carica i dati SmartGrid per un client specifico con preprocessing configurabile.
-    Applica la stessa pipeline del client DNN per mantenere compatibilità.
+    Carica i dati SmartGrid per un client specifico.
+    Applica preprocessing minimale per Random Forest (che gestisce bene dati raw).
     """
     # Imposta semi per riproducibilità del preprocessing
     set_reproducibility_seeds()
@@ -168,9 +171,9 @@ def load_client_smartgrid_data(client_id):
     file_path = os.path.join(script_dir, "..", "..", "data", "SmartGrid", f"data{client_id}.csv")
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File {file_path} non trovato per il client {client_id}")
-
+    
     df = pd.read_csv(file_path)
-    print(f"=== PREPROCESSING FEDERATO RF ===")
+    print(f"=== PREPROCESSING FEDERATO RANDOM FOREST ===")
     print(f"Pulizia inf/NaN: {'ABILITATA' if ENABLE_CLEAN_INF_NAN else 'DISABILITATA'}")
     print(f"Clipping outlier: {'ABILITATA' if ENABLE_CLIPPING_OUTLIERS else 'DISABILITATA'}")
     print(f"Imputazione mediana: {'ABILITATA' if ENABLE_IMPUTATION else 'DISABILITATA'}")
@@ -184,8 +187,9 @@ def load_client_smartgrid_data(client_id):
     natural_samples = (y == 0).sum()
     attack_ratio = y.mean()
     print(f"[Client {client_id}] Distribuzione: {attack_samples} attacchi ({attack_ratio*100:.1f}%), {natural_samples} naturali")
-
-    # STEP 1: Pulizia inf/NaN
+    
+    # Random Forest gestisce bene i dati raw, quindi preprocessing minimale
+    # STEP 1: Pulizia inf/NaN (solo se abilitata)
     if ENABLE_CLEAN_INF_NAN:
         X_cleaned = clean_data_for_pca(X)
     else:
@@ -200,7 +204,7 @@ def load_client_smartgrid_data(client_id):
     )
     print(f"[Client {client_id}] Suddivisione: {len(X_train_raw)} training, {len(X_val_raw)} validation")
 
-    # STEP 2: Clipping outlier per quantili SOLO su training, applicato anche a validation usando limiti del train
+    # STEP 2: Clipping outlier per quantili (solo se abilitato)
     if ENABLE_CLIPPING_OUTLIERS:
         X_train_np = np.array(X_train_raw, dtype=float)
         X_val_np = np.array(X_val_raw, dtype=float)
@@ -211,7 +215,7 @@ def load_client_smartgrid_data(client_id):
         X_train_clipped = X_train_raw
         X_val_clipped = X_val_raw
 
-    # STEP 3: Imputazione mediana
+    # STEP 3: Imputazione mediana (solo se abilitata)
     if ENABLE_IMPUTATION:
         imputer = SimpleImputer(strategy='median')
         X_train_imputed = imputer.fit_transform(X_train_clipped)
@@ -220,7 +224,7 @@ def load_client_smartgrid_data(client_id):
         X_train_imputed = X_train_clipped
         X_val_imputed = X_val_clipped
 
-    # STEP 4: Rimozione feature quasi-costanti (CONDIZIONALE)
+    # STEP 4: Rimozione feature quasi-costanti (solo se abilitata)
     if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES:
         X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed, threshold_var=1e-12, threshold_ratio=0.999)
         X_val_reduced = X_val_imputed[:, keep_mask]
@@ -230,7 +234,7 @@ def load_client_smartgrid_data(client_id):
         X_val_reduced = X_val_imputed
         print(f"[Client {client_id}] Rimozione feature quasi-costanti DISABILITATA - mantenute {X_train_reduced.shape[1]} feature")
 
-    # STEP 5: Scaling standard
+    # STEP 5: Scaling standard (solo se abilitato)
     if ENABLE_SCALING:
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train_reduced)
@@ -241,7 +245,7 @@ def load_client_smartgrid_data(client_id):
         X_val_scaled = X_val_reduced
         print(f"[Client {client_id}] Scaling DISABILITATO - usando dati preprocessati direttamente: {X_train_scaled.shape}")
 
-    # STEP 6: PCA (CONDIZIONALE)
+    # STEP 6: PCA (solo se abilitata)
     if ENABLE_PCA:
         X_train_final = apply_pca(X_train_scaled, client_id=client_id)
         X_val_final = apply_pca(X_val_scaled, client_id=client_id)
@@ -252,7 +256,7 @@ def load_client_smartgrid_data(client_id):
         X_train_final = X_train_scaled
         X_val_final = X_val_scaled
         print(f"[Client {client_id}] PCA DISABILITATA - usando dati scalati direttamente: {X_train_final.shape}")
-
+        
     # Info dataset
     dataset_info = {
         'client_id': client_id,
@@ -265,432 +269,363 @@ def load_client_smartgrid_data(client_id):
         'train_attack_ratio': y_train.mean(),
         'val_attack_ratio': y_val.mean(),
         'original_features': X.shape[1],
-        'final_features': X_train_final.shape[1]
+        'final_features': X_train_final.shape[1],
+        'pca_enabled': ENABLE_PCA,
+        'remove_near_constant_enabled': ENABLE_REMOVE_NEAR_CONSTANT_FEATURES,
+        'pca_components_fixed': PCA_COMPONENTS if ENABLE_PCA else None,
+        'preprocessing_method': f"minimal_for_rf{'_pca' if ENABLE_PCA else ''}",
+        'compatibility_guaranteed': True
     }
-
+    print(f"[Client {client_id}] === CARICAMENTO COMPLETATO ===")
     return X_train_final, y_train, X_val_final, y_val, dataset_info
 
-# ============== FUNZIONI DI SERIALIZZAZIONE ALBERI ==============
-def serialize_tree(tree):
-    """
-    Serializza un albero di decisione di scikit-learn.
-    Usa pickle per convertire l'albero in bytes, poi lo codifica in numpy array.
-    
-    Args:
-        tree: DecisionTreeClassifier di scikit-learn
-        
-    Returns:
-        dict con albero serializzato e metadati
-    """
-    try:
-        # Serializza l'albero usando pickle
-        tree_bytes = pickle.dumps(tree)
-        # Converti in numpy array per compatibilità Flower
-        tree_array = np.frombuffer(tree_bytes, dtype=np.uint8)
-
-        return {
-            'tree_data': tree_array,
-            'tree_size': len(tree_array)
-        }
-    except Exception as e:
-        print(f"Errore serializzazione albero: {e}")
-        raise
-
-def deserialize_tree(tree_dict):
-    """
-    Deserializza un albero di decisione.
-    
-    Args:
-        tree_dict: dizionario con albero serializzato
-        
-    Returns:
-        DecisionTreeClassifier deserializzato
-    """
-    try:
-        # Ricostruisci i bytes dall'array numpy
-        tree_bytes = tree_dict['tree_data'].tobytes()
-        # Deserializza l'albero
-        tree = pickle.loads(tree_bytes)
-
-        return tree
-    except Exception as e:
-        print(f"Errore deserializzazione albero: {e}")
-        raise
-
-def serialize_random_forest_trees(rf_model, X_val, y_val):
-    """
-    Serializza tutti gli alberi del Random Forest con metadati per aggregazione.
-    Calcola accuracy e weighted accuracy per ogni albero come nel paper.
-    
-    Args:
-        rf_model: RandomForestClassifier addestrato
-        X_val: dati di validazione per calcolare accuracy
-        y_val: etichette di validazione
-        
-    Returns:
-        lista di dizionari con alberi serializzati e metadati
-    """
-    trees_data = []
-
-    # Estrai i singoli alberi dalla foresta
-    estimators = rf_model.estimators_
-
-    print(f"Serializzazione {len(estimators)} alberi...")
-
-    for idx, tree in enumerate(estimators):
-        # Predizione con l'albero singolo
-        y_pred = tree.predict(X_val)
-
-        # Calcola accuracy per questo albero
-        tree_accuracy = accuracy_score(y_val, y_pred)
-
-        # Calcola weighted accuracy (basato sulla distribuzione delle classi)
-        # Usa balanced accuracy come approssimazione del weighted accuracy
-        tree_weighted_accuracy = balanced_accuracy_score(y_val, y_pred)
-
-        # Serializza l'albero
-        tree_serialized = serialize_tree(tree)
-
-        # Aggiungi metadati
-        tree_data = {
-            'tree_index': idx,
-            'tree_data': tree_serialized['tree_data'],
-            'tree_size': tree_serialized['tree_size'],
-            'accuracy': tree_accuracy,
-            'weighted_accuracy': tree_weighted_accuracy
-        }
-
-        trees_data.append(tree_data)
-
-    print(f"✅ {len(trees_data)} alberi serializzati")
-    return trees_data
-
-def deserialize_random_forest_trees(trees_data):
-    """
-    Deserializza una lista di alberi e ricostruisce un Random Forest.
-    
-    Args:
-        trees_data: lista di dizionari con alberi serializzati
-        
-    Returns:
-        RandomForestClassifier ricostruito
-    """
-    try:
-        # Deserializza tutti gli alberi
-        trees = []
-        for tree_dict in trees_data:
-            tree = deserialize_tree(tree_dict)
-            trees.append(tree)
-
-        # Crea un nuovo Random Forest con gli alberi deserializzati
-        # Nota: scikit-learn non supporta direttamente la creazione di RF da alberi esistenti
-        # Quindi creiamo un RF vuoto e sostituiamo gli estimators
-        rf = RandomForestClassifier(
-            n_estimators=len(trees),
-            random_state=RANDOM_SEED,
-            n_jobs=-1
-        )
-
-        # Impostiamo gli alberi (questo è un workaround per scikit-learn)
-        rf.estimators_ = trees
-        rf.n_estimators = len(trees)
-
-        # Impostiamo altri attributi necessari dal primo albero
-        if len(trees) > 0:
-            rf.n_features_in_ = trees[0].n_features_in_
-            rf.n_classes_ = trees[0].n_classes_
-            rf.classes_ = trees[0].classes_
-            rf.n_outputs_ = trees[0].n_outputs_
-
-        print(f"✅ Random Forest ricostruito con {len(trees)} alberi")
-        return rf
-
-    except Exception as e:
-        print(f"Errore deserializzazione Random Forest: {e}")
-        raise
-
-# ============== CREAZIONE MODELLO ==============
 def create_random_forest_model():
     """
-    Crea un modello Random Forest con i parametri configurati.
+    Crea il modello Random Forest per SmartGrid.
+    Implementa la configurazione ottimale basata sul paper.
+    
+    Returns:
+        Modello RandomForestClassifier configurato secondo i risultati del paper
     """
+    # Imposta semi per riproducibilità del modello
+    set_reproducibility_seeds()
+
     print(f"[Client] === CREAZIONE RANDOM FOREST ===")
-    print(f"[Client] N. estimatori: {RF_N_ESTIMATORS}")
-    print(f"[Client] Max depth: {RF_MAX_DEPTH}")
-    print(f"[Client] Min samples split: {RF_MIN_SAMPLES_SPLIT}")
-    print(f"[Client] Min samples leaf: {RF_MIN_SAMPLES_LEAF}")
-    print(f"[Client] Max features: {RF_MAX_FEATURES}")
-    print(f"[Client] Bootstrap: {RF_BOOTSTRAP}")
-    print(f"[Client] Class weight: {RF_CLASS_WEIGHT}")
-    print(f"[Client] Criterion: {RF_CRITERION}")
-    print(f"[Client] Random state: {RANDOM_SEED}")
-
+    print(f"[Client] Modello: Random Forest con {RF_N_ESTIMATORS} alberi")
+    print(f"[Client] Criterio: {RF_CRITERION} (dal paper: migliore per molti dataset)")
+    print(f"[Client] Max features: {RF_MAX_FEATURES} (feature selection automatica)")
+    print(f"[Client] Class weight: {RF_CLASS_WEIGHT} (gestione sbilanciamento)")
+    
+    # PARAMETRI OTTIMIZZATI BASATI SUL PAPER
+    # Il paper mostra che entropy come criterio e sqrt per max_features 
+    # danno risultati migliori sui dataset di intrusion detection
     model = RandomForestClassifier(
-        n_estimators=RF_N_ESTIMATORS,
-        max_depth=RF_MAX_DEPTH,
-        min_samples_split=RF_MIN_SAMPLES_SPLIT,
-        min_samples_leaf=RF_MIN_SAMPLES_LEAF,
-        max_features=RF_MAX_FEATURES,
-        bootstrap=RF_BOOTSTRAP,
-        random_state=RANDOM_SEED,
-        n_jobs=-1,
-        class_weight=RF_CLASS_WEIGHT,
-        criterion=RF_CRITERION
+        n_estimators=RF_N_ESTIMATORS,           # Numero di alberi (dal paper: 65-93 range ottimo)
+        criterion=RF_CRITERION,                 # Criterio di splitting (entropy vs gini)
+        max_depth=RF_MAX_DEPTH,                 # Profondità massima degli alberi
+        min_samples_split=RF_MIN_SAMPLES_SPLIT, # Campioni minimi per split
+        min_samples_leaf=RF_MIN_SAMPLES_LEAF,   # Campioni minimi per foglia
+        max_features=RF_MAX_FEATURES,           # Feature da considerare per ogni split
+        bootstrap=RF_BOOTSTRAP,                 # Bootstrap sampling
+        random_state=RANDOM_SEED,               # Per riproducibilità
+        n_jobs=-1,                              # Usa tutti i core disponibili
+        class_weight=RF_CLASS_WEIGHT,           # Gestione automatica dello sbilanciamento
+        oob_score=True                          # Calcola out-of-bag score per validazione
     )
-
+    
+    print(f"[Client] Parametri Random Forest:")
+    print(f"  - N. estimatori: {RF_N_ESTIMATORS}")
+    print(f"  - Criterio: {RF_CRITERION}")
+    print(f"  - Max depth: {RF_MAX_DEPTH}")
+    print(f"  - Min samples split: {RF_MIN_SAMPLES_SPLIT}")
+    print(f"  - Min samples leaf: {RF_MIN_SAMPLES_LEAF}")
+    print(f"  - Max features: {RF_MAX_FEATURES}")
+    print(f"  - Bootstrap: {RF_BOOTSTRAP}")
+    print(f"  - Class weight: {RF_CLASS_WEIGHT}")
+    print(f"  - Random state: {RANDOM_SEED}")
+    print(f"  - OOB Score: True")
+    
     return model
 
-# ============== VARIABILI GLOBALI ==============
+def extract_trees_from_forest(model, X_val, y_val):
+    """
+    Estrae gli alberi dal Random Forest e calcola le loro performance individuali.
+    Implementa la metodologia del paper per la selezione degli alberi migliori.
+    
+    Args:
+        model: Random Forest addestrato
+        X_val: Dati di validazione
+        y_val: Etichette di validazione
+        
+    Returns:
+        Lista di tuple (tree, accuracy, weighted_accuracy) per ogni albero
+    """
+    print(f"[Client] === ESTRAZIONE ALBERI DA RANDOM FOREST ===")
+    
+    trees_performance = []
+    
+    for i, tree in enumerate(model.estimators_):
+        # Predizioni dell'albero singolo
+        tree_predictions = tree.predict(X_val)
+        
+        # Calcola accuracy standard
+        accuracy = accuracy_score(y_val, tree_predictions)
+        
+        # Calcola weighted accuracy (come nel paper)
+        # Weighted accuracy considera la distribuzione delle classi
+        class_counts = np.bincount(y_val)
+        weights = 1.0 / class_counts  # Peso inversamente proporzionale alla frequenza
+        class_weights_norm = weights / weights.sum()  # Normalizza i pesi
+        
+        # Calcola accuracy pesata per classe
+        weighted_acc = 0.0
+        for class_label in np.unique(y_val):
+            class_mask = (y_val == class_label)
+            if np.sum(class_mask) > 0:
+                class_accuracy = accuracy_score(y_val[class_mask], tree_predictions[class_mask])
+                weighted_acc += class_accuracy * class_weights_norm[class_label]
+        
+        trees_performance.append((tree, accuracy, weighted_acc))
+        
+        if i < 5:  # Stampa info per i primi 5 alberi
+            print(f"[Client] Albero {i+1}: Accuracy={accuracy:.4f}, Weighted Accuracy={weighted_acc:.4f}")
+    
+    # Ordina gli alberi per performance (weighted accuracy come nel paper)
+    trees_performance.sort(key=lambda x: x[2], reverse=True)  # Ordina per weighted accuracy
+    
+    print(f"[Client] Migliore albero: Accuracy={trees_performance[0][1]:.4f}, Weighted Accuracy={trees_performance[0][2]:.4f}")
+    print(f"[Client] Peggiore albero: Accuracy={trees_performance[-1][1]:.4f}, Weighted Accuracy={trees_performance[-1][2]:.4f}")
+    
+    return trees_performance
+
+def serialize_trees_for_aggregation(trees_performance, max_trees=None):
+    """
+    Serializza gli alberi per l'invio al server.
+    Implementa la metodologia del paper per la selezione degli alberi da inviare.
+    
+    Args:
+        trees_performance: Lista di tuple (tree, accuracy, weighted_accuracy)
+        max_trees: Numero massimo di alberi da inviare (None = tutti)
+        
+    Returns:
+        Lista di alberi serializzati con le loro performance
+    """
+    print(f"[Client] === SERIALIZZAZIONE ALBERI ===")
+    
+    if max_trees is not None:
+        # Seleziona solo i migliori alberi basandosi sulla weighted accuracy
+        selected_trees = trees_performance[:max_trees]
+        print(f"[Client] Selezionati {len(selected_trees)} migliori alberi su {len(trees_performance)}")
+    else:
+        selected_trees = trees_performance
+        print(f"[Client] Invio tutti i {len(selected_trees)} alberi")
+    
+    serialized_trees = []
+    
+    for i, (tree, accuracy, weighted_accuracy) in enumerate(selected_trees):
+        try:
+            # Serializza l'albero usando joblib (più efficiente di pickle per scikit-learn)
+            tree_bytes = joblib.dumps(tree)
+            
+            tree_info = {
+                'tree_data': tree_bytes,
+                'accuracy': float(accuracy),
+                'weighted_accuracy': float(weighted_accuracy),
+                'tree_index': i,
+                'n_nodes': tree.tree_.node_count,
+                'max_depth': tree.tree_.max_depth
+            }
+            
+            serialized_trees.append(tree_info)
+            
+        except Exception as e:
+            print(f"[Client] Errore serializzazione albero {i}: {e}")
+            continue
+    
+    print(f"[Client] Serializzati {len(serialized_trees)} alberi")
+    return serialized_trees
+
+# Variabili globali per il client
 client_id = None
-rf_model = None
+model = None
 X_train = None
 y_train = None
 X_val = None
 y_val = None
 dataset_info = None
 
-# ============== CLIENT FLOWER ==============
-class SmartGridRFClient(fl.client.NumPyClient):
+class SmartGridRandomForestClient(fl.client.NumPyClient):
     """
     Client Flower per SmartGrid con Random Forest.
-    Implementa l'architettura federata del paper:
-    - Ogni client addestra un Random Forest locale
-    - Gli alberi vengono serializzati e inviati al server
-    - Il server aggrega gli alberi in un Global Random Forest
+    Implementa la metodologia del paper per l'aggregazione federata di Random Forest.
     """
-
+    
     def get_parameters(self, config):
         """
-        Restituisce i parametri del modello (alberi serializzati).
-        Per il primo round, restituisce una lista vuota.
+        Per Random Forest, non restituiamo pesi neurali ma gli alberi del modello.
+        Questo è diverso dalle reti neurali - implementiamo la metodologia del paper.
         """
-        global rf_model, X_val, y_val
-
-        # Se il modello non è ancora stato addestrato, restituisci lista vuota
-        if rf_model is None or not hasattr(rf_model, 'estimators_'):
-            print(f"[Client {client_id}] Nessun modello addestrato ancora, restituisco parametri vuoti")
+        global model, X_val, y_val
+    
+        if model is None:
+            print(f"[Client {client_id}] Modello non ancora addestrato, restituisco parametri vuoti")
             return []
 
         try:
-            # Serializza gli alberi del Random Forest
-            trees_data = serialize_random_forest_trees(rf_model, X_val, y_val)
+            # Estrai e valuta le performance degli alberi
+            trees_performance = extract_trees_from_forest(model, X_val, y_val)
 
-            # Converti in formato compatibile con Flower (lista di numpy arrays)
-            # Flower si aspetta una lista di numpy arrays, quindi dobbiamo convertire
+            # Serializza gli alberi per l'invio (invia tutti gli alberi)
+            serialized_trees = serialize_trees_for_aggregation(trees_performance)
+        
+            # Converti in formato compatibile con Flower
+            # Flower si aspetta una lista di array numpy
             parameters = []
-            for tree_data in trees_data:
-                # Crea un array che contiene tutti i dati del tree
-                # Format: [tree_index, tree_size, accuracy, weighted_accuracy, tree_data...]
-                tree_params = np.concatenate([
-                    np.array([tree_data['tree_index']], dtype=np.float32),
-                    np.array([tree_data['tree_size']], dtype=np.float32),
-                    np.array([tree_data['accuracy']], dtype=np.float32),
-                    np.array([tree_data['weighted_accuracy']], dtype=np.float32),
-                    tree_data['tree_data'].astype(np.float32)
-                ])
-                parameters.append(tree_params)
-
-            print(f"[Client {client_id}] ✅ Restituiti {len(parameters)} alberi serializzati")
+            for tree_info in serialized_trees:
+                # Convertiamo i bytes in numpy array per compatibilità
+                tree_array = np.frombuffer(tree_info['tree_data'], dtype=np.uint8)
+                parameters.append(tree_array)
+        
+            print(f"[Client {client_id}] Invio {len(parameters)} alberi al server")
             return parameters
-
+        
         except Exception as e:
-            print(f"[Client {client_id}] ❌ Errore get_parameters: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"[Client {client_id}] Errore nell'estrazione parametri: {e}")
             return []
+
+    def set_parameters(self, parameters):
+        """
+        Per Random Forest federato, questo metodo riceve il modello aggregato dal server.
+        Il server invia un nuovo Random Forest composto dai migliori alberi di tutti i client.
+        """
+        global model
+    
+        if not parameters or len(parameters) == 0:
+            print(f"[Client {client_id}] Nessun parametro ricevuto dal server")
+            return
+    
+        try:
+            # Il server invia il modello Random Forest aggregato
+            # Assumiamo che il primo parametro sia il modello serializzato
+            if len(parameters) > 0:
+                aggregated_model_bytes = parameters[0].tobytes()
+                model = joblib.loads(aggregated_model_bytes)
+            
+                print(f"[Client {client_id}] ✅ Modello aggregato ricevuto dal server")
+                print(f"[Client {client_id}] Nuovo modello ha {model.n_estimators} alberi")
+        
+        except Exception as e:
+            print(f"[Client {client_id}] ❌ Errore nell'impostazione parametri: {e}")
+            # Mantieni il modello corrente in caso di errore
+            pass
 
     def fit(self, parameters, config):
         """
-        Addestra il Random Forest locale.
-        
-        Args:
-            parameters: parametri ricevuti dal server (non usati nel primo round)
-            config: configurazione dell'addestramento
-            
-        Returns:
-            Tuple con (parametri_aggiornati, numero_campioni, metriche)
+        Addestra il modello Random Forest locale.
         """
-        global rf_model, X_train, y_train, X_val, y_val, dataset_info
+        global model, X_train, y_train, dataset_info
 
-        # Imposta semi per riproducibilità
+        # Imposta semi per riproducibilità dell'addestramento
         set_reproducibility_seeds()
-
-        print(f"[Client {client_id}] === ROUND DI ADDESTRAMENTO RF ===")
-
+        
+        print(f"[Client {client_id}] Round di addestramento Random Forest...")
+        
+        # Imposta parametri se ricevuti dal server
+        if parameters:
+            self.set_parameters(parameters)
+        
         if len(X_train) == 0:
             print(f"[Client {client_id}] Nessun dato di training!")
             return [], 0, {}
-
+        
         try:
-            # Crea un nuovo Random Forest per questo round
-            rf_model = create_random_forest_model()
-
+            # Addestra il Random Forest locale
             print(f"[Client {client_id}] Addestramento Random Forest su {len(X_train)} campioni...")
-
-            # Addestra il Random Forest
-            rf_model.fit(X_train, y_train)
-
-            print(f"[Client {client_id}] ✅ Addestramento completato")
-
-            # Valutazione sul training set
-            y_train_pred = rf_model.predict(X_train)
-            y_train_pred_proba = rf_model.predict_proba(X_train)[:, 1]
-
-            train_accuracy = accuracy_score(y_train, y_train_pred)
-            train_precision = 0.0
-            train_recall = 0.0
-            train_auc = 0.0
-            train_f1 = 0.0
-            train_balanced_acc = 0.0
-
-            # Calcola metriche se ci sono entrambe le classi
-            if len(np.unique(y_train)) > 1:
-                from sklearn.metrics import precision_score, recall_score
-                train_precision = precision_score(y_train, y_train_pred, zero_division=0)
-                train_recall = recall_score(y_train, y_train_pred, zero_division=0)
-                train_auc = roc_auc_score(y_train, y_train_pred_proba)
-                train_f1 = f1_score(y_train, y_train_pred, zero_division=0)
-                train_balanced_acc = balanced_accuracy_score(y_train, y_train_pred)
-
-            print(f"[Client {client_id}] Train Accuracy: {train_accuracy:.4f}")
-            print(f"[Client {client_id}] Train F1: {train_f1:.4f}, Balanced Acc: {train_balanced_acc:.4f}")
-
-            # Serializza gli alberi
-            trees_data = serialize_random_forest_trees(rf_model, X_val, y_val)
-
-            # Converti in formato Flower
-            parameters = []
-            for tree_data in trees_data:
-                tree_params = np.concatenate([
-                    np.array([tree_data['tree_index']], dtype=np.float32),
-                    np.array([tree_data['tree_size']], dtype=np.float32),
-                    np.array([tree_data['accuracy']], dtype=np.float32),
-                    np.array([tree_data['weighted_accuracy']], dtype=np.float32),
-                    tree_data['tree_data'].astype(np.float32)
-                ])
-                parameters.append(tree_params)
-
-            # Metriche da inviare al server
-            metrics = {
-                # Metriche base
-                'train_accuracy': float(train_accuracy),
-                'train_precision': float(train_precision),
-                'train_recall': float(train_recall),
-                'train_auc': float(train_auc),
-                'train_f1_score': float(train_f1),
-                'train_balanced_accuracy': float(train_balanced_acc),
-
-                # Info Random Forest
-                'n_estimators': int(RF_N_ESTIMATORS),
-                'n_trees_sent': len(parameters),
-
-                # Dataset info
-                'client_id': int(dataset_info['client_id']),
-                'train_samples': int(dataset_info['train_samples']),
-            }
-
-            print(f"[Client {client_id}] ✅ Invio {len(parameters)} alberi al server")
-
-            return parameters, len(X_train), metrics
-
+            model.fit(X_train, y_train)
+            
+            # Calcola metriche di training
+            train_predictions = model.predict(X_train)
+            train_prob = model.predict_proba(X_train)[:, 1]  # Probabilità classe positiva
+            
+            train_accuracy = accuracy_score(y_train, train_predictions)
+            train_precision = precision_score(y_train, train_predictions, zero_division=0)
+            train_recall = recall_score(y_train, train_predictions, zero_division=0)
+            train_f1 = f1_score(y_train, train_predictions, zero_division=0)
+            train_balanced_acc = balanced_accuracy_score(y_train, train_predictions)
+            
+            # AUC se abbiamo probabilità
+            try:
+                train_auc = roc_auc_score(y_train, train_prob)
+            except:
+                train_auc = 0.0
+            
+            # Out-of-bag score se disponibile
+            oob_score = model.oob_score_ if hasattr(model, 'oob_score_') else 0.0
+            
+            print(f"[Client {client_id}] Training completato!")
+            print(f"[Client {client_id}] Accuracy: {train_accuracy:.4f}, F1: {train_f1:.4f}")
+            print(f"[Client {client_id}] Balanced Acc: {train_balanced_acc:.4f}, OOB Score: {oob_score:.4f}")
+            
         except Exception as e:
-            print(f"[Client {client_id}] ❌ Errore durante addestramento: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"[Client {client_id}] Errore durante addestramento: {e}")
             return [], 0, {'error': f'training_failed: {str(e)}'}
+        
+        # Metriche da inviare al server
+        metrics = {
+            # Metriche base
+            'train_accuracy': float(train_accuracy),
+            'train_precision': float(train_precision),
+            'train_recall': float(train_recall),
+            'train_f1_score': float(train_f1),
+            'train_balanced_accuracy': float(train_balanced_acc),
+            'train_auc': float(train_auc),
+            'oob_score': float(oob_score),
+            
+            # Info modello
+            'n_estimators': int(model.n_estimators),
+            'n_features': int(model.n_features_in_),
+            
+            # Dataset info
+            'client_id': int(dataset_info['client_id']),
+            'train_samples': int(dataset_info['train_samples']),
+        }
+        
+        # Restituisce gli alberi del modello addestrato
+        return self.get_parameters(config), len(X_train), metrics
 
     def evaluate(self, parameters, config):
         """
-        Valuta il modello Random Forest globale ricevuto dal server.
-        
-        Args:
-            parameters: alberi del Random Forest globale
-            config: configurazione della valutazione
-            
-        Returns:
-            Tuple con (loss_simulata, numero_campioni, metriche)
+        Valuta il modello Random Forest.
         """
-        global rf_model, X_val, y_val
+        global model, X_val, y_val
 
-        # Imposta semi per riproducibilità
+        # Imposta semi per riproducibilità della valutazione
         set_reproducibility_seeds()
-
-        print(f"[Client {client_id}] === VALUTAZIONE RF GLOBALE ===")
-
+        
+        # Imposta parametri se ricevuti dal server
+        if parameters:
+            self.set_parameters(parameters)
+        
+        if model is None:
+            print(f"[Client {client_id}] Modello non disponibile per valutazione")
+            return 1.0, 0, {"accuracy": 0.0}
+        
         if len(X_val) == 0:
             return 0.0, 0, {"accuracy": 0.0}
-
-        # Se non ci sono parametri, usa il modello locale
-        if len(parameters) == 0:
-            print(f"[Client {client_id}] Nessun parametro ricevuto, uso modello locale")
-            if rf_model is None:
-                return 1.0, 0, {"accuracy": 0.0, "error": "no_model"}
-        else:
-            try:
-                # Ricostruisci gli alberi dal formato Flower
-                print(f"[Client {client_id}] Ricostruzione RF globale da {len(parameters)} parametri...")
-                trees_data = []
-                for tree_params in parameters:
-                    tree_index = int(tree_params[0])
-                    tree_size = int(tree_params[1])
-                    accuracy = float(tree_params[2])
-                    weighted_accuracy = float(tree_params[3])
-                    tree_data_array = tree_params[4:].astype(np.uint8)
-
-                    tree_dict = {
-                        'tree_index': tree_index,
-                        'tree_size': tree_size,
-                        'accuracy': accuracy,
-                        'weighted_accuracy': weighted_accuracy,
-                        'tree_data': tree_data_array
-                    }
-                    trees_data.append(tree_dict)
-
-                # Ricostruisci il Random Forest
-                rf_model = deserialize_random_forest_trees(trees_data)
-                print(f"[Client {client_id}] ✅ RF globale ricostruito con {len(trees_data)} alberi")
-
-            except Exception as e:
-                print(f"[Client {client_id}] ❌ Errore ricostruzione RF: {e}")
-                import traceback
-                traceback.print_exc()
-                return 1.0, len(X_val), {"accuracy": 0.0, "error": f"reconstruction_failed: {str(e)}"}
-
+        
         try:
-            # Valutazione
-            y_pred = rf_model.predict(X_val)
-            y_pred_proba = rf_model.predict_proba(X_val)[:, 1]
+            # Valutazione Random Forest
+            val_predictions = model.predict(X_val)
+            val_prob = model.predict_proba(X_val)[:, 1]  # Probabilità classe positiva
+            
+            # Calcola metriche
+            accuracy = accuracy_score(y_val, val_predictions)
+            precision = precision_score(y_val, val_predictions, zero_division=0)
+            recall = recall_score(y_val, val_predictions, zero_division=0)
+            f1_score_val = f1_score(y_val, val_predictions, zero_division=0)
+            balanced_acc = balanced_accuracy_score(y_val, val_predictions)
+            
+            # AUC
+            try:
+                auc = roc_auc_score(y_val, val_prob)
+            except:
+                auc = 0.0
+            
+            # Metriche per classe
+            report = classification_report(y_val, val_predictions, target_names=["natural", "attack"], output_dict=True, zero_division=0)
+            conf_matrix = confusion_matrix(y_val, val_predictions)
 
-            # Calcolo metriche
-            accuracy = accuracy_score(y_val, y_pred)
-
-            # Metriche che richiedono gestione dei casi edge
-            precision = 0.0
-            recall = 0.0
-            auc = 0.0
-            f1_score_val = 0.0
-            balanced_acc = 0.0
-
-            if len(np.unique(y_val)) > 1:
-                from sklearn.metrics import precision_score, recall_score
-                precision = precision_score(y_val, y_pred, zero_division=0)
-                recall = recall_score(y_val, y_pred, zero_division=0)
-                auc = roc_auc_score(y_val, y_pred_proba)
-                f1_score_val = f1_score(y_val, y_pred, zero_division=0)
-                balanced_acc = balanced_accuracy_score(y_val, y_pred)
-
-            # Report per classe
-            report = classification_report(y_val, y_pred, target_names=["natural", "attack"], output_dict=True, zero_division=0)
-            conf_matrix = confusion_matrix(y_val, y_pred)
-
-            print(f"[Client {client_id}] Val Accuracy: {accuracy:.4f}")
-            print(f"[Client {client_id}] Val F1: {f1_score_val:.4f}, Val Balanced Acc: {balanced_acc:.4f}")
+            print(f"[Client {client_id}] Val Accuracy: {accuracy:.4f}, Val F1: {f1_score_val:.4f}")
+            print(f"[Client {client_id}] Val Balanced Acc: {balanced_acc:.4f}, Val AUC: {auc:.4f}")
             print(f"[Client {client_id}] Classification report (per classe):")
-            print(classification_report(y_val, y_pred, target_names=["natural", "attack"], zero_division=0))
+            print(classification_report(y_val, val_predictions, target_names=["natural", "attack"], zero_division=0))
             print(f"[Client {client_id}] Confusion matrix:")
             print(f"tn: {conf_matrix[0, 0]}, fp: {conf_matrix[0, 1]}, fn: {conf_matrix[1, 0]}, tp: {conf_matrix[1, 1]}")
-
-            # Metriche da restituire
+            
+            # Simula loss per compatibilità (Random Forest non ha loss)
+            loss = 1 - accuracy  # Loss simulata
+            
+            # Metriche
             metrics = {
                 "accuracy": accuracy,
                 "precision": precision,
@@ -707,38 +642,34 @@ class SmartGridRFClient(fl.client.NumPyClient):
                 "f1_attack": report["attack"]["f1-score"],
                 "support_natural": report["natural"]["support"],
                 "support_attack": report["attack"]["support"],
+                # Confusion matrix
                 "tn": int(conf_matrix[0, 0]),
                 "fp": int(conf_matrix[0, 1]),
                 "fn": int(conf_matrix[1, 0]),
                 "tp": int(conf_matrix[1, 1])
             }
-
-            # Simula una loss (Random Forest non ha loss, usiamo 1 - accuracy)
-            loss = 1.0 - accuracy
-
+            
             return loss, len(X_val), metrics
-
+            
         except Exception as e:
-            print(f"[Client {client_id}] ❌ Errore durante valutazione: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"[Client {client_id}] Errore durante valutazione: {e}")
             return 1.0, len(X_val), {"accuracy": 0.0, "error": f"evaluation_failed: {str(e)}"}
 
-# ============== MAIN ==============
 def main():
     """
     Funzione principale per avviare il client SmartGrid Random Forest.
     """
-    global client_id, rf_model, X_train, y_train, X_val, y_val, dataset_info
+
+    global client_id, model, X_train, y_train, X_val, y_val, dataset_info
 
     # Imposta semi all'avvio del client
     set_reproducibility_seeds()
-
+    
     if len(sys.argv) != 2:
-        print("Usa: python clientRF.py <client_id>")
+        print("Uso: python clientRF.py <client_id>")
         print("Esempio: python clientRF.py 1")
         sys.exit(1)
-
+    
     try:
         client_id = int(sys.argv[1])
         if client_id < 1 or client_id > 13:
@@ -746,33 +677,34 @@ def main():
     except ValueError as e:
         print(f"Errore: Client ID non valido. {e}")
         sys.exit(1)
-
-    print(f"=== AVVIO CLIENT RF {client_id} ===")
-
+    
+    print(f"=== AVVIO CLIENT RANDOM FOREST {client_id} ===")
+    
     try:
-        # Carica i dati
-        print(f"[Client {client_id}] Caricamento dati...")
+        # Carica i dati con preprocessing minimale per Random Forest
+        print(f"[Client {client_id}] Caricamento dati per Random Forest...")
         X_train, y_train, X_val, y_val, dataset_info = load_client_smartgrid_data(client_id)
-
+        
         # Imposta semi all'avvio del client
         set_reproducibility_seeds()
 
-        print(f"[Client {client_id}] === RIASSUNTO CLIENT RF ===")
+        # Crea il modello Random Forest
+        model = create_random_forest_model()
+
+        print(f"[Client {client_id}] === RIASSUNTO CLIENT RANDOM FOREST ===")
         print(f"[Client {client_id}] Dataset: {dataset_info['train_samples']} train, {dataset_info['val_samples']} val")
         print(f"[Client {client_id}] Distribuzione: {dataset_info['attack_ratio']*100:.1f}% attacchi")
-        if ENABLE_PCA:
-            print(f"[Client {client_id}] Feature: {dataset_info['original_features']} → {dataset_info['final_features']} (PCA attiva)")
-        else:
-            print(f"[Client {client_id}] Feature: {dataset_info['original_features']} → {dataset_info['final_features']} (nessuna riduzione - PCA disattiva)")
-        print(f"[Client {client_id}] Modello: Random Forest con {RF_N_ESTIMATORS} alberi")
+        print(f"[Client {client_id}] Feature: {dataset_info['original_features']} → {dataset_info['final_features']}")
+        print(f"[Client {client_id}] Modello: Random Forest con {model.n_estimators} alberi")
+        print(f"[Client {client_id}] Criterio: {model.criterion}, Max features: {model.max_features}")
         print(f"[Client {client_id}] Connessione al server su localhost:8080...")
-
+        
         # Avvia il client Flower
         fl.client.start_numpy_client(
             server_address="localhost:8080",
-            client=SmartGridRFClient()
+            client=SmartGridRandomForestClient()
         )
-
+        
     except Exception as e:
         print(f"[Client {client_id}] ❌ Errore: {e}")
         import traceback
