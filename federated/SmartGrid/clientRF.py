@@ -6,6 +6,7 @@ import os
 import warnings
 import pickle
 import joblib
+from io import BytesIO
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.impute import SimpleImputer
@@ -405,7 +406,9 @@ def serialize_trees_for_aggregation(trees_performance, max_trees=None):
     for i, (tree, accuracy, weighted_accuracy) in enumerate(selected_trees):
         try:
             # Serializza l'albero usando joblib (più efficiente di pickle per scikit-learn)
-            tree_bytes = joblib.dumps(tree)
+            buf = BytesIO()
+            joblib.dump(tree, buf)
+            tree_bytes = buf.getvalue()
             serialized_trees.append(tree_bytes)
             
         except Exception as e:
@@ -479,7 +482,7 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             # Assumiamo che il primo parametro sia il modello serializzato
             if len(parameters) > 0:
                 aggregated_model_bytes = parameters[0].tobytes()
-                model = joblib.loads(aggregated_model_bytes)
+                model = joblib.load(BytesIO(aggregated_model_bytes))
             
                 print(f"[Client {client_id}] ✅ Modello aggregato ricevuto dal server")
                 print(f"[Client {client_id}] Nuovo modello ha {model.n_estimators} alberi")

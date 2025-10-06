@@ -6,6 +6,7 @@ import numpy as np
 import warnings
 import joblib
 import pickle
+from io import BytesIO
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
@@ -352,7 +353,7 @@ def deserialize_trees_from_client(parameters):
                 tree_bytes = param_array.tobytes()
                 
                 # Deserializza l'albero usando joblib
-                tree = joblib.loads(tree_bytes)
+                tree = joblib.load(BytesIO(tree_bytes))
                 
                 # Verifica che sia un albero valido
                 if hasattr(tree, 'predict'):
@@ -535,7 +536,9 @@ def serialize_global_model(global_rf):
     """
     try:
         # Serializza l'intero modello Random Forest
-        model_bytes = joblib.dumps(global_rf)
+        buf = BytesIO()
+        joblib.dump(global_rf, buf)
+        model_bytes = buf.getvalue()
         
         # Converte in numpy array per compatibilità Flower
         model_array = np.frombuffer(model_bytes, dtype=np.uint8)
@@ -649,7 +652,7 @@ def get_smartgrid_random_forest_evaluate_fn():
             try:
                 # Deserializza il Random Forest globale
                 model_bytes = parameters[0].tobytes()
-                global_rf = joblib.loads(model_bytes)
+                global_rf = joblib.load(BytesIO(model_bytes))
                 print(f"✅ Modello Random Forest globale deserializzato")
                 print(f"   N. alberi: {global_rf.n_estimators if hasattr(global_rf, 'n_estimators') else 'N/A'}")
             except Exception as e:
