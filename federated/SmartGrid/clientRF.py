@@ -163,7 +163,7 @@ def apply_pca(X_preprocessed, client_id=None):
 def load_client_smartgrid_data(client_id):
     """
     Carica i dati SmartGrid per un client specifico.
-    Applica preprocessing minimale per Random Forest (che gestisce bene dati raw).
+    Applica preprocessing completo per gestire valori infiniti e NaN.
     """
     # Imposta semi per riproducibilità del preprocessing
     set_reproducibility_seeds()
@@ -175,9 +175,9 @@ def load_client_smartgrid_data(client_id):
     
     df = pd.read_csv(file_path)
     print(f"=== PREPROCESSING FEDERATO RANDOM FOREST ===")
-    print(f"Pulizia inf/NaN: {'ABILITATA' if ENABLE_CLEAN_INF_NAN else 'DISABILITATA'}")
+    print(f"Pulizia inf/NaN: SEMPRE ABILITATA per Random Forest")
     print(f"Clipping outlier: {'ABILITATA' if ENABLE_CLIPPING_OUTLIERS else 'DISABILITATA'}")
-    print(f"Imputazione mediana: {'ABILITATA' if ENABLE_IMPUTATION else 'DISABILITATA'}")
+    print(f"Imputazione mediana: SEMPRE ABILITATA per Random Forest")
     print(f"Rimozione feature quasi-costanti: {'ABILITATA' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else 'DISABILITATA'}")
     print(f"Scaling standard: {'ABILITATA' if ENABLE_SCALING else 'DISABILITATA'}")
     print(f"PCA: {'ABILITATA' if ENABLE_PCA else 'DISABILITATA'}")
@@ -189,16 +189,34 @@ def load_client_smartgrid_data(client_id):
     attack_ratio = y.mean()
     print(f"[Client {client_id}] Distribuzione: {attack_samples} attacchi ({attack_ratio*100:.1f}%), {natural_samples} naturali")
     
-    # Random Forest gestisce bene i dati raw, quindi preprocessing minimale
-    # STEP 1: Pulizia inf/NaN (solo se abilitata)
-    if ENABLE_CLEAN_INF_NAN:
-        X_cleaned = clean_data_for_pca(X)
-    else:
-        X_cleaned = X.values if hasattr(X, 'values') else X
+    # STEP 1: Pulizia inf/NaN (SEMPRE ABILITATA per Random Forest)
+    print(f"[Client {client_id}] Pulizia valori infiniti e NaN...")
+    X_cleaned = clean_data_for_pca(X)
+    
+    # Converti a numpy e sostituisci inf con valori finiti
+    X_array = np.array(X_cleaned, dtype=float)
+    
+    # Gestisci infiniti: sostituisci con valori estremi ma finiti
+    inf_mask = np.isinf(X_array)
+    if np.any(inf_mask):
+        print(f"[Client {client_id}] Trovati {np.sum(inf_mask)} valori infiniti, li sostituisco...")
+        # Sostituisci +inf con il 99.9° percentile della colonna
+        # Sostituisci -inf con il 0.1° percentile della colonna
+        for col in range(X_array.shape[1]):
+            col_data = X_array[:, col]
+            finite_mask = np.isfinite(col_data)
+            if np.any(finite_mask):
+                percentile_99 = np.percentile(col_data[finite_mask], 99.9)
+                percentile_01 = np.percentile(col_data[finite_mask], 0.1)
+                X_array[np.isposinf(col_data), col] = percentile_99
+                X_array[np.isneginf(col_data), col] = percentile_01
+            else:
+                # Se tutta la colonna è infinita, usa 0
+                X_array[:, col] = 0.0
 
     # Suddivisione train/validation
     X_train_raw, X_val_raw, y_train, y_val = train_test_split(
-        X_cleaned, y,
+        X_array, y,
         test_size=0.3,
         random_state=42,
         stratify=y if len(np.unique(y)) > 1 else None
@@ -207,23 +225,18 @@ def load_client_smartgrid_data(client_id):
 
     # STEP 2: Clipping outlier per quantili (solo se abilitato)
     if ENABLE_CLIPPING_OUTLIERS:
-        X_train_np = np.array(X_train_raw, dtype=float)
-        X_val_np = np.array(X_val_raw, dtype=float)
-        lower, upper = fit_clip_outliers_iqr(X_train_np, k=5.0)
-        X_train_clipped = transform_clip_outliers_iqr(X_train_np, lower, upper)
-        X_val_clipped = transform_clip_outliers_iqr(X_val_np, lower, upper)
+        lower, upper = fit_clip_outliers_iqr(X_train_raw, k=5.0)
+        X_train_clipped = transform_clip_outliers_iqr(X_train_raw, lower, upper)
+        X_val_clipped = transform_clip_outliers_iqr(X_val_raw, lower, upper)
     else:
         X_train_clipped = X_train_raw
         X_val_clipped = X_val_raw
 
-    # STEP 3: Imputazione mediana (solo se abilitata)
-    if ENABLE_IMPUTATION:
-        imputer = SimpleImputer(strategy='median')
-        X_train_imputed = imputer.fit_transform(X_train_clipped)
-        X_val_imputed = imputer.transform(X_val_clipped)
-    else:
-        X_train_imputed = X_train_clipped
-        X_val_imputed = X_val_clipped
+    # STEP 3: Imputazione mediana (SEMPRE ABILITATA per Random Forest)
+    print(f"[Client {client_id}] Applicazione imputazione mediana...")
+    imputer = SimpleImputer(strategy='median')
+    X_train_imputed = imputer.fit_transform(X_train_clipped)
+    X_val_imputed = imputer.transform(X_val_clipped)
 
     # STEP 4: Rimozione feature quasi-costanti (solo se abilitata)
     if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES:
@@ -240,11 +253,11 @@ def load_client_smartgrid_data(client_id):
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train_reduced)
         X_val_scaled = scaler.transform(X_val_reduced)
-        print(f"[Client {client_id}] Preprocessing completato (clipping, imputazione, {('costanti, ' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else '')}scaling)")
+        print(f"[Client {client_id}] Scaling applicato")
     else:
         X_train_scaled = X_train_reduced
         X_val_scaled = X_val_reduced
-        print(f"[Client {client_id}] Scaling DISABILITATO - usando dati preprocessati direttamente: {X_train_scaled.shape}")
+        print(f"[Client {client_id}] Scaling DISABILITATO")
 
     # STEP 6: PCA (solo se abilitata)
     if ENABLE_PCA:
@@ -256,7 +269,17 @@ def load_client_smartgrid_data(client_id):
     else:
         X_train_final = X_train_scaled
         X_val_final = X_val_scaled
-        print(f"[Client {client_id}] PCA DISABILITATA - usando dati scalati direttamente: {X_train_final.shape}")
+        print(f"[Client {client_id}] PCA DISABILITATA - usando dati preprocessati: {X_train_final.shape}")
+    
+    # VERIFICA FINALE: nessun valore infinito o NaN
+    if np.any(np.isinf(X_train_final)) or np.any(np.isnan(X_train_final)):
+        print(f"[Client {client_id}] ❌ ERRORE: Dati finali contengono ancora inf/NaN")
+        # Pulizia di emergenza
+        X_train_final = np.nan_to_num(X_train_final, nan=0.0, posinf=1e10, neginf=-1e10)
+        X_val_final = np.nan_to_num(X_val_final, nan=0.0, posinf=1e10, neginf=-1e10)
+        print(f"[Client {client_id}] ✅ Pulizia di emergenza applicata")
+    
+    print(f"[Client {client_id}] ✅ Preprocessing completato: {X_train_final.shape}, {X_val_final.shape}")
         
     # Info dataset
     dataset_info = {
@@ -274,7 +297,7 @@ def load_client_smartgrid_data(client_id):
         'pca_enabled': ENABLE_PCA,
         'remove_near_constant_enabled': ENABLE_REMOVE_NEAR_CONSTANT_FEATURES,
         'pca_components_fixed': PCA_COMPONENTS if ENABLE_PCA else None,
-        'preprocessing_method': f"minimal_for_rf{'_pca' if ENABLE_PCA else ''}",
+        'preprocessing_method': f"robust_for_rf{'_pca' if ENABLE_PCA else ''}",
         'compatibility_guaranteed': True
     }
     print(f"[Client {client_id}] === CARICAMENTO COMPLETATO ===")
@@ -405,10 +428,8 @@ def serialize_trees_for_aggregation(trees_performance, max_trees=None):
     
     for i, (tree, accuracy, weighted_accuracy) in enumerate(selected_trees):
         try:
-            # Serializza l'albero usando joblib (più efficiente di pickle per scikit-learn)
-            buf = BytesIO()
-            joblib.dump(tree, buf)
-            tree_bytes = buf.getvalue()
+            # Serializza l'albero usando joblib DIRETTAMENTE in bytes
+            tree_bytes = joblib.dumps(tree)
             serialized_trees.append(tree_bytes)
             
         except Exception as e:
@@ -417,15 +438,6 @@ def serialize_trees_for_aggregation(trees_performance, max_trees=None):
     
     print(f"[Client] Serializzati {len(serialized_trees)} alberi")
     return serialized_trees
-
-# Variabili globali per il client
-client_id = None
-model = None
-X_train = None
-y_train = None
-X_val = None
-y_val = None
-dataset_info = None
 
 class SmartGridRandomForestClient(fl.client.NumPyClient):
     """
@@ -436,10 +448,10 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
     def get_parameters(self, config):
         """
         Per Random Forest, non restituiamo pesi neurali ma gli alberi del modello.
-        Questo è diverso dalle reti neurali - implementiamo la metodologia del paper.
+        Versione corretta per compatibilità con il server.
         """
         global model, X_val, y_val
-    
+
         if model is None:
             print(f"[Client {client_id}] Modello non ancora addestrato, restituisco parametri vuoti")
             return []
@@ -452,10 +464,9 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             serialized_trees = serialize_trees_for_aggregation(trees_performance)
         
             # Converti in formato compatibile con Flower
-            # Flower si aspetta una lista di array numpy
             parameters = []
             for tree_bytes in serialized_trees:
-                # Convertiamo i bytes in numpy array per compatibilità
+                # CORREZIONE: Converte bytes in numpy array correttamente
                 tree_array = np.frombuffer(tree_bytes, dtype=np.uint8)
                 parameters.append(tree_array)
         
@@ -472,17 +483,17 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
         Il server invia un nuovo Random Forest composto dai migliori alberi di tutti i client.
         """
         global model
-    
+
         if not parameters or len(parameters) == 0:
             print(f"[Client {client_id}] Nessun parametro ricevuto dal server")
             return
-    
+
         try:
             # Il server invia il modello Random Forest aggregato
             # Assumiamo che il primo parametro sia il modello serializzato
             if len(parameters) > 0:
                 aggregated_model_bytes = parameters[0].tobytes()
-                model = joblib.load(BytesIO(aggregated_model_bytes))
+                model = joblib.loads(aggregated_model_bytes)
             
                 print(f"[Client {client_id}] ✅ Modello aggregato ricevuto dal server")
                 print(f"[Client {client_id}] Nuovo modello ha {model.n_estimators} alberi")
@@ -500,49 +511,64 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
 
         # Imposta semi per riproducibilità dell'addestramento
         set_reproducibility_seeds()
-        
+    
         print(f"[Client {client_id}] Round di addestramento Random Forest...")
-        
+    
         # Imposta parametri se ricevuti dal server
         if parameters:
             self.set_parameters(parameters)
-        
+    
         if len(X_train) == 0:
             print(f"[Client {client_id}] Nessun dato di training!")
             return [], 0, {}
-        
+    
         try:
+            # Verifica che i dati siano puliti
+            if np.any(np.isinf(X_train)) or np.any(np.isnan(X_train)):
+                print(f"[Client {client_id}] ⚠️ Dati contengono inf/NaN, applico pulizia...")
+                X_train_clean = np.nan_to_num(X_train, nan=0.0, posinf=1e10, neginf=-1e10)
+            else:
+                X_train_clean = X_train
+        
             # Addestra il Random Forest locale
-            print(f"[Client {client_id}] Addestramento Random Forest su {len(X_train)} campioni...")
-            model.fit(X_train, y_train)
-            
+            print(f"[Client {client_id}] Addestramento Random Forest su {len(X_train_clean)} campioni...")
+            model.fit(X_train_clean, y_train)
+        
+            # Verifica che il modello sia stato addestrato
+            if not hasattr(model, 'estimators_') or len(model.estimators_) == 0:
+                raise RuntimeError("Random Forest non addestrato correttamente - nessun albero trovato")
+        
+            print(f"[Client {client_id}] ✅ Random Forest addestrato con {len(model.estimators_)} alberi")
+        
             # Calcola metriche di training
-            train_predictions = model.predict(X_train)
-            train_prob = model.predict_proba(X_train)[:, 1]  # Probabilità classe positiva
-            
+            train_predictions = model.predict(X_train_clean)
+            train_prob = model.predict_proba(X_train_clean)[:, 1]  # Probabilità classe positiva
+        
             train_accuracy = accuracy_score(y_train, train_predictions)
             train_precision = precision_score(y_train, train_predictions, zero_division=0)
             train_recall = recall_score(y_train, train_predictions, zero_division=0)
             train_f1 = f1_score(y_train, train_predictions, zero_division=0)
             train_balanced_acc = balanced_accuracy_score(y_train, train_predictions)
-            
+        
             # AUC se abbiamo probabilità
             try:
                 train_auc = roc_auc_score(y_train, train_prob)
             except:
                 train_auc = 0.0
-            
+        
             # Out-of-bag score se disponibile
             oob_score = model.oob_score_ if hasattr(model, 'oob_score_') else 0.0
-            
+        
             print(f"[Client {client_id}] Training completato!")
             print(f"[Client {client_id}] Accuracy: {train_accuracy:.4f}, F1: {train_f1:.4f}")
             print(f"[Client {client_id}] Balanced Acc: {train_balanced_acc:.4f}, OOB Score: {oob_score:.4f}")
-            
+        
         except Exception as e:
             print(f"[Client {client_id}] Errore durante addestramento: {e}")
+            import traceback
+            traceback.print_exc()
             return [], 0, {'error': f'training_failed: {str(e)}'}
-        
+    
         # Metriche da inviare al server
         metrics = {
             # Metriche base
@@ -553,16 +579,16 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             'train_balanced_accuracy': float(train_balanced_acc),
             'train_auc': float(train_auc),
             'oob_score': float(oob_score),
-            
+        
             # Info modello
-            'n_estimators': int(model.n_estimators),
+            'n_estimators': int(len(model.estimators_)),
             'n_features': int(model.n_features_in_),
-            
+        
             # Dataset info
             'client_id': int(dataset_info['client_id']),
             'train_samples': int(dataset_info['train_samples']),
         }
-        
+    
         # Restituisce gli alberi del modello addestrato
         return self.get_parameters(config), len(X_train), metrics
 
@@ -586,10 +612,22 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
         if len(X_val) == 0:
             return 0.0, 0, {"accuracy": 0.0}
         
+        # Verifica che il modello sia addestrato
+        if not hasattr(model, 'estimators_') or len(model.estimators_) == 0:
+            print(f"[Client {client_id}] ⚠️ Modello Random Forest non addestrato, uso accuracy 0")
+            return 1.0, len(X_val), {"accuracy": 0.0, "error": "model_not_fitted"}
+        
         try:
+            # Verifica che i dati siano puliti per la valutazione
+            if np.any(np.isinf(X_val)) or np.any(np.isnan(X_val)):
+                print(f"[Client {client_id}] ⚠️ Dati val contengono inf/NaN, applico pulizia...")
+                X_val_clean = np.nan_to_num(X_val, nan=0.0, posinf=1e10, neginf=-1e10)
+            else:
+                X_val_clean = X_val
+            
             # Valutazione Random Forest
-            val_predictions = model.predict(X_val)
-            val_prob = model.predict_proba(X_val)[:, 1]  # Probabilità classe positiva
+            val_predictions = model.predict(X_val_clean)
+            val_prob = model.predict_proba(X_val_clean)[:, 1]  # Probabilità classe positiva
             
             # Calcola metriche
             accuracy = accuracy_score(y_val, val_predictions)
@@ -646,6 +684,8 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             
         except Exception as e:
             print(f"[Client {client_id}] Errore durante valutazione: {e}")
+            import traceback
+            traceback.print_exc()
             return 1.0, len(X_val), {"accuracy": 0.0, "error": f"evaluation_failed: {str(e)}"}
 
 def main():

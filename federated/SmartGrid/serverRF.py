@@ -352,8 +352,8 @@ def deserialize_trees_from_client(parameters):
                 # Converti numpy array in bytes
                 tree_bytes = param_array.tobytes()
                 
-                # Deserializza l'albero usando joblib
-                tree = joblib.load(BytesIO(tree_bytes))
+                # Deserializza l'albero usando joblib DIRETTAMENTE sui bytes
+                tree = joblib.loads(tree_bytes)
                 
                 # Verifica che sia un albero valido
                 if hasattr(tree, 'predict'):
@@ -535,10 +535,8 @@ def serialize_global_model(global_rf):
         Lista di numpy array compatibili con Flower
     """
     try:
-        # Serializza l'intero modello Random Forest
-        buf = BytesIO()
-        joblib.dump(global_rf, buf)
-        model_bytes = buf.getvalue()
+        # Serializza l'intero modello Random Forest DIRETTAMENTE in bytes
+        model_bytes = joblib.dumps(global_rf)
         
         # Converte in numpy array per compatibilità Flower
         model_array = np.frombuffer(model_bytes, dtype=np.uint8)
@@ -640,7 +638,7 @@ def get_smartgrid_random_forest_evaluate_fn():
         print(f"\n=== VALUTAZIONE GLOBALE RANDOM FOREST - ROUND {server_round + 1} ===")
         
         try:
-            # Deserializza il modello Random Forest globale
+            # CONTROLLO: Verifica se ci sono parametri da valutare
             if not parameters or len(parameters) == 0:
                 print(f"[Server] ⚠️ Nessun modello da valutare")
                 return 1.0, {
@@ -650,7 +648,7 @@ def get_smartgrid_random_forest_evaluate_fn():
                 }
             
             try:
-                # Deserializza il Random Forest globale
+                # DESERIALIZZAZIONE SICURA: Solo se ci sono parametri
                 model_bytes = parameters[0].tobytes()
                 global_rf = joblib.load(BytesIO(model_bytes))
                 print(f"✅ Modello Random Forest globale deserializzato")
