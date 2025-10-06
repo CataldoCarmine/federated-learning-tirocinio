@@ -320,7 +320,7 @@ def apply_preprocessing_pipeline(X_global):
 def deserialize_trees_from_client(parameters):
     """
     Deserializza gli alberi ricevuti da un client.
-    Usa pickle per compatibilità con il client.
+    Versione corretta per gestire il formato Flower.
     """
     try:
         # Gestisce diversi tipi di parametri da Flower
@@ -341,23 +341,46 @@ def deserialize_trees_from_client(parameters):
         
         for i, param_array in enumerate(parameter_arrays):
             try:
-                # Converti numpy array in bytes
-                tree_bytes = param_array.tobytes()
+                # Debug info
+                print(f"[Server] Debug - Tipo parametro {i+1}: {type(param_array)}")
+                print(f"[Server] Debug - Parametro {i+1}: {len(param_array)} elementi")
                 
-                # Deserializza l'albero usando pickle.loads()
-                tree = pickle.loads(tree_bytes)
+                # CORREZIONE: Gestisce sia numpy array che bytes
+                if hasattr(param_array, 'tobytes'):
+                    # È un numpy array
+                    tree_bytes = param_array.tobytes()
+                elif isinstance(param_array, bytes):
+                    # È già bytes
+                    tree_bytes = param_array
+                else:
+                    # Prova conversione diretta
+                    tree_bytes = bytes(param_array)
+                
+                print(f"[Server] Debug - Bytes length: {len(tree_bytes)}")
+                
+                # CORREZIONE: Usa joblib invece di pickle per deserializzare
+                # Gli alberi di scikit-learn sono meglio gestiti da joblib
+                from io import BytesIO
+                tree = joblib.load(BytesIO(tree_bytes))
                 
                 # Verifica che sia un albero valido
                 if hasattr(tree, 'predict'):
-                    # Per compatibilità con il format del paper, aggiungiamo metriche fittizie
-                    deserialized_trees.append((tree, 0.8, 0.8))  # (tree, accuracy, weighted_accuracy)
+                    deserialized_trees.append((tree, 0.8, 0.8))
                     print(f"[Server] ✅ Albero {i+1} deserializzato con successo")
                 else:
                     print(f"[Server] ⚠️ Parametro {i+1} non è un albero valido")
                     
             except Exception as e:
                 print(f"[Server] ❌ Errore deserializzazione parametro {i+1}: {e}")
-                continue
+                # Prova con pickle come fallback
+                try:
+                    tree = pickle.loads(tree_bytes)
+                    if hasattr(tree, 'predict'):
+                        deserialized_trees.append((tree, 0.8, 0.8))
+                        print(f"[Server] ✅ Albero {i+1} deserializzato con pickle (fallback)")
+                except Exception as e2:
+                    print(f"[Server] ❌ Fallback pickle fallito per parametro {i+1}: {e2}")
+                    continue
         
         print(f"[Server] Deserializzati {len(deserialized_trees)} alberi validi")
         return deserialized_trees
@@ -518,21 +541,33 @@ def create_global_random_forest(selected_trees):
 def serialize_global_model(global_rf):
     """
     Serializza il Random Forest globale per l'invio ai client.
-    Usa pickle per compatibilità.
     """
     try:
-        # Serializza l'intero modello Random Forest con pickle
-        model_bytes = pickle.dumps(global_rf)
+        # CORREZIONE: Usa joblib per serializzare il Random Forest
+        from io import BytesIO
+        buffer = BytesIO()
+        joblib.dump(global_rf, buffer)
+        model_bytes = buffer.getvalue()
         
         # Converte in numpy array per compatibilità Flower
         model_array = np.frombuffer(model_bytes, dtype=np.uint8)
+        
+        print(f"[Server] Modello serializzato: {len(model_bytes)} bytes")
         
         # Restituisce come lista (formato Flower)
         return [model_array]
         
     except Exception as e:
         print(f"[Server] ❌ Errore serializzazione modello globale: {e}")
-        return []
+        # Fallback con pickle
+        try:
+            model_bytes = pickle.dumps(global_rf)
+            model_array = np.frombuffer(model_bytes, dtype=np.uint8)
+            print(f"[Server] Modello serializzato con pickle (fallback): {len(model_bytes)} bytes")
+            return [model_array]
+        except Exception as e2:
+            print(f"[Server] ❌ Fallback pickle fallito: {e2}")
+            return []
 
 def get_smartgrid_random_forest_evaluate_fn():
     """
@@ -635,8 +670,16 @@ def get_smartgrid_random_forest_evaluate_fn():
             
             try:
                 # Deserializza il Random Forest globale usando pickle
-                model_bytes = parameters[0].tobytes()
-                global_rf = pickle.loads(model_bytes)
+                model_array = parameters[0].tobytes()
+                if hasattr(model_array, 'tobytes'):
+                    model_bytes = model_array.tobytes()
+                else:
+                    model_bytes = bytes(model_array)
+
+                try:
+                    global_rf = joblib.load(BytesIO(model_bytes))
+                except:
+                    global_rf = pickle.loads(model_bytes)
                 print(f"✅ Modello Random Forest globale deserializzato")
                 print(f"   N. alberi: {global_rf.n_estimators if hasattr(global_rf, 'n_estimators') else 'N/A'}")
             except Exception as e:

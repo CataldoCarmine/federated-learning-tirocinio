@@ -405,7 +405,7 @@ def extract_trees_from_forest(model, X_val, y_val):
 def serialize_trees_for_aggregation(trees_performance, max_trees=None):
     """
     Serializza gli alberi per l'invio al server.
-    Usa pickle per compatibilità con numpy arrays e Flower.
+    Usa joblib per compatibilità con scikit-learn.
     """
     print(f"[Client] === SERIALIZZAZIONE ALBERI ===")
     
@@ -420,13 +420,25 @@ def serialize_trees_for_aggregation(trees_performance, max_trees=None):
     
     for i, (tree, accuracy, weighted_accuracy) in enumerate(selected_trees):
         try:
-            # Usa pickle.dumps() invece di joblib.dumps()
-            tree_bytes = pickle.dumps(tree)
+            # CORREZIONE: Usa joblib per serializzare gli alberi di scikit-learn
+            from io import BytesIO
+            buffer = BytesIO()
+            joblib.dump(tree, buffer)
+            tree_bytes = buffer.getvalue()
             serialized_trees.append(tree_bytes)
+            
+            print(f"[Client] Albero {i+1} serializzato: {len(tree_bytes)} bytes")
             
         except Exception as e:
             print(f"[Client] Errore serializzazione albero {i}: {e}")
-            continue
+            # Fallback con pickle
+            try:
+                tree_bytes = pickle.dumps(tree)
+                serialized_trees.append(tree_bytes)
+                print(f"[Client] Albero {i+1} serializzato con pickle (fallback): {len(tree_bytes)} bytes")
+            except Exception as e2:
+                print(f"[Client] Fallback pickle fallito per albero {i}: {e2}")
+                continue
     
     print(f"[Client] Serializzati {len(serialized_trees)} alberi")
     return serialized_trees
@@ -440,7 +452,6 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
     def get_parameters(self, config):
         """
         Per Random Forest, non restituiamo pesi neurali ma gli alberi del modello.
-        Versione corretta per compatibilità con il server.
         """
         global model, X_val, y_val
 
@@ -452,21 +463,28 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             # Estrai e valuta le performance degli alberi
             trees_performance = extract_trees_from_forest(model, X_val, y_val)
 
-            # Serializza gli alberi per l'invio (invia tutti gli alberi)
+            # Serializza gli alberi per l'invio
             serialized_trees = serialize_trees_for_aggregation(trees_performance)
         
-            # Converti in formato compatibile con Flower
+            # CORREZIONE: Converte in formato compatibile con Flower
             parameters = []
-            for tree_bytes in serialized_trees:
-                # CORREZIONE: Converte bytes in numpy array correttamente
-                tree_array = np.frombuffer(tree_bytes, dtype=np.uint8)
-                parameters.append(tree_array)
+            for i, tree_bytes in enumerate(serialized_trees):
+                try:
+                    # Converte bytes in numpy array
+                    tree_array = np.frombuffer(tree_bytes, dtype=np.uint8)
+                    parameters.append(tree_array)
+                    print(f"[Client] Convertito albero {i+1}: {len(tree_bytes)} bytes → {tree_array.shape} array")
+                except Exception as e:
+                    print(f"[Client] Errore conversione albero {i+1}: {e}")
+                    continue
         
             print(f"[Client {client_id}] Invio {len(parameters)} alberi al server")
             return parameters
-        
+            
         except Exception as e:
             print(f"[Client {client_id}] Errore nell'estrazione parametri: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     def set_parameters(self, parameters):
@@ -480,16 +498,31 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             return
 
         try:
-            # Il server invia il modello Random Forest aggregato
             if len(parameters) > 0:
-                aggregated_model_bytes = parameters[0].tobytes()
-                model = pickle.loads(aggregated_model_bytes)
-            
-                print(f"[Client {client_id}] ✅ Modello aggregato ricevuto dal server")
+                # CORREZIONE: Gestisce la deserializzazione del modello
+                model_array = parameters[0]
+                
+                if hasattr(model_array, 'tobytes'):
+                    aggregated_model_bytes = model_array.tobytes()
+                else:
+                    aggregated_model_bytes = bytes(model_array)
+                
+                # Prova prima con joblib
+                try:
+                    from io import BytesIO
+                    model = joblib.load(BytesIO(aggregated_model_bytes))
+                    print(f"[Client {client_id}] ✅ Modello aggregato ricevuto dal server (joblib)")
+                except:
+                    # Fallback con pickle
+                    model = pickle.loads(aggregated_model_bytes)
+                    print(f"[Client {client_id}] ✅ Modello aggregato ricevuto dal server (pickle)")
+                
                 print(f"[Client {client_id}] Nuovo modello ha {model.n_estimators} alberi")
-        
+            
         except Exception as e:
             print(f"[Client {client_id}] ❌ Errore nell'impostazione parametri: {e}")
+            import traceback
+            traceback.print_exc()
             # Mantieni il modello corrente in caso di errore
             pass
 
