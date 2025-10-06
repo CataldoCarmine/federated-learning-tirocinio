@@ -320,23 +320,15 @@ def apply_preprocessing_pipeline(X_global):
 def deserialize_trees_from_client(parameters):
     """
     Deserializza gli alberi ricevuti da un client.
-    
-    Args:
-        parameters: Parametri ricevuti dal client (formato Flower Parameters o lista)
-        
-    Returns:
-        Lista di alberi deserializzati o None se errore
+    Usa pickle per compatibilità con il client.
     """
     try:
         # Gestisce diversi tipi di parametri da Flower
-        if hasattr(parameters, 'tensors'):
-            # Flower Parameters object (v1.0+)
+        if hasattr(parameters, 'tensors'):   
             parameter_arrays = parameters.tensors
-        elif isinstance(parameters, list):
-            # Lista diretta di numpy arrays
+        elif isinstance(parameters, list):    
             parameter_arrays = parameters
-        else:
-            # Prova a convertire direttamente
+        else:     
             parameter_arrays = list(parameters) if parameters else []    
 
         if not parameter_arrays:
@@ -352,13 +344,12 @@ def deserialize_trees_from_client(parameters):
                 # Converti numpy array in bytes
                 tree_bytes = param_array.tobytes()
                 
-                # Deserializza l'albero usando joblib DIRETTAMENTE sui bytes
-                tree = joblib.loads(tree_bytes)
+                # Deserializza l'albero usando pickle.loads()
+                tree = pickle.loads(tree_bytes)
                 
                 # Verifica che sia un albero valido
                 if hasattr(tree, 'predict'):
                     # Per compatibilità con il format del paper, aggiungiamo metriche fittizie
-                    # Il client dovrebbe inviare queste informazioni, ma per ora usiamo valori di default
                     deserialized_trees.append((tree, 0.8, 0.8))  # (tree, accuracy, weighted_accuracy)
                     print(f"[Server] ✅ Albero {i+1} deserializzato con successo")
                 else:
@@ -527,16 +518,11 @@ def create_global_random_forest(selected_trees):
 def serialize_global_model(global_rf):
     """
     Serializza il Random Forest globale per l'invio ai client.
-    
-    Args:
-        global_rf: Random Forest globale
-        
-    Returns:
-        Lista di numpy array compatibili con Flower
+    Usa pickle per compatibilità.
     """
     try:
-        # Serializza l'intero modello Random Forest DIRETTAMENTE in bytes
-        model_bytes = joblib.dumps(global_rf)
+        # Serializza l'intero modello Random Forest con pickle
+        model_bytes = pickle.dumps(global_rf)
         
         # Converte in numpy array per compatibilità Flower
         model_array = np.frombuffer(model_bytes, dtype=np.uint8)
@@ -648,9 +634,9 @@ def get_smartgrid_random_forest_evaluate_fn():
                 }
             
             try:
-                # DESERIALIZZAZIONE SICURA: Solo se ci sono parametri
+                # Deserializza il Random Forest globale usando pickle
                 model_bytes = parameters[0].tobytes()
-                global_rf = joblib.load(BytesIO(model_bytes))
+                global_rf = pickle.loads(model_bytes)
                 print(f"✅ Modello Random Forest globale deserializzato")
                 print(f"   N. alberi: {global_rf.n_estimators if hasattr(global_rf, 'n_estimators') else 'N/A'}")
             except Exception as e:
