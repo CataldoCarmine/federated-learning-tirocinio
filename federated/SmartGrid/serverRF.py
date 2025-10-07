@@ -320,8 +320,8 @@ def apply_preprocessing_pipeline(X_global):
 
 def deserialize_trees_from_client(parameters):
     """
-    Deserializza gli alberi ricevuti da un client con gestione robusta.
-    Versione corretta per gestire il formato Flower.
+    Deserializza gli alberi ricevuti da un client.
+    Gli alberi sono ricevuti come numpy arrays (uint8) serializzati con pickle.
     """
     try:
         # Gestisce diversi tipi di parametri da Flower
@@ -345,65 +345,44 @@ def deserialize_trees_from_client(parameters):
                 print(f"[Server] DEBUG param[0]: dtype={parameter_arrays[0].dtype}, shape={parameter_arrays[0].shape}, primi 10 byte={parameter_arrays[0][:10].tolist()}")
             elif isinstance(parameter_arrays[0], bytes):
                 print(f"[Server] DEBUG param[0]: primi 50 byte={parameter_arrays[0][:50]}")
-
-        # Debug di riepilogo parametri
-        print(f"[Server] === DEBUG PARAMETRI CLIENT ===")
-        for idx, param in enumerate(parameter_arrays[:3]):
-            print(f"  Param {idx+1}: tipo={type(param)}, anteprima={(str(param)[:60] + '...') if len(str(param)) > 60 else str(param)}")
-        print(f"[Server] ==============================")
         
         deserialized_trees = []
         
         for i, param_array in enumerate(parameter_arrays):
             try:
-                print(f"[Server] Debug - Elaborazione parametro {i+1}: {type(param_array)}")
+                print(f"[Server] Elaborazione parametro {i+1}/{len(parameter_arrays)}: tipo={type(param_array)}")
                 
-                # ===== DEBUG AVANZATO =====
-                print(f"[Server] Tipo parametro {i+1}: {type(param_array)}")
+                # Converti in bytes per pickle.loads()
                 if isinstance(param_array, np.ndarray):
-                    print(f"[Server] - dtype: {param_array.dtype}, shape: {param_array.shape}")
-                elif isinstance(param_array, (bytes, str)):
-                    print(f"[Server] - lunghezza: {len(param_array)}")
+                    # Caso: array NumPy di tipo uint8 (formato standard di Flower)
+                    tree_bytes = param_array.tobytes()
+                    print(f"[Server] Convertito numpy array in bytes: {len(tree_bytes)} bytes")
+                elif isinstance(param_array, bytes):
+                    # Caso: bytes grezzi (già serializzati da pickle)
+                    tree_bytes = param_array
+                    print(f"[Server] Bytes grezzi ricevuti: {len(tree_bytes)} bytes")
                 else:
-                    print(f"[Server] - tipo non riconosciuto")
-
-                # ===== DECODIFICA / DESERIALIZZAZIONE =====
-                try:
-                    if isinstance(param_array, str):
-                        # Caso: stringa Base64
-                        tree_bytes = base64.b64decode(param_array.encode('utf-8'))
-                        print(f"[Server] Decodifica Base64 completata: {len(tree_bytes)} bytes")
-                    elif isinstance(param_array, bytes):
-                        # Caso: bytes grezzi (già serializzati da pickle)
-                        tree_bytes = param_array
-                        print(f"[Server] Bytes grezzi ricevuti: {len(tree_bytes)} bytes")
-                    elif isinstance(param_array, np.ndarray):
-                        # Caso: array NumPy di tipo uint8 (Flower lo usa spesso)
-                        tree_bytes = param_array.tobytes()
-                        print(f"[Server] Bytes estratti da np.ndarray: {len(tree_bytes)} bytes")
-                    else:
-                        print(f"[Server] ⚠️ Parametro {i+1} ignorato (tipo non compatibile)")
-                        continue
-
-                    # Tentativo di deserializzazione
-                    tree = pickle.loads(tree_bytes)
-                    print(f"[Server] Oggetto deserializzato tipo: {type(tree)}")
-
-                    if hasattr(tree, 'predict') and hasattr(tree, 'tree_'):
-                        simulated_accuracy = max(0.8, 0.95 - (i * 0.002))
-                        simulated_weighted_acc = max(0.75, 0.94 - (i * 0.002))
-                        deserialized_trees.append((tree, simulated_accuracy, simulated_weighted_acc))
-                        print(f"[Server] ✅ Albero {i+1} deserializzato correttamente (acc={simulated_accuracy:.3f})")
-                    else:
-                        print(f"[Server] ⚠️ Oggetto {i+1} non è un albero valido (tipo: {type(tree)})")
-
-                except Exception as e:
-                    print(f"[Server] ❌ Errore nella deserializzazione parametro {i+1}: {e}")
-                    import traceback; traceback.print_exc()
+                    print(f"[Server] ⚠️ Parametro {i+1} ignorato (tipo non compatibile: {type(param_array)})")
                     continue
 
+                # Deserializza l'albero con pickle
+                tree = pickle.loads(tree_bytes)
+                print(f"[Server] Oggetto deserializzato tipo: {type(tree)}")
+
+                # Verifica che sia un albero valido
+                if hasattr(tree, 'predict') and hasattr(tree, 'tree_'):
+                    # Usa accuracy simulate per compatibilità (il client dovrebbe inviarle)
+                    simulated_accuracy = max(0.8, 0.95 - (i * 0.002))
+                    simulated_weighted_acc = max(0.75, 0.94 - (i * 0.002))
+                    deserialized_trees.append((tree, simulated_accuracy, simulated_weighted_acc))
+                    print(f"[Server] ✅ Albero {i+1} deserializzato correttamente (acc={simulated_accuracy:.3f})")
+                else:
+                    print(f"[Server] ⚠️ Oggetto {i+1} non è un albero valido (tipo: {type(tree)})")
+
             except Exception as e:
-                print(f"[Server] ❌ Errore generico parametro {i+1}: {e}")
+                print(f"[Server] ❌ Errore nella deserializzazione parametro {i+1}: {e}")
+                import traceback
+                traceback.print_exc()
                 continue
 
         print(f"[Server] Deserializzati {len(deserialized_trees)} alberi validi su {len(parameter_arrays)}")
@@ -493,7 +472,7 @@ def create_global_random_forest(selected_trees):
     Implementa l'aggregazione descritta nel paper.
     
     Args:
-        selected_trees: Lista di tuple (tree, accuracy, weighted_accuracy, metadata)
+        selected_trees: Lista di tuple (tree, accuracy, weighted_accuracy)
         
     Returns:
         RandomForestClassifier globale configurato
@@ -516,9 +495,12 @@ def create_global_random_forest(selected_trees):
             criterion=RF_CRITERION
         )
     
+    # Estrai solo gli alberi (senza metadati)
+    trees = [tree_data[0] for tree_data in selected_trees]
+    
     # Crea un nuovo Random Forest con gli alberi aggregati
     global_rf = RandomForestClassifier(
-        n_estimators=len(selected_trees),  # Numero di alberi = alberi selezionati
+        n_estimators=len(trees),  # Numero di alberi = alberi selezionati
         max_depth=RF_MAX_DEPTH,
         min_samples_split=RF_MIN_SAMPLES_SPLIT,
         min_samples_leaf=RF_MIN_SAMPLES_LEAF,
@@ -530,15 +512,26 @@ def create_global_random_forest(selected_trees):
         criterion=RF_CRITERION
     )
     
-    # Estrai solo gli alberi (senza metadati)
-    trees = [tree_data[0] for tree_data in selected_trees]
-    
     # Assegna gli alberi al Random Forest globale
     # NOTA: Questo è un hack necessario perché scikit-learn non espone un'API diretta
     # per impostare alberi preaddestrati. In produzione, si dovrebbe usare un approccio
     # più robusto o una libreria ML che supporta nativamente l'aggregazione di alberi.
     global_rf.estimators_ = trees
     global_rf.n_estimators = len(trees)
+    
+    # Copia attributi necessari dal primo albero per permettere predizioni
+    first_tree = trees[0]
+    if hasattr(first_tree, 'n_features_in_'):
+        global_rf.n_features_in_ = first_tree.n_features_in_
+    if hasattr(first_tree, 'n_outputs_'):
+        global_rf.n_outputs_ = first_tree.n_outputs_
+    if hasattr(first_tree, 'classes_'):
+        global_rf.classes_ = first_tree.classes_
+        global_rf.n_classes_ = len(first_tree.classes_)
+    else:
+        # Default per classificazione binaria
+        global_rf.classes_ = np.array([0, 1])
+        global_rf.n_classes_ = 2
     
     # Calcola feature importance media dai singoli alberi (se disponibile)
     if hasattr(trees[0], 'feature_importances_'):
@@ -554,6 +547,7 @@ def create_global_random_forest(selected_trees):
         global_rf.feature_importances_ = feature_importances
     
     print(f"[Server] ✅ Random Forest globale creato con {len(trees)} alberi")
+    print(f"[Server] Attributi configurati: n_features={getattr(global_rf, 'n_features_in_', 'N/A')}, n_classes={getattr(global_rf, 'n_classes_', 'N/A')}")
     
     # Statistiche degli alberi aggregati
     accuracies = [tree_data[1] for tree_data in selected_trees]
@@ -566,19 +560,21 @@ def create_global_random_forest(selected_trees):
 
 def serialize_global_model(global_rf):
     """
-    Serializza il Random Forest globale per l'invio ai client (versione Base64).
+    Serializza il Random Forest globale per l'invio ai client.
+    Usa pickle + conversione in numpy array (uint8) per compatibilità con Flower.
     """
     try:
         # Serializza il modello Random Forest globale con pickle
         model_bytes = pickle.dumps(global_rf, protocol=pickle.HIGHEST_PROTOCOL)
         
-        # Codifica in Base64 per compatibilità universale
-        model_base64 = base64.b64encode(model_bytes).decode('utf-8')
+        # Converti in numpy array (uint8) per Flower
+        model_array = np.frombuffer(model_bytes, dtype=np.uint8)
         
-        print(f"[Server] Modello globale serializzato in Base64 ({len(model_bytes)} bytes)")
+        print(f"[Server] Modello globale serializzato ({len(model_bytes)} bytes)")
+        print(f"[Server] Convertito in numpy array: shape={model_array.shape}, dtype={model_array.dtype}")
         
         # Flower richiede una lista come output di parameters
-        return [model_base64]
+        return [model_array]
         
     except Exception as e:
         print(f"[Server] ❌ Errore serializzazione modello globale: {e}")
