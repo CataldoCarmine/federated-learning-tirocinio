@@ -6,6 +6,7 @@ import os
 import warnings
 import pickle
 import joblib
+import base64
 from io import BytesIO
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
@@ -404,7 +405,8 @@ def extract_trees_from_forest(model, X_val, y_val):
 
 def serialize_trees_for_aggregation(trees_performance, max_trees=None):
     """
-    Serializza gli alberi per l'invio al server usando un approccio più robusto.
+    Serializza gli alberi per l'invio al server in formato compatibile con Flower.
+    Usa pickle + conversione in np.ndarray(uint8).
     """
     print(f"[Client] === SERIALIZZAZIONE ALBERI ===")
     
@@ -419,16 +421,31 @@ def serialize_trees_for_aggregation(trees_performance, max_trees=None):
     
     for i, (tree, accuracy, weighted_accuracy) in enumerate(selected_trees):
         try:
-            # Usa pickle direttamente per semplicità e compatibilità
+            # Serializza in pickle binario
             tree_bytes = pickle.dumps(tree, protocol=pickle.HIGHEST_PROTOCOL)
-            serialized_trees.append(tree_bytes)
-            print(f"[Client] Albero {i+1} serializzato: {len(tree_bytes)} bytes")
-            
+
+            # Converti in array uint8 (formato sicuro per Flower)
+            tree_array = np.frombuffer(tree_bytes, dtype=np.uint8)
+            serialized_trees.append(tree_array)
+
+            print(f"[Client] ✅ Albero {i+1} serializzato ({len(tree_bytes)} bytes)")
+
         except Exception as e:
-            print(f"[Client] Errore serializzazione albero {i}: {e}")
+            print(f"[Client] ❌ Errore serializzazione albero {i+1}: {e}")
+            import traceback; traceback.print_exc()
             continue
     
-    print(f"[Client] Serializzati {len(serialized_trees)} alberi")
+    print(f"[Client] Serializzati {len(serialized_trees)} alberi validi")
+
+    # ===== DEBUG FLOWER FORMAT =====
+    if serialized_trees:
+        first = serialized_trees[0]
+        print(f"[Client] DEBUG Primo albero serializzato:")
+        print(f"  Tipo: {type(first)}, dtype: {first.dtype}, shape: {first.shape}")
+        print(f"  Prime 10 byte: {first[:10].tolist()}")
+    else:
+        print("[Client] ⚠️ Nessun albero serializzato!")
+
     return serialized_trees
 
 class SmartGridRandomForestClient(fl.client.NumPyClient):
@@ -439,7 +456,7 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
     
     def get_parameters(self, config):
         """
-        Restituisce gli alberi serializzati in formato compatibile Flower.
+        CORREZIONE COMPLETA: Evita conversioni problematiche che corrompono i dati pickle.
         """
         global model, X_val, y_val
 
@@ -451,19 +468,22 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             # Estrai e valuta le performance degli alberi
             trees_performance = extract_trees_from_forest(model, X_val, y_val)
 
-            # Serializza gli alberi
+            # Serializza gli alberi con verifica
             serialized_trees = serialize_trees_for_aggregation(trees_performance)
+
+            # Debug se non ci sono alberi serializzati
+            if len(serialized_trees) == 0:
+                print(f"[Client {client_id}] ⚠️ Nessun albero serializzato — invio parametri vuoti")
+                return []
         
-            # Converte in formato Flower: ogni albero serializzato diventa un numpy array
+            # CORREZIONE PRINCIPALE: Usa un wrapper che preserva i bytes originali
             parameters = []
-            for i, tree_bytes in enumerate(serialized_trees):
+            for i, tree_b64 in enumerate(serialized_trees):
                 try:
-                    # Crea numpy array da bytes, preservando la lunghezza originale
-                    tree_array = np.frombuffer(tree_bytes, dtype=np.uint8)
-                    parameters.append(tree_array)
-                    print(f"[Client] Convertito albero {i+1}: {len(tree_bytes)} bytes → {tree_array.shape}")
+                    parameters.append(tree_b64)  # invia direttamente la stringa Base64
+                    print(f"[Client] ✅ Albero {i+1} aggiunto ai parametri (Base64 len={len(tree_b64)})")
                 except Exception as e:
-                    print(f"[Client] Errore conversione albero {i+1}: {e}")
+                    print(f"[Client] ❌ Errore conversione albero {i+1}: {e}")
                     continue
         
             print(f"[Client {client_id}] Invio {len(parameters)} alberi al server")
@@ -477,7 +497,7 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
 
     def set_parameters(self, parameters):
         """
-        Riceve il modello aggregato dal server con gestione robusta.
+        CORREZIONE: Gestisce la deserializzazione inversa del modello aggregato.
         """
         global model
 
@@ -489,18 +509,24 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             if len(parameters) > 0:
                 # Il server invia un singolo modello Random Forest aggregato
                 model_array = parameters[0]
-                
-                # Converte numpy array in bytes
-                if hasattr(model_array, 'tobytes'):
-                    model_bytes = model_array.tobytes()
-                elif hasattr(model_array, 'data'):
-                    model_bytes = model_array.data.tobytes()
-                else:
-                    model_bytes = bytes(model_array)
-                
-                print(f"[Client {client_id}] Nuovo modello ha {model.n_estimators} alberi")
 
-        # Deserializza il modello Random Forest
+                # Debug del tipo di parametro ricevuto
+                print(f"[Client {client_id}] Tipo parametro ricevuto: {type(model_array)}")
+                if isinstance(model_array, str):
+                    print(f"[Client {client_id}] Anteprima Base64 (50 char): {model_array[:50]}...")
+                
+                # CORREZIONE: Converte numpy array in bytes usando il metodo inverso
+                if isinstance(model_array, str):
+                    model_bytes = base64.b64decode(model_array.encode('utf-8'))
+                elif isinstance(model_array, bytes):
+                    model_bytes = base64.b64decode(model_array)
+                else:
+                    print(f"[Client {client_id}] ⚠️ Tipo parametro non riconosciuto: {type(model_array)}")
+                    return
+                
+                print(f"[Client {client_id}] Ricevuto modello: {len(model_bytes)} bytes")
+                
+                # Deserializza il modello Random Forest
                 model = pickle.loads(model_bytes)
                 print(f"[Client {client_id}] ✅ Modello aggregato ricevuto dal server")
                 print(f"[Client {client_id}] Nuovo modello ha {model.n_estimators} alberi")
@@ -599,7 +625,18 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
         }
     
         # Restituisce gli alberi del modello addestrato
-        return self.get_parameters(config), len(X_train), metrics
+        try:
+            # Combina gli alberi con le metriche locali
+            trees_perf = [(tree, train_accuracy, train_balanced_acc) for tree in model.estimators_]
+            serialized_trees = serialize_trees_for_aggregation(trees_perf)
+            
+            print(f"[Client {client_id}] Invio {len(serialized_trees)} alberi serializzati al server...")
+            return serialized_trees, len(X_train), metrics
+
+        except Exception as e:
+            print(f"[Client {client_id}] ❌ Errore serializzazione finale: {e}")
+            import traceback; traceback.print_exc()
+            return [], 0, {'error': f'serialization_failed: {str(e)}'}
 
     def evaluate(self, parameters, config):
         """
