@@ -456,7 +456,8 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
     
     def get_parameters(self, config):
         """
-        CORREZIONE COMPLETA: Evita conversioni problematiche che corrompono i dati pickle.
+        Restituisce gli alberi serializzati del Random Forest locale.
+        Gli alberi sono serializzati come numpy arrays (uint8) per compatibilità con Flower.
         """
         global model, X_val, y_val
 
@@ -476,18 +477,10 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
                 print(f"[Client {client_id}] ⚠️ Nessun albero serializzato — invio parametri vuoti")
                 return []
         
-            # CORREZIONE PRINCIPALE: Usa un wrapper che preserva i bytes originali
-            parameters = []
-            for i, tree_b64 in enumerate(serialized_trees):
-                try:
-                    parameters.append(tree_b64)  # invia direttamente la stringa Base64
-                    print(f"[Client] ✅ Albero {i+1} aggiunto ai parametri (Base64 len={len(tree_b64)})")
-                except Exception as e:
-                    print(f"[Client] ❌ Errore conversione albero {i+1}: {e}")
-                    continue
-        
-            print(f"[Client {client_id}] Invio {len(parameters)} alberi al server")
-            return parameters
+            # Gli alberi sono già numpy arrays (uint8) pronti per Flower
+            print(f"[Client {client_id}] Invio {len(serialized_trees)} alberi al server")
+            print(f"[Client {client_id}] Primo albero: shape={serialized_trees[0].shape}, dtype={serialized_trees[0].dtype}")
+            return serialized_trees
             
         except Exception as e:
             print(f"[Client {client_id}] Errore nell'estrazione parametri: {e}")
@@ -497,7 +490,8 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
 
     def set_parameters(self, parameters):
         """
-        CORREZIONE: Gestisce la deserializzazione inversa del modello aggregato.
+        Riceve e deserializza il modello aggregato dal server.
+        Il modello è ricevuto come numpy array (uint8) serializzato con pickle.
         """
         global model
 
@@ -512,19 +506,17 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
 
                 # Debug del tipo di parametro ricevuto
                 print(f"[Client {client_id}] Tipo parametro ricevuto: {type(model_array)}")
-                if isinstance(model_array, str):
-                    print(f"[Client {client_id}] Anteprima Base64 (50 char): {model_array[:50]}...")
                 
-                # CORREZIONE: Converte numpy array in bytes usando il metodo inverso
-                if isinstance(model_array, str):
-                    model_bytes = base64.b64decode(model_array.encode('utf-8'))
+                # Converte numpy array in bytes
+                if isinstance(model_array, np.ndarray):
+                    model_bytes = model_array.tobytes()
+                    print(f"[Client {client_id}] Convertito numpy array in bytes: {len(model_bytes)} bytes")
                 elif isinstance(model_array, bytes):
-                    model_bytes = base64.b64decode(model_array)
+                    model_bytes = model_array
+                    print(f"[Client {client_id}] Ricevuto bytes direttamente: {len(model_bytes)} bytes")
                 else:
-                    print(f"[Client {client_id}] ⚠️ Tipo parametro non riconosciuto: {type(model_array)}")
+                    print(f"[Client {client_id}] ⚠️ Tipo parametro non supportato: {type(model_array)}")
                     return
-                
-                print(f"[Client {client_id}] Ricevuto modello: {len(model_bytes)} bytes")
                 
                 # Deserializza il modello Random Forest
                 model = pickle.loads(model_bytes)
