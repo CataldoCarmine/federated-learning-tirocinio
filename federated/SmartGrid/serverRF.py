@@ -16,18 +16,19 @@ from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score, cl
 import os
 from datetime import datetime
 import sys
+from flwr.common import ndarrays_to_parameters
 warnings.filterwarnings('ignore')
 
 # CONFIGURAZIONE SEMI PER RIPRODUCIBILITÀ
 RANDOM_SEED = 42
 
 # ============== FLAGS GLOBALI PER CONTROLLO PREPROCESSING ==============
-ENABLE_CLEAN_INF_NAN = False           # Pulizia inf/NaN
-ENABLE_CLIPPING_OUTLIERS = False       # Clipping outlier per quantili (IQR)
-ENABLE_IMPUTATION = False              # Imputazione mediana
-ENABLE_SCALING = False                 # StandardScaler (mean=0, std=1)
-ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Rimozione feature quasi-costanti
-ENABLE_PCA = False  # PCA per riduzione dimensionalità
+ENABLE_CLEAN_INF_NAN = True           # Pulizia inf/NaN
+ENABLE_CLIPPING_OUTLIERS = True       # Clipping outlier per quantili (IQR)
+ENABLE_IMPUTATION = True              # Imputazione mediana
+ENABLE_SCALING = True                 # StandardScaler (mean=0, std=1)
+ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = True  # Rimozione feature quasi-costanti
+ENABLE_PCA = True  # PCA per riduzione dimensionalità
 
 if ENABLE_PCA:
     ENABLE_IMPUTATION = True # Per eseguire la PCA non si possono avere NaN
@@ -542,19 +543,22 @@ def create_global_random_forest(selected_trees):
         global_rf.classes_ = np.array([0, 1])
         global_rf.n_classes_ = 2
     
-    # Calcola feature importance media dai singoli alberi (se disponibile)
+    # ✅ CORREZIONE: NON impostare feature_importances_ direttamente
+    # Calcola feature importance media dai singoli alberi (se disponibile) - SOLO CALCOLO
     if hasattr(trees[0], 'feature_importances_'):
         n_features = trees[0].feature_importances_.shape[0]
-        feature_importances = np.zeros(n_features)
+        feature_importances_calculated = np.zeros(n_features)
         
         for tree in trees:
             if hasattr(tree, 'feature_importances_'):
-                feature_importances += tree.feature_importances_
+                feature_importances_calculated += tree.feature_importances_
         
         # Media pesata delle feature importance
-        feature_importances /= len(trees)
-        global_rf.feature_importances_ = feature_importances
+        feature_importances_calculated /= len(trees)
     
+        # ✅ CORREZIONE: Memorizza in una variabile separata invece di impostare la proprietà
+        global_rf._calculated_feature_importances = feature_importances_calculated
+
     print(f"[Server] ✅ Random Forest globale creato con {len(trees)} alberi")
     print(f"[Server] Attributi configurati: n_features={getattr(global_rf, 'n_features_in_', 'N/A')}, n_classes={getattr(global_rf, 'n_classes_', 'N/A')}")
     
@@ -582,9 +586,12 @@ def serialize_global_model(global_rf):
         print(f"[Server] Modello globale serializzato ({len(model_bytes)} bytes)")
         print(f"[Server] Convertito in numpy array: shape={model_array.shape}, dtype={model_array.dtype}")
         
-        # Flower richiede una lista come output di parameters
-        return [model_array]
-        
+        # ✅ CORREZIONE: Usa Parameters invece di lista
+        from flwr.common import ndarrays_to_parameters
+        parameters = ndarrays_to_parameters([model_array])
+
+        return parameters
+
     except Exception as e:
         print(f"[Server] ❌ Errore serializzazione modello globale: {e}")
         import traceback
