@@ -321,7 +321,7 @@ def apply_preprocessing_pipeline(X_global):
 def deserialize_trees_from_client(parameters):
     """
     Deserializza gli alberi ricevuti da un client.
-    Gli alberi sono ricevuti come numpy arrays (uint8) serializzati con pickle.
+    CORREZIONE: Gestisce il formato NumPy automatico di Flower.
     """
     try:
         # Gestisce diversi tipi di parametri da Flower
@@ -337,32 +337,41 @@ def deserialize_trees_from_client(parameters):
             return []
         
         print(f"[Server] Ricevuti {len(parameter_arrays)} parametri dal client")
-
-        # Debug del tipo del primo parametro
-        if len(parameter_arrays) > 0:
-            print(f"[Server] Tipo parametri ricevuti: {type(parameter_arrays[0])}")
-            if isinstance(parameter_arrays[0], np.ndarray):
-                print(f"[Server] DEBUG param[0]: dtype={parameter_arrays[0].dtype}, shape={parameter_arrays[0].shape}, primi 10 byte={parameter_arrays[0][:10].tolist()}")
-            elif isinstance(parameter_arrays[0], bytes):
-                print(f"[Server] DEBUG param[0]: primi 50 byte={parameter_arrays[0][:50]}")
         
         deserialized_trees = []
         
-        for i, param_array in enumerate(parameter_arrays):
+        for i, param_data in enumerate(parameter_arrays):
             try:
-                print(f"[Server] Elaborazione parametro {i+1}/{len(parameter_arrays)}: tipo={type(param_array)}")
+                print(f"[Server] Elaborazione parametro {i+1}/{len(parameter_arrays)}: tipo={type(param_data)}")
                 
-                # Converti in bytes per pickle.loads()
-                if isinstance(param_array, np.ndarray):
-                    # Caso: array NumPy di tipo uint8 (formato standard di Flower)
-                    tree_bytes = param_array.tobytes()
+                # CORREZIONE: Gestisci il formato NumPy di Flower
+                if isinstance(param_data, bytes):
+                    # Flower converte numpy arrays in bytes con formato NumPy
+                    # Dobbiamo riconvertire in numpy array e poi in bytes per pickle
+                    
+                    # Controlla se è formato NumPy (inizia con b'\x93NUMPY')
+                    if param_data.startswith(b'\x93NUMPY'):
+                        print(f"[Server] Rilevato formato NumPy da Flower")
+                        
+                        # Carica come numpy array dal formato .npy
+                        from io import BytesIO
+                        tree_array = np.load(BytesIO(param_data))
+                        print(f"[Server] Array NumPy caricato: shape={tree_array.shape}, dtype={tree_array.dtype}")
+                        
+                        # Ora converti in bytes per pickle
+                        tree_bytes = tree_array.tobytes()
+                        print(f"[Server] Convertito in bytes per pickle: {len(tree_bytes)} bytes")
+                    else:
+                        # Bytes diretti (fallback)
+                        tree_bytes = param_data
+                        print(f"[Server] Bytes diretti ricevuti: {len(tree_bytes)} bytes")
+                
+                elif isinstance(param_data, np.ndarray):
+                    # Caso numpy array diretto
+                    tree_bytes = param_data.tobytes()
                     print(f"[Server] Convertito numpy array in bytes: {len(tree_bytes)} bytes")
-                elif isinstance(param_array, bytes):
-                    # Caso: bytes grezzi (già serializzati da pickle)
-                    tree_bytes = param_array
-                    print(f"[Server] Bytes grezzi ricevuti: {len(tree_bytes)} bytes")
                 else:
-                    print(f"[Server] ⚠️ Parametro {i+1} ignorato (tipo non compatibile: {type(param_array)})")
+                    print(f"[Server] ⚠️ Parametro {i+1} ignorato (tipo non compatibile: {type(param_data)})")
                     continue
 
                 # Deserializza l'albero con pickle
@@ -371,7 +380,7 @@ def deserialize_trees_from_client(parameters):
 
                 # Verifica che sia un albero valido
                 if hasattr(tree, 'predict') and hasattr(tree, 'tree_'):
-                    # Usa accuracy simulate per compatibilità (il client dovrebbe inviarle)
+                    # Usa accuracy simulate per compatibilità
                     simulated_accuracy = max(0.8, 0.95 - (i * 0.002))
                     simulated_weighted_acc = max(0.75, 0.94 - (i * 0.002))
                     deserialized_trees.append((tree, simulated_accuracy, simulated_weighted_acc))
