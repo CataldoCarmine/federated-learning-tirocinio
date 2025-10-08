@@ -366,10 +366,25 @@ def extract_trees_from_forest(model, X_val, y_val):
         Lista di tuple (tree, accuracy, weighted_accuracy) per ogni albero
     """
     print(f"[Client] === ESTRAZIONE ALBERI DA RANDOM FOREST ===")
+
+    print(f"[Client] 🔍 DEBUG extract_trees_from_forest: INIZIO")
+    print(f"[Client] 🔍 DEBUG: model type = {type(model)}")
+    print(f"[Client] 🔍 DEBUG: X_val shape = {X_val.shape}")
+    print(f"[Client] 🔍 DEBUG: y_val shape = {y_val.shape}")
+
+    # ✅ CONTROLLO: Verifica se il modello è addestrato
+    if not hasattr(model, 'estimators_') or len(model.estimators_) == 0:
+        print(f"[Client] ⚠️ Modello non ancora addestrato, nessun albero disponibile")
+        return []  # Restituisce lista vuota
+    
+    print(f"[Client] 🔍 DEBUG: Modello ha {len(model.estimators_)} alberi")
+    print(f"[Client] === ESTRAZIONE ALBERI DA RANDOM FOREST ===")
     
     trees_performance = []
     
     for i, tree in enumerate(model.estimators_):
+        print(f"[Client] 🔍 DEBUG: Elaboro albero {i+1}/{len(model.estimators_)}")
+
         # Predizioni dell'albero singolo
         tree_predictions = tree.predict(X_val)
         
@@ -395,6 +410,8 @@ def extract_trees_from_forest(model, X_val, y_val):
         if i < 5:  # Stampa info per i primi 5 alberi
             print(f"[Client] Albero {i+1}: Accuracy={accuracy:.4f}, Weighted Accuracy={weighted_acc:.4f}")
     
+    print(f"[Client] 🔍 DEBUG extract_trees_from_forest: COMPLETATO con {len(trees_performance)} alberi")
+
     # Ordina gli alberi per performance (weighted accuracy come nel paper)
     trees_performance.sort(key=lambda x: x[2], reverse=True)  # Ordina per weighted accuracy
     
@@ -464,19 +481,37 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
         if model is None:
             print(f"[Client {client_id}] Modello non ancora addestrato, restituisco parametri vuoti")
             return []
+        
+        # ✅ CONTROLLO: Verifica se il modello è addestrato
+        if not hasattr(model, 'estimators_') or len(model.estimators_) == 0:
+            print(f"[Client {client_id}] Modello non ancora addestrato, restituisco parametri vuoti")
+            return []
+        
+        print(f"[Client {client_id}] 🔍 DEBUG PRE-GET_PARAMETERS:")
+        print(f"  - model type: {type(model)}")
+        print(f"  - has estimators_: {hasattr(model, 'estimators_')}")
+        if hasattr(model, 'estimators_'):
+            print(f"  - n_estimators: {len(model.estimators_)}")
+
+        print(f"[Client {client_id}] 🔍 DEBUG: Modello è addestrato con {len(model.estimators_)} alberi")
 
         try:
+            print(f"[Client {client_id}] 🔍 DEBUG: Chiamo extract_trees_from_forest...")
             # Estrai e valuta le performance degli alberi
             trees_performance = extract_trees_from_forest(model, X_val, y_val)
+            print(f"[Client {client_id}] 🔍 DEBUG: extract_trees_from_forest completata, {len(trees_performance)} alberi")
 
+            print(f"[Client {client_id}] 🔍 DEBUG: Chiamo serialize_trees_for_aggregation...")
             # Serializza gli alberi con verifica
             serialized_trees = serialize_trees_for_aggregation(trees_performance)
+            print(f"[Client {client_id}] 🔍 DEBUG: serialize_trees_for_aggregation completata, {len(serialized_trees)} alberi")
 
             # Debug se non ci sono alberi serializzati
             if len(serialized_trees) == 0:
                 print(f"[Client {client_id}] ⚠️ Nessun albero serializzato — invio parametri vuoti")
                 return []
         
+            print(f"[Client {client_id}] 🔍 DEBUG: Invio {len(serialized_trees)} alberi al server")
             # Gli alberi sono già numpy arrays (uint8) pronti per Flower
             print(f"[Client {client_id}] Invio {len(serialized_trees)} alberi al server")
             print(f"[Client {client_id}] Primo albero: shape={serialized_trees[0].shape}, dtype={serialized_trees[0].dtype}")
@@ -566,6 +601,14 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
                 raise RuntimeError("Random Forest non addestrato correttamente - nessun albero trovato")
         
             print(f"[Client {client_id}] ✅ Random Forest addestrato con {len(model.estimators_)} alberi")
+
+            # DOPO l'addestramento, aggiungi:
+            print(f"[Client {client_id}] 🔍 DEBUG POST-FIT:")
+            print(f"  - model type: {type(model)}")
+            print(f"  - has estimators_: {hasattr(model, 'estimators_')}")
+            if hasattr(model, 'estimators_'):
+                print(f"  - n_estimators: {len(model.estimators_)}")
+                print(f"  - first tree type: {type(model.estimators_[0]) if len(model.estimators_) > 0 else 'N/A'}")
         
             # Calcola metriche di training
             train_predictions = model.predict(X_train_clean)
