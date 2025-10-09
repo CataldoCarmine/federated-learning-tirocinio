@@ -39,7 +39,7 @@ RF_MIN_SAMPLES_SPLIT = 2       # Campioni minimi per effettuare uno split
 RF_MIN_SAMPLES_LEAF = 1        # Campioni minimi in una foglia
 RF_MAX_FEATURES = 'sqrt'       # Feature da considerare per ogni split
 RF_BOOTSTRAP = True            # Usa bootstrap sampling
-RF_CLASS_WEIGHT = 'balanced'   # Gestione automatica dello sbilanciamento
+RF_CLASS_WEIGHT = 'balanced_subsample'   # Gestione automatica dello sbilanciamento
 
 # ========== FUNZIONI DI PREPROCESSING (identiche al federato) ==========
 def set_reproducibility_seeds():

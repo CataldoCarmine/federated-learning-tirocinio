@@ -24,11 +24,11 @@ RANDOM_SEED = 42
 
 # ============== FLAGS GLOBALI PER CONTROLLO PREPROCESSING ==============
 ENABLE_CLEAN_INF_NAN = True           # Pulizia inf/NaN
-ENABLE_CLIPPING_OUTLIERS = True       # Clipping outlier per quantili (IQR)
+ENABLE_CLIPPING_OUTLIERS = False       # Clipping outlier per quantili (IQR)
 ENABLE_IMPUTATION = True              # Imputazione mediana
-ENABLE_SCALING = True                 # StandardScaler (mean=0, std=1)
-ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = True  # Rimozione feature quasi-costanti
-ENABLE_PCA = True  # PCA per riduzione dimensionalità
+ENABLE_SCALING = False                 # StandardScaler (mean=0, std=1)
+ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Rimozione feature quasi-costanti
+ENABLE_PCA = False  # PCA per riduzione dimensionalità
 
 if ENABLE_PCA:
     ENABLE_IMPUTATION = True # Per eseguire la PCA non si possono avere NaN
@@ -689,8 +689,15 @@ def get_smartgrid_random_forest_evaluate_fn():
         
         try:
             # CONTROLLO: Verifica se ci sono parametri da valutare
-            if not parameters or len(parameters) == 0:
-                print(f"[Server] ⚠️ Nessun modello da valutare")
+            if server_round == 0:
+                print(f"[Server] ⚠️ Primo round, nessun modello da valutare")
+                return 1.0, {
+                    "accuracy": 0.0, 
+                    "error": "no_model_first_round", 
+                    "global_test_samples": len(X_global)
+                }
+            elif not parameters or len(parameters) == 0:
+                print(f"[Server] ❌ Nessun modello ricevuto dai client")
                 return 1.0, {
                     "accuracy": 0.0, 
                     "error": "no_model_received", 
