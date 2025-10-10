@@ -22,7 +22,7 @@ ENABLE_CLEAN_INF_NAN = False           # Pulizia inf/NaN
 ENABLE_CLIPPING_OUTLIERS = False       # Clipping outlier per quantili (IQR)
 ENABLE_IMPUTATION = False              # Imputazione mediana
 ENABLE_SCALING = False                 # StandardScaler (mean=0, std=1)
-ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Cambia a False per disabilitare rimozione feature quasi-costanti
+ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Rimozione feature quasi-costanti
 ENABLE_PCA = False  # Cambia a False per disabilitare la PCA
 
 if ENABLE_PCA:
@@ -99,12 +99,15 @@ def apply_pca(X, pca_obj=None):
 
 def load_centralized_smartgrid_data():
     """Carica e unisce tutti i dati SmartGrid per l'addestramento centralizzato."""
+    
     set_reproducibility_seeds()
     print("=== CARICAMENTO DATASET SMARTGRID CENTRALIZZATO ===")
+    
     script_dir = os.path.dirname(os.path.abspath(__file__))
     data_dir = os.path.join(script_dir, "..", "..", "data", "SmartGrid")
     df_list = []
     files_loaded = []
+    
     for file_id in range(1, 16):
         file_path = os.path.join(data_dir, f"data{file_id}.csv")
         if os.path.exists(file_path):
@@ -119,16 +122,20 @@ def load_centralized_smartgrid_data():
             print(f"  - File data{file_id}.csv non trovato")
     if not df_list:
         raise FileNotFoundError("Nessun file di dati SmartGrid trovato nella cartella data/SmartGrid/")
+   
     df_combined = pd.concat(df_list, ignore_index=True)
+    
     print(f"\nDataset centralizzato combinato:")
     print(f"  - File caricati: {len(files_loaded)} ({files_loaded})")
     print(f"  - Totale campioni: {len(df_combined)}")
     print(f"  - Feature totali: {df_combined.shape[1] - 1}")  # -1 per escludere 'marker'
+    
     X = df_combined.drop(columns=["marker"])
     y = (df_combined["marker"] != "Natural").astype(int)  # 1 = attacco, 0 = naturale
     attack_samples = y.sum()
     natural_samples = (y == 0).sum()
     attack_ratio = y.mean()
+    
     marker_distribution = df_combined["marker"].value_counts()
     print(f"\nDistribuzione per tipo di scenario:")
     for marker, count in marker_distribution.items():
@@ -149,6 +156,7 @@ def load_centralized_smartgrid_data():
 
 def split_train_validation_test(X, y, train_size=0.7, val_size=0.15, test_size=0.15, random_state=42):
     print(f"=== STEP 1: SUDDIVISIONE TRAIN/VALIDATION/TEST (PRIMA DEL PREPROCESSING) ===")
+    
     total_size = train_size + val_size + test_size
     if abs(total_size - 1.0) > 0.001:
         raise ValueError(f"Le proporzioni devono sommare a 1.0, ricevuto: {total_size}")
@@ -160,6 +168,7 @@ def split_train_validation_test(X, y, train_size=0.7, val_size=0.15, test_size=0
     X_val, X_test, y_val, y_test = train_test_split(
         X_temp, y_temp, test_size=relative_test_size, random_state=random_state, stratify=y_temp
     )
+    
     print(f"  - Training set: {len(X_train)} campioni ({len(X_train)/len(X)*100:.1f}%)")
     print(f"  - Validation set: {len(X_val)} campioni ({len(X_val)/len(X)*100:.1f}%)")
     print(f"  - Test set: {len(X_test)} campioni ({len(X_test)/len(X)*100:.1f}%)")
@@ -170,6 +179,7 @@ def split_train_validation_test(X, y, train_size=0.7, val_size=0.15, test_size=0
     print(f"  - Proporzione attacchi validation: {val_attack_ratio*100:.2f}%")
     print(f"  - Proporzione attacchi test: {test_attack_ratio*100:.2f}%")
     print("=" * 60)
+    
     return X_train, X_val, X_test, y_train, y_val, y_test
 
 def centralized_preprocessing(X_train_raw, X_val_raw, X_test_raw):

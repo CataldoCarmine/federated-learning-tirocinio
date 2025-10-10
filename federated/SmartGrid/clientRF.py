@@ -55,8 +55,6 @@ RF_CRITERION = 'entropy'  # Criterio di splitting (dal paper: entropy migliore d
 ENSEMBLE_METHOD = 'weighted_voting'  # 'simple_voting' o 'weighted_voting'
 TREE_SELECTION_METHOD = 'accuracy_based'  # Come selezionare i migliori alberi per l'aggregazione
 
-NUM_ROUNDS = 100  # Numero di round di addestramento federato
-
 def set_reproducibility_seeds():
     """
     Imposta tutti i semi per garantire riproducibilità.
@@ -144,9 +142,9 @@ def apply_pca(X_preprocessed, client_id=None):
 
             # VERIFICA: Output senza NaN/inf e dimensioni corrette
             if np.any(np.isnan(X_pca)) or np.any(np.isinf(X_pca)):
-                raise ValueError(f"PCA client {client_id} ha prodotto output con NaN o inf")
+                raise ValueError(f"❌PCA client {client_id} ha prodotto output con NaN o inf")
             if X_pca.shape[1] != n_components:
-                raise ValueError(f"PCA output shape inconsistente: {X_pca.shape[1]} vs {n_components}")
+                raise ValueError(f"❌ PCA output shape inconsistente: {X_pca.shape[1]} vs {n_components}")
             
             variance_explained = np.sum(pca.explained_variance_ratio_)
             print(f"[Client {client_id}] ✅ PCA fissa applicata: {X_pca.shape}")
@@ -154,11 +152,11 @@ def apply_pca(X_preprocessed, client_id=None):
             return X_pca
         
     except Exception as e:
-        print(f"[Client {client_id}] ERRORE PCA: {e}")
+        print(f"[Client {client_id}] ❌ ERRORE PCA: {e}")
         print(f"[Client {client_id}] Attivazione fallback semplificato...")
         n_fallback = min(n_components, original_features)
         X_fallback = X_preprocessed[:, :n_fallback]
-        print(f"[Client {client_id}] ✅ Fallback: {X_fallback.shape}")
+        print(f"[Client {client_id}] ⚠️ Fallback: {X_fallback.shape}")
         return X_fallback
 
 def load_client_smartgrid_data(client_id):
@@ -266,7 +264,7 @@ def load_client_smartgrid_data(client_id):
         X_val_final = apply_pca(X_val_scaled, client_id=client_id)
         expected_features = PCA_COMPONENTS
         if X_train_final.shape[1] != expected_features:
-            raise RuntimeError(f"Client {client_id}: PCA output shape inconsistente: {X_train_final.shape} vs {expected_features}")
+            raise RuntimeError(f"Client {client_id}: ⚠️ PCA output shape inconsistente: {X_train_final.shape} vs {expected_features}")
     else:
         X_train_final = X_train_scaled
         X_val_final = X_val_scaled
@@ -278,7 +276,7 @@ def load_client_smartgrid_data(client_id):
         # Pulizia di emergenza
         X_train_final = np.nan_to_num(X_train_final, nan=0.0, posinf=1e10, neginf=-1e10)
         X_val_final = np.nan_to_num(X_val_final, nan=0.0, posinf=1e10, neginf=-1e10)
-        print(f"[Client {client_id}] ✅ Pulizia di emergenza applicata")
+        print(f"[Client {client_id}] ⚠️ Pulizia di emergenza applicata")
     
     print(f"[Client {client_id}] ✅ Preprocessing completato: {X_train_final.shape}, {X_val_final.shape}")
         
@@ -322,8 +320,7 @@ def create_random_forest_model():
     print(f"[Client {client_id}] Class weight: {RF_CLASS_WEIGHT} (gestione sbilanciamento)")
     
     # PARAMETRI OTTIMIZZATI BASATI SUL PAPER
-    # Il paper mostra che entropy come criterio e sqrt per max_features 
-    # danno risultati migliori sui dataset di intrusion detection
+    # Il paper mostra che entropy come criterio e sqrt per max_features danno risultati migliori sui dataset di intrusion detection
     model = RandomForestClassifier(
         n_estimators=RF_N_ESTIMATORS,           # Numero di alberi (dal paper: 65-93 range ottimo)
         criterion=RF_CRITERION,                 # Criterio di splitting (entropy vs gini)
@@ -372,7 +369,7 @@ def extract_trees_from_forest(model, X_val, y_val):
     print(f"[Client {client_id}] 🔍 DEBUG: X_val shape = {X_val.shape}")
     print(f"[Client {client_id}] 🔍 DEBUG: y_val shape = {y_val.shape}")
 
-    # ✅ CONTROLLO: Verifica se il modello è addestrato
+    # CONTROLLO: Verifica se il modello è addestrato
     if not hasattr(model, 'estimators_') or len(model.estimators_) == 0:
         print(f"[Client {client_id}] ⚠️ Modello non ancora addestrato, nessun albero disponibile")
         return []  # Restituisce lista vuota
@@ -391,7 +388,7 @@ def extract_trees_from_forest(model, X_val, y_val):
         # Calcola accuracy standard REALE
         accuracy_real = accuracy_score(y_val, tree_predictions)
         
-        # Calcola weighted accuracy REALE (come nel paper)
+        # Calcola weighted accuracy REALE
         # Weighted accuracy considera la distribuzione delle classi
         class_counts = np.bincount(y_val)
         weights = 1.0 / class_counts  # Peso inversamente proporzionale alla frequenza
@@ -422,8 +419,8 @@ def extract_trees_from_forest(model, X_val, y_val):
 
 def serialize_trees_for_aggregation(trees_performance, max_trees=None):
     """
-    Serializza gli alberi CON le loro accuracy reali per l'invio al server.
-    ✅ CORREZIONE: Invia dizionario completo con accuracy reali.
+    Serializza gli alberi con le loro accuracy reali per l'invio al server.
+    Invia dizionario completo con accuracy reali.
     """
     print(f"[Client {client_id}] === SERIALIZZAZIONE ALBERI CON ACCURACY REALI ===")
     
@@ -438,7 +435,7 @@ def serialize_trees_for_aggregation(trees_performance, max_trees=None):
     
     for i, (tree, accuracy_real, weighted_accuracy_real) in enumerate(selected_trees):
         try:
-            # ✅ CORREZIONE: Crea dizionario con albero + accuracy REALI
+            # CORREZIONE: Crea dizionario con albero + accuracy REALI
             tree_data = {
                 'tree': tree,
                 'accuracy': accuracy_real,
@@ -489,12 +486,12 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
         global model, X_val, y_val
 
         if model is None:
-            print(f"[Client {client_id}] Modello non ancora addestrato, restituisco parametri vuoti")
+            print(f"[Client {client_id}] ⚠️ Modello non ancora addestrato, restituisco parametri vuoti")
             return []
         
-        # ✅ CONTROLLO: Verifica se il modello è addestrato
+        # CONTROLLO: Verifica se il modello è addestrato
         if not hasattr(model, 'estimators_') or len(model.estimators_) == 0:
-            print(f"[Client {client_id}] Modello non ancora addestrato, restituisco parametri vuoti")
+            print(f"[Client {client_id}] ⚠️ Modello non ancora addestrato, restituisco parametri vuoti")
             return []
         
         print(f"[Client {client_id}] 🔍 DEBUG PRE-GET_PARAMETERS:")
@@ -528,7 +525,7 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             return serialized_trees
             
         except Exception as e:
-            print(f"[Client {client_id}] Errore nell'estrazione parametri: {e}")
+            print(f"[Client {client_id}] ❌ Errore nell'estrazione parametri: {e}")
             import traceback
             traceback.print_exc()
             return []
@@ -541,7 +538,7 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
         global model
 
         if not parameters or len(parameters) == 0:
-            print(f"[Client {client_id}] Nessun parametro ricevuto dal server")
+            print(f"[Client {client_id}] ❌ Nessun parametro ricevuto dal server")
             return
 
         try:
@@ -797,9 +794,9 @@ def main():
     try:
         client_id = int(sys.argv[1])
         if client_id < 1 or client_id > 13:
-            raise ValueError("Client ID deve essere tra 1 e 13")
+            raise ValueError("⚠️ Client ID deve essere tra 1 e 13")
     except ValueError as e:
-        print(f"Errore: Client ID non valido. {e}")
+        print(f"❌ Errore: Client ID non valido. {e}")
         sys.exit(1)
     
     print(f"=== AVVIO CLIENT RANDOM FOREST {client_id} ===")
