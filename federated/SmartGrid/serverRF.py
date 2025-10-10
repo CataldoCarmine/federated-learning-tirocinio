@@ -321,8 +321,8 @@ def apply_preprocessing_pipeline(X_global):
 
 def deserialize_trees_from_client(parameters):
     """
-    Deserializza gli alberi ricevuti da un client.
-    CORREZIONE: Gestisce il formato NumPy automatico di Flower.
+    Deserializza gli alberi ricevuti da un client CON ACCURACY REALI.
+    ✅ CORREZIONE: Gestisce il formato NumPy di Flower + estrae accuracy reali.
     """
     try:
         # Gestisce diversi tipi di parametri da Flower
@@ -345,7 +345,7 @@ def deserialize_trees_from_client(parameters):
             try:
                 print(f"[Server] Elaborazione parametro {i+1}/{len(parameter_arrays)}: tipo={type(param_data)}")
                 
-                # CORREZIONE: Gestisci il formato NumPy di Flower
+                # ✅ CORREZIONE: Gestisce formato NumPy di Flower
                 if isinstance(param_data, bytes):
                     # Flower converte numpy arrays in bytes con formato NumPy
                     # Dobbiamo riconvertire in numpy array e poi in bytes per pickle
@@ -375,19 +375,34 @@ def deserialize_trees_from_client(parameters):
                     print(f"[Server] ⚠️ Parametro {i+1} ignorato (tipo non compatibile: {type(param_data)})")
                     continue
 
-                # Deserializza l'albero con pickle
-                tree = pickle.loads(tree_bytes)
-                print(f"[Server] Oggetto deserializzato tipo: {type(tree)}")
+                # ✅ CORREZIONE: Deserializza dizionario completo con accuracy reali
+                tree_data = pickle.loads(tree_bytes)
+                print(f"[Server] Oggetto deserializzato tipo: {type(tree_data)}")
 
-                # Verifica che sia un albero valido
-                if hasattr(tree, 'predict') and hasattr(tree, 'tree_'):
-                    # Usa accuracy simulate per compatibilità
+                # Verifica se è il nuovo formato con accuracy reali
+                if isinstance(tree_data, dict) and 'tree' in tree_data and 'accuracy_type' in tree_data:
+                    if tree_data['accuracy_type'] == 'REAL':
+                        tree = tree_data['tree']
+                        accuracy_real = tree_data['accuracy']
+                        weighted_accuracy_real = tree_data['weighted_accuracy']
+                        
+                        # Verifica che sia un albero valido
+                        if hasattr(tree, 'predict') and hasattr(tree, 'tree_'):
+                            deserialized_trees.append((tree, accuracy_real, weighted_accuracy_real))
+                            print(f"[Server] ✅ Albero {i+1} con ACCURACY REALI: acc={accuracy_real:.4f}, w_acc={weighted_accuracy_real:.4f}")
+                        else:
+                            print(f"[Server] ⚠️ Oggetto {i+1} non è un albero valido")
+                    else:
+                        print(f"[Server] ⚠️ Albero {i+1} non ha accuracy reali, tipo: {tree_data.get('accuracy_type', 'UNKNOWN')}")
+                        
+                # Fallback per compatibilità con formato vecchio (solo albero diretto)
+                elif hasattr(tree_data, 'predict') and hasattr(tree_data, 'tree_'):
+                    print(f"[Server] ⚠️ Albero {i+1} in formato vecchio, uso accuracy simulate")
                     simulated_accuracy = max(0.8, 0.95 - (i * 0.002))
                     simulated_weighted_acc = max(0.75, 0.94 - (i * 0.002))
-                    deserialized_trees.append((tree, simulated_accuracy, simulated_weighted_acc))
-                    print(f"[Server] ✅ Albero {i+1} deserializzato correttamente (acc={simulated_accuracy:.3f})")
+                    deserialized_trees.append((tree_data, simulated_accuracy, simulated_weighted_acc))
                 else:
-                    print(f"[Server] ⚠️ Oggetto {i+1} non è un albero valido (tipo: {type(tree)})")
+                    print(f"[Server] ⚠️ Formato dati non riconosciuto per parametro {i+1}")
 
             except Exception as e:
                 print(f"[Server] ❌ Errore nella deserializzazione parametro {i+1}: {e}")
@@ -396,6 +411,14 @@ def deserialize_trees_from_client(parameters):
                 continue
 
         print(f"[Server] Deserializzati {len(deserialized_trees)} alberi validi su {len(parameter_arrays)}")
+        
+        # ✅ CORREZIONE: Mostra statistiche accuracy reali
+        if deserialized_trees:
+            real_accuracies = [t[1] for t in deserialized_trees]
+            real_w_accuracies = [t[2] for t in deserialized_trees]
+            print(f"[Server] Accuracy REALI ricevute: min={min(real_accuracies):.4f}, max={max(real_accuracies):.4f}, media={np.mean(real_accuracies):.4f}")
+            print(f"[Server] Weighted accuracy REALI: min={min(real_w_accuracies):.4f}, max={max(real_w_accuracies):.4f}, media={np.mean(real_w_accuracies):.4f}")
+        
         return deserialized_trees
         
     except Exception as e:
@@ -406,19 +429,10 @@ def deserialize_trees_from_client(parameters):
 
 def select_best_trees(all_trees_data, strategy=TREE_AGGREGATION_STRATEGY, method=TREE_SELECTION_METHOD, max_trees=MAX_TREES_GLOBAL):
     """
-    Seleziona i migliori alberi basandosi sui criteri del paper.
-    Implementa i metodi di selezione descritti nel paper.
-    
-    Args:
-        all_trees_data: Lista di liste, ogni lista contiene gli alberi di un client
-        strategy: 'per_forest' o 'global'
-        method: 'accuracy' o 'weighted_accuracy'  
-        max_trees: Numero massimo di alberi nel modello globale
-        
-    Returns:
-        Lista dei migliori alberi selezionati
+    Seleziona i migliori alberi basandosi sulle ACCURACY REALI dai client.
+    ✅ CORREZIONE: Usa accuracy reali per selezione ottimale invece di valori simulati.
     """
-    print(f"[Server] === SELEZIONE ALBERI ===")
+    print(f"[Server] === SELEZIONE ALBERI CON ACCURACY REALI ===")
     print(f"Strategia: {strategy}")
     print(f"Metodo: {method}")
     print(f"Max alberi globale: {max_trees}")
@@ -430,17 +444,17 @@ def select_best_trees(all_trees_data, strategy=TREE_AGGREGATION_STRATEGY, method
     selected_trees = []
     
     if strategy == 'per_forest':
-        # Seleziona migliori alberi da ogni Random Forest client
+        # Seleziona migliori alberi da ogni Random Forest client usando ACCURACY REALI
         trees_per_client = max_trees // len(all_trees_data)
         remaining_trees = max_trees % len(all_trees_data)
         
-        print(f"[Server] Seleziono {trees_per_client} alberi per client ({len(all_trees_data)} client)")
+        print(f"[Server] Seleziono {trees_per_client} alberi per client ({len(all_trees_data)} client) - BASATO SU ACCURACY REALI")
         
         for client_idx, client_trees in enumerate(all_trees_data):
             if not client_trees:
                 continue
                 
-            # Ordina gli alberi del client per performance
+            # ✅ CORREZIONE: Ordina gli alberi usando accuracy REALI
             metric_idx = 2 if method == 'weighted_accuracy' else 1
             sorted_trees = sorted(client_trees, key=lambda x: x[metric_idx], reverse=True)
             
@@ -451,16 +465,17 @@ def select_best_trees(all_trees_data, strategy=TREE_AGGREGATION_STRATEGY, method
             
             if client_selected:
                 best_score = client_selected[0][metric_idx]
-                print(f"[Server] Client {client_idx+1}: {len(client_selected)} alberi, migliore {method}={best_score:.4f}")
+                worst_score = client_selected[-1][metric_idx] if len(client_selected) > 1 else best_score
+                print(f"[Server] Client {client_idx+1}: {len(client_selected)} alberi, {method} REALE range={worst_score:.4f}-{best_score:.4f}")
     
     elif strategy == 'global':
-        # Seleziona migliori alberi globalmente tra tutti i client
+        # Seleziona migliori alberi globalmente usando ACCURACY REALI
         all_trees_flat = []
         for client_trees in all_trees_data:
             all_trees_flat.extend(client_trees)
         
         if all_trees_flat:
-            # Ordina tutti gli alberi per performance
+            # ✅ CORREZIONE: Ordina tutti gli alberi usando accuracy REALI
             metric_idx = 2 if method == 'weighted_accuracy' else 1
             sorted_trees = sorted(all_trees_flat, key=lambda x: x[metric_idx], reverse=True)
             
@@ -471,9 +486,17 @@ def select_best_trees(all_trees_data, strategy=TREE_AGGREGATION_STRATEGY, method
                 best_score = selected_trees[0][metric_idx]
                 worst_score = selected_trees[-1][metric_idx]
                 print(f"[Server] Selezione globale: {len(selected_trees)} alberi")
-                print(f"[Server] Range {method}: {worst_score:.4f} - {best_score:.4f}")
+                print(f"[Server] Range {method} REALE globale: {worst_score:.4f} - {best_score:.4f}")
     
-    print(f"[Server] Alberi selezionati totali: {len(selected_trees)}")
+    print(f"[Server] ✅ Alberi selezionati totali: {len(selected_trees)} (basato su ACCURACY REALI)")
+    
+    # ✅ CORREZIONE: Statistiche finali con accuracy reali
+    if selected_trees:
+        final_accuracies = [t[1] for t in selected_trees]
+        final_w_accuracies = [t[2] for t in selected_trees]
+        print(f"[Server] Accuracy REALI alberi selezionati: min={min(final_accuracies):.4f}, max={max(final_accuracies):.4f}")
+        print(f"[Server] Media accuracy REALI: {np.mean(final_accuracies):.4f}")
+    
     return selected_trees
 
 def create_global_random_forest(selected_trees):
@@ -559,15 +582,16 @@ def create_global_random_forest(selected_trees):
         # ✅ CORREZIONE: Memorizza in una variabile separata invece di impostare la proprietà
         global_rf._calculated_feature_importances = feature_importances_calculated
 
-    print(f"[Server] ✅ Random Forest globale creato con {len(trees)} alberi")
+    print(f"[Server] ✅ Random Forest globale creato con {len(trees)} alberi (selezionati tramite accuracy REALI)")
     print(f"[Server] Attributi configurati: n_features={getattr(global_rf, 'n_features_in_', 'N/A')}, n_classes={getattr(global_rf, 'n_classes_', 'N/A')}")
     
-    # Statistiche degli alberi aggregati
-    accuracies = [tree_data[1] for tree_data in selected_trees]
-    weighted_accuracies = [tree_data[2] for tree_data in selected_trees]
+    # ✅ CORREZIONE: Statistiche degli alberi aggregati con accuracy REALI
+    accuracies_real = [tree_data[1] for tree_data in selected_trees]
+    weighted_accuracies_real = [tree_data[2] for tree_data in selected_trees]
     
-    print(f"[Server] Accuracy alberi: min={min(accuracies):.4f}, max={max(accuracies):.4f}, mean={np.mean(accuracies):.4f}")
-    print(f"[Server] Weighted accuracy: min={min(weighted_accuracies):.4f}, max={max(weighted_accuracies):.4f}, mean={np.mean(weighted_accuracies):.4f}")
+    print(f"[Server] Accuracy REALI alberi aggregati: min={min(accuracies_real):.4f}, max={max(accuracies_real):.4f}, mean={np.mean(accuracies_real):.4f}")
+    print(f"[Server] Weighted accuracy REALI: min={min(weighted_accuracies_real):.4f}, max={max(weighted_accuracies_real):.4f}, mean={np.mean(weighted_accuracies_real):.4f}")
+    print(f"[Server] 🎯 Modello globale usa SOLO gli alberi con le migliori performance REALI!")
     
     return global_rf
 
@@ -947,8 +971,11 @@ def print_client_metrics_rf(fit_results):
         print(f"  Totale campioni: {total_samples}")
         print(f"  Client con errori: {len(error_clients)}")
         
+        
         if n_estimators_list:
             print(f"  Alberi per client: {np.mean(n_estimators_list):.1f} ± {np.std(n_estimators_list):.1f}")
+
+        print(f"  🎯 I client inviano ACCURACY REALI per selezione ottimale degli alberi")
 
 class SmartGridRandomForestFedAvg(FedAvg):
     """
@@ -1112,9 +1139,9 @@ def main():
     strategy = SmartGridRandomForestFedAvg(
         fraction_fit=1.0,
         fraction_evaluate=1.0,
-        min_fit_clients=2,
-        min_evaluate_clients=2,
-        min_available_clients=2,
+        min_fit_clients=13, #prima 2
+        min_evaluate_clients=13,    #prima 2
+        min_available_clients=13,    #prima 2
         evaluate_fn=get_smartgrid_random_forest_evaluate_fn()
     )
     

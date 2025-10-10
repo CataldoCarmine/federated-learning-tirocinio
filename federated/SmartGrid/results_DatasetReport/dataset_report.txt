@@ -1,0 +1,185 @@
+DATASET HEALTH REPORT
+Generated: 2025-10-09 17:31:07
+
+Clients analyzed: 15
+
+--- Client 1 ---
+Samples: 4966
+Attack / Natural: 3866 / 1100 (attack_ratio=0.778)
+Numeric features: 128
+Near-constant features: 9
+Top missing (feature: count): R1-PA1:VH:0, R1-PM1:V:0, R1-PA2:VH:0, R1-PM2:V:0, R1-PA3:VH:0
+Top inf (feature: count): R1-PA:Z:192, R2-PA:Z:170, R3-PA:Z:153, R4-PA:Z:150, R1-PA1:VH:0
+Top outliers (feature: count): R1-PA11:IH:2432, R2-PA11:IH:2400, R4-PA11:IH:2400, R3-PA11:IH:2394, R2-PA12:IH:1622
+Feature 'R1-PA1:VH': mean=-17.9255, std=98.0998, min=-179.9890, max=179.9947
+Feature 'R1-PM1:V': mean=130994.3550, std=6545.8498, min=24998.0502, max=146302.5305
+Feature 'R1-PA2:VH': mean=8.6106, std=115.0446, min=-179.9947, max=179.9718
+
+--- Client 2 ---
+Samples: 5069
+Attack / Natural: 3525 / 1544 (attack_ratio=0.695)
+Numeric features: 128
+Near-constant features: 9
+Top missing (feature: count): R1-PA1:VH:0, R1-PM1:V:0, R1-PA2:VH:0, R1-PM2:V:0, R1-PA3:VH:0
+Top inf (feature: count): R4-PA:Z:194, R1-PA:Z:173, R2-PA:Z:142, R3-PA:Z:141, R1-PA1:VH:0
+Top outliers (feature: count): R1-PA11:IH:2492, R3-PA11:IH:2411, R2-PA11:IH:2406, R4-PA11:IH:2406, R4-PA12:IH:2073
+Feature 'R1-PA1:VH': mean=-18.7765, std=98.3344, min=-179.9431, max=179.8228
+Feature 'R1-PM1:V': mean=130889.2559, std=7327.7270, min=22891.8955, max=151592.9904
+Feature 'R1-PA2:VH': mean=-4.6552, std=114.0917, min=-179.9660, max=179.8572
+
+--- Client 3 ---
+Samples: 5415
+Attack / Natural: 3811 / 1604 (attack_ratio=0.704)
+Numeric features: 128
+Near-constant features: 8
+Top missing (feature: count): R1-PA1:VH:0, R1-PM1:V:0, R1-PA2:VH:0, R1-PM2:V:0, R1-PA3:VH:0
+Top inf (feature: count): R4-PA:Z:216, R3-PA:Z:209, R1-PA:Z:161, R2-PA:Z:154, R1-PA1:VH:0
+Top outliers (feature: count): R4-PA11:IH:2272, R1-PA11:IH:2189, R2-PA11:IH:2183, R4-PA12:IH:2169, R3-PA12:IH:2166
+Feature 'R1-PA1:VH': mean=-23.4956, std=99.6320, min=-179.9603, max=179.9546
+Feature 'R1-PM1:V': mean=130763.6272, std=7485.1005, min=23217.8480, max=149988.3011
+Feature 'R1-PA2:VH': mean=5.8678, std=117.2880, min=-179.9890, max=179.9890
+
+--- Client 4 ---
+Samples: 5202
+Attack / Natural: 3402 / 1800 (attack_ratio=0.654)
+Numeric features: 128
+Near-constant features: 9
+Top missing (feature: count): R1-PA1:VH:0, R1-PM1:V:0, R1-PA2:VH:0, R1-PM2:V:0, R1-PA3:VH:0
+Top inf (feature: count): R1-PA:Z:185, R2-PA:Z:178, R3-PA:Z:176, R4-PA:Z:166, R1-PA1:VH:0
+Top outliers (feature: count): R3-PA11:IH:2349, R1-PA11:IH:2340, R4-PA11:IH:2334, R2-PA11:IH:2317, R3-PA12:IH:2193
+Feature 'R1-PA1:VH': mean=-30.3164, std=102.9493, min=-179.9374, max=179.8916
+Feature 'R1-PM1:V': mean=130728.8149, std=8747.9912, min=0.0000, max=149085.6634
+Feature 'R1-PA2:VH': mean=11.9132, std=108.3130, min=-179.9947, max=179.8973
+
+--- Client 5 ---
+Samples: 5161
+Attack / Natural: 3680 / 1481 (attack_ratio=0.713)
+Numeric features: 128
+Near-constant features: 9
+Top missing (feature: count): R1-PA1:VH:0, R1-PM1:V:0, R1-PA2:VH:0, R1-PM2:V:0, R1-PA3:VH:0
+Top inf (feature: count): R1-PA:Z:192, R3-PA:Z:185, R2-PA:Z:181, R4-PA:Z:176, R1-PA1:VH:0
+Top outliers (feature: count): R4-PA11:IH:2386, R2-PA11:IH:2317, R3-PA11:IH:2266, R1-PA11:IH:2237, R3-PA12:IH:1995
+Feature 'R1-PA1:VH': mean=-20.4300, std=97.4500, min=-179.7369, max=179.5478
+Feature 'R1-PM1:V': mean=130862.0892, std=7741.1043, min=14617.7164, max=150038.4477
+Feature 'R1-PA2:VH': mean=0.3729, std=115.8665, min=-179.9890, max=179.8973
+
+--- Client 6 ---
+Samples: 4967
+Attack / Natural: 3490 / 1477 (attack_ratio=0.703)
+Numeric features: 128
+Near-constant features: 8
+Top missing (feature: count): R1-PA1:VH:0, R1-PM1:V:0, R1-PA2:VH:0, R1-PM2:V:0, R1-PA3:VH:0
+Top inf (feature: count): R1-PA:Z:184, R2-PA:Z:183, R4-PA:Z:159, R3-PA:Z:149, R1-PA1:VH:0
+Top outliers (feature: count): R4-PA11:IH:2285, R2-PA11:IH:2265, R3-PA11:IH:2233, R1-PA11:IH:2228, R3-PA12:IH:1882
+Feature 'R1-PA1:VH': mean=-21.1593, std=101.5265, min=-178.8488, max=178.0867
+Feature 'R1-PM1:V': mean=130930.5968, std=7898.3384, min=22039.4043, max=150314.2537
+Feature 'R1-PA2:VH': mean=-1.5078, std=111.3651, min=-179.7598, max=179.5936
+
+--- Client 7 ---
+Samples: 5236
+Attack / Natural: 3910 / 1326 (attack_ratio=0.747)
+Numeric features: 128
+Near-constant features: 9
+Top missing (feature: count): R1-PA1:VH:0, R1-PM1:V:0, R1-PA2:VH:0, R1-PM2:V:0, R1-PA3:VH:0
+Top inf (feature: count): R1-PA:Z:194, R3-PA:Z:177, R4-PA:Z:176, R2-PA:Z:156, R1-PA1:VH:0
+Top outliers (feature: count): R1-PA12:IH:2492, R4-PA11:IH:2457, R3-PA12:IH:2456, R1-PA11:IH:2450, R2-PA11:IH:2448
+Feature 'R1-PA1:VH': mean=-8.7696, std=102.7089, min=-179.9890, max=179.9775
+Feature 'R1-PM1:V': mean=130903.3861, std=7267.1058, min=23318.1411, max=150514.8398
+Feature 'R1-PA2:VH': mean=6.5737, std=108.9656, min=-179.8973, max=179.9947
+
+--- Client 8 ---
+Samples: 5315
+Attack / Natural: 3771 / 1544 (attack_ratio=0.710)
+Numeric features: 128
+Near-constant features: 9
+Top missing (feature: count): R1-PA1:VH:0, R1-PM1:V:0, R1-PA2:VH:0, R1-PM2:V:0, R1-PA3:VH:0
+Top inf (feature: count): R2-PA:Z:204, R1-PA:Z:201, R4-PA:Z:196, R3-PA:Z:182, R1-PA1:VH:0
+Top outliers (feature: count): R1-PA12:IH:2532, R1-PA11:IH:2462, R3-PA12:IH:2460, R2-PA12:IH:2450, R2-PA11:IH:2443
+Feature 'R1-PA1:VH': mean=-11.9745, std=106.9238, min=-179.9202, max=179.6452
+Feature 'R1-PM1:V': mean=130519.6877, std=10622.6231, min=0.0000, max=150063.5210
+Feature 'R1-PA2:VH': mean=9.2423, std=105.7413, min=-179.8973, max=179.8916
+
+--- Client 9 ---
+Samples: 5340
+Attack / Natural: 3570 / 1770 (attack_ratio=0.669)
+Numeric features: 128
+Near-constant features: 9
+Top missing (feature: count): R1-PA1:VH:0, R1-PM1:V:0, R1-PA2:VH:0, R1-PM2:V:0, R1-PA3:VH:0
+Top inf (feature: count): R1-PA:Z:215, R4-PA:Z:186, R2-PA:Z:179, R3-PA:Z:156, R1-PA1:VH:0
+Top outliers (feature: count): R1-PA12:IH:2547, R1-PA11:IH:2542, R2-PA12:IH:2504, R2-PA11:IH:2496, R4-PA11:IH:2462
+Feature 'R1-PA1:VH': mean=-1.7380, std=100.0548, min=-179.9832, max=179.8686
+Feature 'R1-PM1:V': mean=130834.7879, std=8025.3656, min=12260.8290, max=145600.4789
+Feature 'R1-PA2:VH': mean=-6.5468, std=110.3044, min=-179.9145, max=179.9145
+
+--- Client 10 ---
+Samples: 5569
+Attack / Natural: 3921 / 1648 (attack_ratio=0.704)
+Numeric features: 128
+Near-constant features: 8
+Top missing (feature: count): R1-PA1:VH:0, R1-PM1:V:0, R1-PA2:VH:0, R1-PM2:V:0, R1-PA3:VH:0
+Top inf (feature: count): R4-PA:Z:242, R3-PA:Z:228, R1-PA:Z:227, R2-PA:Z:225, R1-PA1:VH:0
+Top outliers (feature: count): R3-PA11:IH:2503, R1-PA11:IH:2487, R4-PA11:IH:2486, R2-PA11:IH:2479, R2-PA12:IH:2226
+Feature 'R1-PA1:VH': mean=-20.2905, std=101.4369, min=-179.8171, max=179.9431
+Feature 'R1-PM1:V': mean=130326.8504, std=11458.2394, min=0.0000, max=147631.4138
+Feature 'R1-PA2:VH': mean=13.7102, std=112.2191, min=-179.9890, max=179.9775
+
+--- Client 11 ---
+Samples: 5251
+Attack / Natural: 3969 / 1282 (attack_ratio=0.756)
+Numeric features: 128
+Near-constant features: 8
+Top missing (feature: count): R1-PA1:VH:0, R1-PM1:V:0, R1-PA2:VH:0, R1-PM2:V:0, R1-PA3:VH:0
+Top inf (feature: count): R4-PA:Z:194, R1-PA:Z:184, R3-PA:Z:173, R2-PA:Z:172, R1-PA1:VH:0
+Top outliers (feature: count): R1-PA11:IH:2293, R4-PA11:IH:2281, R2-PA11:IH:2242, R3-PA11:IH:2149, R3-PA12:IH:1941
+Feature 'R1-PA1:VH': mean=-25.8094, std=103.9229, min=-179.9890, max=179.9603
+Feature 'R1-PM1:V': mean=130824.0574, std=7664.8787, min=30313.5834, max=149587.1288
+Feature 'R1-PA2:VH': mean=7.5421, std=110.4907, min=-179.9775, max=179.9374
+
+--- Client 12 ---
+Samples: 5224
+Attack / Natural: 3453 / 1771 (attack_ratio=0.661)
+Numeric features: 128
+Near-constant features: 9
+Top missing (feature: count): R1-PA1:VH:0, R1-PM1:V:0, R1-PA2:VH:0, R1-PM2:V:0, R1-PA3:VH:0
+Top inf (feature: count): R1-PA:Z:217, R3-PA:Z:195, R4-PA:Z:189, R2-PA:Z:165, R1-PA1:VH:0
+Top outliers (feature: count): R1-PA12:IH:2430, R1-PA11:IH:2413, R2-PA11:IH:2397, R2-PA12:IH:2396, R4-PA11:IH:2380
+Feature 'R1-PA1:VH': mean=-8.5048, std=97.6625, min=-179.8858, max=179.9546
+Feature 'R1-PM1:V': mean=130175.1718, std=12369.3941, min=0.0000, max=149712.4952
+Feature 'R1-PA2:VH': mean=-8.4846, std=107.5553, min=-179.9374, max=179.9890
+
+--- Client 13 ---
+Samples: 5271
+Attack / Natural: 4118 / 1153 (attack_ratio=0.781)
+Numeric features: 128
+Near-constant features: 8
+Top missing (feature: count): R1-PA1:VH:0, R1-PM1:V:0, R1-PA2:VH:0, R1-PM2:V:0, R1-PA3:VH:0
+Top inf (feature: count): R1-PA:Z:168, R3-PA:Z:166, R2-PA:Z:161, R4-PA:Z:161, R1-PA1:VH:0
+Top outliers (feature: count): R1-PA11:IH:2508, R2-PA11:IH:2457, R4-PA11:IH:2455, R3-PA11:IH:2440, R4-PA12:IH:2282
+Feature 'R1-PA1:VH': mean=-5.1847, std=96.8728, min=-179.6051, max=179.8973
+Feature 'R1-PM1:V': mean=130740.8775, std=8259.4571, min=23769.4600, max=148584.1980
+Feature 'R1-PA2:VH': mean=-5.2556, std=112.3743, min=-179.9489, max=179.8916
+
+--- Client 14 ---
+Samples: 5115
+Attack / Natural: 3762 / 1353 (attack_ratio=0.735)
+Numeric features: 128
+Near-constant features: 9
+Top missing (feature: count): R1-PA1:VH:0, R1-PM1:V:0, R1-PA2:VH:0, R1-PM2:V:0, R1-PA3:VH:0
+Top inf (feature: count): R4-PA:Z:211, R3-PA:Z:181, R1-PA:Z:180, R2-PA:Z:154, R1-PA1:VH:0
+Top outliers (feature: count): R1-PA11:IH:2435, R2-PA11:IH:2434, R4-PA11:IH:2392, R3-PA11:IH:2389, R4-PA12:IH:2345
+Feature 'R1-PA1:VH': mean=-13.5686, std=102.1853, min=-179.9718, max=179.9431
+Feature 'R1-PM1:V': mean=130912.1407, std=7232.9278, min=31517.1004, max=149160.8832
+Feature 'R1-PA2:VH': mean=-4.1185, std=108.5020, min=-179.7598, max=179.9259
+
+--- Client 15 ---
+Samples: 5276
+Attack / Natural: 3415 / 1861 (attack_ratio=0.647)
+Numeric features: 128
+Near-constant features: 9
+Top missing (feature: count): R1-PA1:VH:0, R1-PM1:V:0, R1-PA2:VH:0, R1-PM2:V:0, R1-PA3:VH:0
+Top inf (feature: count): R1-PA:Z:204, R2-PA:Z:183, R4-PA:Z:173, R3-PA:Z:162, R1-PA1:VH:0
+Top outliers (feature: count): R1-PA11:IH:2445, R2-PA12:IH:2425, R1-PA12:IH:2424, R3-PA12:IH:2424, R2-PA11:IH:2419
+Feature 'R1-PA1:VH': mean=-9.5434, std=98.0952, min=-179.8801, max=179.6853
+Feature 'R1-PM1:V': mean=131110.0108, std=6586.1560, min=23543.8005, max=149411.6159
+Feature 'R1-PA2:VH': mean=-1.5744, std=114.1740, min=-179.5191, max=179.9775
+

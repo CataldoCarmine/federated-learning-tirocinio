@@ -21,11 +21,11 @@ RANDOM_SEED = 42
 
 # ============== FLAGS GLOBALI PER CONTROLLO PREPROCESSING ==============
 ENABLE_CLEAN_INF_NAN = True           # Pulizia inf/NaN
-ENABLE_CLIPPING_OUTLIERS = True       # Clipping outlier per quantili (IQR)
+ENABLE_CLIPPING_OUTLIERS = False       # Clipping outlier per quantili (IQR)
 ENABLE_IMPUTATION = True              # Imputazione mediana
-ENABLE_SCALING = True                 # StandardScaler (mean=0, std=1)
-ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = True  # Rimozione feature quasi-costanti
-ENABLE_PCA = True  # PCA per riduzione dimensionalità
+ENABLE_SCALING = False                 # StandardScaler (mean=0, std=1)
+ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Rimozione feature quasi-costanti
+ENABLE_PCA = False  # PCA per riduzione dimensionalità
 
 if ENABLE_PCA:
     ENABLE_IMPUTATION = True # Per eseguire la PCA non si possono avere NaN
@@ -176,9 +176,9 @@ def load_client_smartgrid_data(client_id):
     
     df = pd.read_csv(file_path)
     print(f"=== PREPROCESSING FEDERATO RANDOM FOREST ===")
-    print(f"Pulizia inf/NaN: SEMPRE ABILITATA per Random Forest")
+    print(f"Pulizia inf/NaN: {'ABILITATA' if ENABLE_CLEAN_INF_NAN else 'DISABILITATA'}")
     print(f"Clipping outlier: {'ABILITATA' if ENABLE_CLIPPING_OUTLIERS else 'DISABILITATA'}")
-    print(f"Imputazione mediana: SEMPRE ABILITATA per Random Forest")
+    print(f"Imputazione mediana: {'ABILITATA' if ENABLE_IMPUTATION else 'DISABILITATA'}")
     print(f"Rimozione feature quasi-costanti: {'ABILITATA' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else 'DISABILITATA'}")
     print(f"Scaling standard: {'ABILITATA' if ENABLE_SCALING else 'DISABILITATA'}")
     print(f"PCA: {'ABILITATA' if ENABLE_PCA else 'DISABILITATA'}")
@@ -190,7 +190,7 @@ def load_client_smartgrid_data(client_id):
     attack_ratio = y.mean()
     print(f"[Client {client_id}] Distribuzione: {attack_samples} attacchi ({attack_ratio*100:.1f}%), {natural_samples} naturali")
     
-    # STEP 1: Pulizia inf/NaN (SEMPRE ABILITATA per Random Forest)
+    # STEP 1: Pulizia inf/NaN 
     print(f"[Client {client_id}] Pulizia valori infiniti e NaN...")
     X_cleaned = clean_data_for_pca(X)
     
@@ -224,7 +224,7 @@ def load_client_smartgrid_data(client_id):
     )
     print(f"[Client {client_id}] Suddivisione: {len(X_train_raw)} training, {len(X_val_raw)} validation")
 
-    # STEP 2: Clipping outlier per quantili (solo se abilitato)
+    # STEP 2: Clipping outlier per quantili
     if ENABLE_CLIPPING_OUTLIERS:
         lower, upper = fit_clip_outliers_iqr(X_train_raw, k=5.0)
         X_train_clipped = transform_clip_outliers_iqr(X_train_raw, lower, upper)
@@ -233,13 +233,13 @@ def load_client_smartgrid_data(client_id):
         X_train_clipped = X_train_raw
         X_val_clipped = X_val_raw
 
-    # STEP 3: Imputazione mediana (SEMPRE ABILITATA per Random Forest)
+    # STEP 3: Imputazione mediana
     print(f"[Client {client_id}] Applicazione imputazione mediana...")
     imputer = SimpleImputer(strategy='median')
     X_train_imputed = imputer.fit_transform(X_train_clipped)
     X_val_imputed = imputer.transform(X_val_clipped)
 
-    # STEP 4: Rimozione feature quasi-costanti (solo se abilitata)
+    # STEP 4: Rimozione feature quasi-costanti
     if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES:
         X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed, threshold_var=1e-12, threshold_ratio=0.999)
         X_val_reduced = X_val_imputed[:, keep_mask]
@@ -249,7 +249,7 @@ def load_client_smartgrid_data(client_id):
         X_val_reduced = X_val_imputed
         print(f"[Client {client_id}] Rimozione feature quasi-costanti DISABILITATA - mantenute {X_train_reduced.shape[1]} feature")
 
-    # STEP 5: Scaling standard (solo se abilitato)
+    # STEP 5: Scaling standard
     if ENABLE_SCALING:
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train_reduced)
@@ -260,7 +260,7 @@ def load_client_smartgrid_data(client_id):
         X_val_scaled = X_val_reduced
         print(f"[Client {client_id}] Scaling DISABILITATO")
 
-    # STEP 6: PCA (solo se abilitata)
+    # STEP 6: PCA
     if ENABLE_PCA:
         X_train_final = apply_pca(X_train_scaled, client_id=client_id)
         X_val_final = apply_pca(X_val_scaled, client_id=client_id)
@@ -315,11 +315,11 @@ def create_random_forest_model():
     # Imposta semi per riproducibilità del modello
     set_reproducibility_seeds()
 
-    print(f"[Client] === CREAZIONE RANDOM FOREST ===")
-    print(f"[Client] Modello: Random Forest con {RF_N_ESTIMATORS} alberi")
-    print(f"[Client] Criterio: {RF_CRITERION} (dal paper: migliore per molti dataset)")
-    print(f"[Client] Max features: {RF_MAX_FEATURES} (feature selection automatica)")
-    print(f"[Client] Class weight: {RF_CLASS_WEIGHT} (gestione sbilanciamento)")
+    print(f"[Client {client_id}] === CREAZIONE RANDOM FOREST ===")
+    print(f"[Client {client_id}] Modello: Random Forest con {RF_N_ESTIMATORS} alberi")
+    print(f"[Client {client_id}] Criterio: {RF_CRITERION} (dal paper: migliore per molti dataset)")
+    print(f"[Client {client_id}] Max features: {RF_MAX_FEATURES} (feature selection automatica)")
+    print(f"[Client {client_id}] Class weight: {RF_CLASS_WEIGHT} (gestione sbilanciamento)")
     
     # PARAMETRI OTTIMIZZATI BASATI SUL PAPER
     # Il paper mostra che entropy come criterio e sqrt per max_features 
@@ -338,7 +338,7 @@ def create_random_forest_model():
         oob_score=True                          # Calcola out-of-bag score per validazione
     )
     
-    print(f"[Client] Parametri Random Forest:")
+    print(f"[Client {client_id}] Parametri Random Forest:")
     print(f"  - N. estimatori: {RF_N_ESTIMATORS}")
     print(f"  - Criterio: {RF_CRITERION}")
     print(f"  - Max depth: {RF_MAX_DEPTH}")
@@ -354,7 +354,7 @@ def create_random_forest_model():
 
 def extract_trees_from_forest(model, X_val, y_val):
     """
-    Estrae gli alberi dal Random Forest e calcola le loro performance individuali.
+    Estrae gli alberi dal Random Forest e calcola le loro performance individuali REALI.
     Implementa la metodologia del paper per la selezione degli alberi migliori.
     
     Args:
@@ -363,107 +363,117 @@ def extract_trees_from_forest(model, X_val, y_val):
         y_val: Etichette di validazione
         
     Returns:
-        Lista di tuple (tree, accuracy, weighted_accuracy) per ogni albero
+        Lista di tuple (tree, accuracy_reale, weighted_accuracy_reale) per ogni albero
     """
-    print(f"[Client] === ESTRAZIONE ALBERI DA RANDOM FOREST ===")
+    print(f"[Client {client_id}] === ESTRAZIONE ALBERI CON ACCURACY REALI ===")
 
-    print(f"[Client] 🔍 DEBUG extract_trees_from_forest: INIZIO")
-    print(f"[Client] 🔍 DEBUG: model type = {type(model)}")
-    print(f"[Client] 🔍 DEBUG: X_val shape = {X_val.shape}")
-    print(f"[Client] 🔍 DEBUG: y_val shape = {y_val.shape}")
+    print(f"[Client {client_id}] 🔍 DEBUG extract_trees_from_forest: INIZIO")
+    print(f"[Client {client_id}] 🔍 DEBUG: model type = {type(model)}")
+    print(f"[Client {client_id}] 🔍 DEBUG: X_val shape = {X_val.shape}")
+    print(f"[Client {client_id}] 🔍 DEBUG: y_val shape = {y_val.shape}")
 
     # ✅ CONTROLLO: Verifica se il modello è addestrato
     if not hasattr(model, 'estimators_') or len(model.estimators_) == 0:
-        print(f"[Client] ⚠️ Modello non ancora addestrato, nessun albero disponibile")
+        print(f"[Client {client_id}] ⚠️ Modello non ancora addestrato, nessun albero disponibile")
         return []  # Restituisce lista vuota
     
-    print(f"[Client] 🔍 DEBUG: Modello ha {len(model.estimators_)} alberi")
-    print(f"[Client] === ESTRAZIONE ALBERI DA RANDOM FOREST ===")
+    print(f"[Client {client_id}] 🔍 DEBUG: Modello ha {len(model.estimators_)} alberi")
+    print(f"[Client {client_id}] === CALCOLO ACCURACY REALI PER {len(model.estimators_)} ALBERI ===")
     
     trees_performance = []
     
     for i, tree in enumerate(model.estimators_):
-        print(f"[Client] 🔍 DEBUG: Elaboro albero {i+1}/{len(model.estimators_)}")
+        print(f"[Client {client_id}] 🔍 DEBUG: Calcolo accuracy reale per albero {i+1}/{len(model.estimators_)}")
 
         # Predizioni dell'albero singolo
         tree_predictions = tree.predict(X_val)
         
-        # Calcola accuracy standard
-        accuracy = accuracy_score(y_val, tree_predictions)
+        # Calcola accuracy standard REALE
+        accuracy_real = accuracy_score(y_val, tree_predictions)
         
-        # Calcola weighted accuracy (come nel paper)
+        # Calcola weighted accuracy REALE (come nel paper)
         # Weighted accuracy considera la distribuzione delle classi
         class_counts = np.bincount(y_val)
         weights = 1.0 / class_counts  # Peso inversamente proporzionale alla frequenza
         class_weights_norm = weights / weights.sum()  # Normalizza i pesi
         
-        # Calcola accuracy pesata per classe
-        weighted_acc = 0.0
+        # Calcola accuracy pesata per classe REALE
+        weighted_acc_real = 0.0
         for class_label in np.unique(y_val):
             class_mask = (y_val == class_label)
             if np.sum(class_mask) > 0:
                 class_accuracy = accuracy_score(y_val[class_mask], tree_predictions[class_mask])
-                weighted_acc += class_accuracy * class_weights_norm[class_label]
+                weighted_acc_real += class_accuracy * class_weights_norm[class_label]
         
-        trees_performance.append((tree, accuracy, weighted_acc))
+        trees_performance.append((tree, accuracy_real, weighted_acc_real))
         
         if i < 5:  # Stampa info per i primi 5 alberi
-            print(f"[Client] Albero {i+1}: Accuracy={accuracy:.4f}, Weighted Accuracy={weighted_acc:.4f}")
+            print(f"[Client {client_id}] Albero {i+1}: Accuracy REALE={accuracy_real:.4f}, Weighted Accuracy REALE={weighted_acc_real:.4f}")
     
-    print(f"[Client] 🔍 DEBUG extract_trees_from_forest: COMPLETATO con {len(trees_performance)} alberi")
+    print(f"[Client {client_id}] 🔍 DEBUG extract_trees_from_forest: COMPLETATO con {len(trees_performance)} alberi CON ACCURACY REALI")
 
-    # Ordina gli alberi per performance (weighted accuracy come nel paper)
-    trees_performance.sort(key=lambda x: x[2], reverse=True)  # Ordina per weighted accuracy
+    # Ordina gli alberi per performance REALE (weighted accuracy come nel paper)
+    trees_performance.sort(key=lambda x: x[2], reverse=True)  # Ordina per weighted accuracy REALE
     
-    print(f"[Client] Migliore albero: Accuracy={trees_performance[0][1]:.4f}, Weighted Accuracy={trees_performance[0][2]:.4f}")
-    print(f"[Client] Peggiore albero: Accuracy={trees_performance[-1][1]:.4f}, Weighted Accuracy={trees_performance[-1][2]:.4f}")
+    print(f"[Client {client_id}] Migliore albero (REALE): Accuracy={trees_performance[0][1]:.4f}, Weighted Accuracy={trees_performance[0][2]:.4f}")
+    print(f"[Client {client_id}] Peggiore albero (REALE): Accuracy={trees_performance[-1][1]:.4f}, Weighted Accuracy={trees_performance[-1][2]:.4f}")
     
     return trees_performance
 
 def serialize_trees_for_aggregation(trees_performance, max_trees=None):
     """
-    Serializza gli alberi per l'invio al server in formato compatibile con Flower.
-    Usa pickle + conversione in np.ndarray(uint8).
+    Serializza gli alberi CON le loro accuracy reali per l'invio al server.
+    ✅ CORREZIONE: Invia dizionario completo con accuracy reali.
     """
-    print(f"[Client] === SERIALIZZAZIONE ALBERI ===")
+    print(f"[Client {client_id}] === SERIALIZZAZIONE ALBERI CON ACCURACY REALI ===")
     
     if max_trees is not None:
         selected_trees = trees_performance[:max_trees]
-        print(f"[Client] Selezionati {len(selected_trees)} migliori alberi su {len(trees_performance)}")
+        print(f"[Client {client_id}] Selezionati {len(selected_trees)} migliori alberi su {len(trees_performance)}")
     else:
         selected_trees = trees_performance
-        print(f"[Client] Invio tutti i {len(selected_trees)} alberi")
+        print(f"[Client {client_id}] Invio tutti i {len(selected_trees)} alberi")
     
-    serialized_trees = []
+    serialized_data = []
     
-    for i, (tree, accuracy, weighted_accuracy) in enumerate(selected_trees):
+    for i, (tree, accuracy_real, weighted_accuracy_real) in enumerate(selected_trees):
         try:
-            # Serializza in pickle binario
-            tree_bytes = pickle.dumps(tree, protocol=pickle.HIGHEST_PROTOCOL)
+            # ✅ CORREZIONE: Crea dizionario con albero + accuracy REALI
+            tree_data = {
+                'tree': tree,
+                'accuracy': accuracy_real,
+                'weighted_accuracy': weighted_accuracy_real,
+                'tree_index': i,
+                'accuracy_type': 'REAL'  # Flag per indicare che sono accuracy reali
+            }
+            
+            # Serializza l'intero dizionario con pickle
+            tree_bytes = pickle.dumps(tree_data, protocol=pickle.HIGHEST_PROTOCOL)
 
             # Converti in array uint8 (formato sicuro per Flower)
             tree_array = np.frombuffer(tree_bytes, dtype=np.uint8)
-            serialized_trees.append(tree_array)
+            serialized_data.append(tree_array)
 
-            print(f"[Client] ✅ Albero {i+1} serializzato ({len(tree_bytes)} bytes)")
+            print(f"[Client {client_id}] ✅ Albero {i+1} serializzato con accuracy REALI ({len(tree_bytes)} bytes)")
+            print(f"[Client {client_id}]    Accuracy REALE: {accuracy_real:.4f}, Weighted REALE: {weighted_accuracy_real:.4f}")
 
         except Exception as e:
-            print(f"[Client] ❌ Errore serializzazione albero {i+1}: {e}")
+            print(f"[Client {client_id}] ❌ Errore serializzazione albero {i+1}: {e}")
             import traceback; traceback.print_exc()
             continue
     
-    print(f"[Client] Serializzati {len(serialized_trees)} alberi validi")
+    print(f"[Client {client_id}] Serializzati {len(serialized_data)} alberi con ACCURACY REALI")
 
     # ===== DEBUG FLOWER FORMAT =====
-    if serialized_trees:
-        first = serialized_trees[0]
-        print(f"[Client] DEBUG Primo albero serializzato:")
+    if serialized_data:
+        first = serialized_data[0]
+        print(f"[Client {client_id}] DEBUG Primo albero serializzato CON ACCURACY REALI:")
         print(f"  Tipo: {type(first)}, dtype: {first.dtype}, shape: {first.shape}")
         print(f"  Prime 10 byte: {first[:10].tolist()}")
     else:
-        print("[Client] ⚠️ Nessun albero serializzato!")
+        print(f"[Client {client_id}] ⚠️ Nessun albero serializzato!")
 
-    return serialized_trees
+    return serialized_data
 
 class SmartGridRandomForestClient(fl.client.NumPyClient):
     """
@@ -661,11 +671,11 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
     
         # Restituisce gli alberi del modello addestrato
         try:
-            # Combina gli alberi con le metriche locali
-            trees_perf = [(tree, train_accuracy, train_balanced_acc) for tree in model.estimators_]
-            serialized_trees = serialize_trees_for_aggregation(trees_perf)
+            # Calcola accuracy reali per ogni albero usando validation set
+            trees_perf_real = extract_trees_from_forest(model, X_val, y_val)
+            serialized_trees = serialize_trees_for_aggregation(trees_perf_real)
             
-            print(f"[Client {client_id}] Invio {len(serialized_trees)} alberi serializzati al server...")
+            print(f"[Client {client_id}] Invio {len(serialized_trees)} alberi CON ACCURACY REALI al server...")
             return serialized_trees, len(X_train), metrics
 
         except Exception as e:
