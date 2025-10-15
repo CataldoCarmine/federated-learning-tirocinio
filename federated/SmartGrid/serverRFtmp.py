@@ -205,14 +205,7 @@ def save_federated_metrics_report(metrics_list):
 def create_smartgrid_features(X_global, client_id='SERVER'):
     """
     Crea feature ingegnerizzate specifiche per il dataset SmartGrid su server.
-    Basato sui patterns identificati nel paper MSU/ORNL per cyber-physical attacks.
-    
-    Args:
-        X_global: DataFrame con feature SmartGrid
-        client_id: ID del client per debug (default 'SERVER')
-        
-    Returns:
-        DataFrame con feature aggiuntive per detection attacchi
+    AGGIORNATO: Include interaction features per compatibilità con client.
     """
     if not ENABLE_FEATURE_ENGINEERING:
         return X_global
@@ -312,6 +305,27 @@ def create_smartgrid_features(X_global, client_id='SERVER'):
         print(f"[{client_id}]   Shape dopo anomaly: {df_enhanced.shape}")
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore anomaly features: {e}")
+    
+    # 4. INTERACTION FEATURES (AGGIUNTO: mancava nel server!)
+    try:
+        n_interactions = 0
+        # Prodotti tra feature correlate (simula interazioni fisiche)
+        for i in range(0, min(10, len(numeric_cols))):
+            for j in range(i+1, min(i+3, len(numeric_cols))):
+                col_i, col_j = numeric_cols[i], numeric_cols[j]
+                df_enhanced[f'interact_{i}_{j}'] = df_enhanced[col_i] * df_enhanced[col_j]
+                n_interactions += 1
+                
+                if n_interactions >= 20:  # Limita interazioni
+                    break
+            if n_interactions >= 20:
+                break
+        
+        features_added += n_interactions
+        print(f"[{client_id}] ✅ Aggiunte {n_interactions} interaction features")
+        print(f"[{client_id}]   Shape dopo interactions: {df_enhanced.shape}")
+    except Exception as e:
+        print(f"[{client_id}] ⚠️ Errore interaction features: {e}")
     
     new_features = len(df_enhanced.columns) - original_features
     if 'marker' in df_enhanced.columns:
