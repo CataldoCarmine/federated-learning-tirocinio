@@ -202,13 +202,14 @@ def save_federated_metrics_report(metrics_list):
             f.write(line + "\n")
     print(f"\n[SERVER] ✅ Report Random Forest OTTIMIZZATO salvato in: {report_path}")
 
-def create_smartgrid_features(X_global):
+def create_smartgrid_features(X_global, client_id='SERVER'):
     """
     Crea feature ingegnerizzate specifiche per il dataset SmartGrid su server.
     Basato sui patterns identificati nel paper MSU/ORNL per cyber-physical attacks.
     
     Args:
         X_global: DataFrame con feature SmartGrid
+        client_id: ID del client per debug (default 'SERVER')
         
     Returns:
         DataFrame con feature aggiuntive per detection attacchi
@@ -216,27 +217,46 @@ def create_smartgrid_features(X_global):
     if not ENABLE_FEATURE_ENGINEERING:
         return X_global
         
-    print(f"[Server] === FEATURE ENGINEERING SMARTGRID SERVER ===")
+    print(f"[{client_id}] === FEATURE ENGINEERING SMARTGRID ===")
     
     # Copia il dataframe
     df_enhanced = X_global.copy()
-    original_features = len(df_enhanced.columns)
+    
+    # Gestisci sia il caso con che senza colonna marker
+    if 'marker' in df_enhanced.columns:
+        original_features = len(df_enhanced.columns) - 1  # -1 per 'marker'
+        feature_cols = [col for col in df_enhanced.columns if col != 'marker']
+    else:
+        original_features = len(df_enhanced.columns)
+        feature_cols = list(df_enhanced.columns)
+    
+    print(f"[{client_id}] 🔍 DEBUG FEATURE ENGINEERING:")
+    print(f"[{client_id}]   DataFrame shape iniziale: {df_enhanced.shape}")
+    print(f"[{client_id}]   Feature originali: {original_features}")
+    print(f"[{client_id}]   Colonne totali: {list(df_enhanced.columns)[:10]}... ({len(df_enhanced.columns)} totali)")
     
     # Seleziona solo colonne numeriche
-    numeric_cols = df_enhanced.select_dtypes(include=[np.number]).columns.tolist()
+    numeric_cols = df_enhanced[feature_cols].select_dtypes(include=[np.number]).columns.tolist()
     
     if len(numeric_cols) == 0:
-        print(f"[Server] ⚠️ Nessuna colonna numerica trovata per feature engineering")
+        print(f"[{client_id}] ⚠️ Nessuna colonna numerica trovata per feature engineering")
         return df_enhanced
+    
+    print(f"[{client_id}]   Colonne numeriche trovate: {len(numeric_cols)}")
+    print(f"[{client_id}]   Prime 10 colonne numeriche: {numeric_cols[:10]}")
     
     # Converti in numpy per efficienza
     X = df_enhanced[numeric_cols].values
     
-    print(f"[Server] Processing {len(numeric_cols)} numeric features...")
+    print(f"[{client_id}] Processing {len(numeric_cols)} numeric features...")
+    
+    # Contatori per tracciare feature aggiunte
+    features_added = 0
     
     # 1. STATISTICAL FEATURES (papers SmartGrid indicano l'importanza di statistiche aggregate)
     try:
         window_size = min(10, len(numeric_cols))
+        stat_features_added = 0
         for i in range(0, len(numeric_cols), window_size):
             end_idx = min(i + window_size, len(numeric_cols))
             window_data = X[:, i:end_idx]
@@ -246,10 +266,13 @@ def create_smartgrid_features(X_global):
             df_enhanced[f'window_{i}_std'] = np.std(window_data, axis=1)
             df_enhanced[f'window_{i}_range'] = np.ptp(window_data, axis=1)  # max - min
             df_enhanced[f'window_{i}_skew'] = stats.skew(window_data, axis=1)
+            stat_features_added += 4
         
-        print(f"[Server] ✅ Aggiunte {4 * ((len(numeric_cols) - 1) // window_size + 1)} statistical features")
+        features_added += stat_features_added
+        print(f"[{client_id}] ✅ Aggiunte {stat_features_added} statistical features")
+        print(f"[{client_id}]   Shape dopo statistical: {df_enhanced.shape}")
     except Exception as e:
-        print(f"[Server] ⚠️ Errore statistical features: {e}")
+        print(f"[{client_id}] ⚠️ Errore statistical features: {e}")
     
     # 2. RATIO FEATURES (critiche per power systems)
     try:
@@ -268,9 +291,11 @@ def create_smartgrid_features(X_global):
             if n_ratios >= 50:
                 break
         
-        print(f"[Server] ✅ Aggiunti {n_ratios} ratio features")
+        features_added += n_ratios
+        print(f"[{client_id}] ✅ Aggiunti {n_ratios} ratio features")
+        print(f"[{client_id}]   Shape dopo ratios: {df_enhanced.shape}")
     except Exception as e:
-        print(f"[Server] ⚠️ Errore ratio features: {e}")
+        print(f"[{client_id}] ⚠️ Errore ratio features: {e}")
     
     # 3. ANOMALY INDICATORS 
     try:
@@ -282,12 +307,21 @@ def create_smartgrid_features(X_global):
                 df_enhanced[f'zscore_{col}'] = np.abs((df_enhanced[col] - col_mean) / col_std)
                 n_zscore += 1
         
-        print(f"[Server] ✅ Aggiunti {n_zscore} anomaly indicators")
+        features_added += n_zscore
+        print(f"[{client_id}] ✅ Aggiunti {n_zscore} anomaly indicators")
+        print(f"[{client_id}]   Shape dopo anomaly: {df_enhanced.shape}")
     except Exception as e:
-        print(f"[Server] ⚠️ Errore anomaly features: {e}")
+        print(f"[{client_id}] ⚠️ Errore anomaly features: {e}")
     
     new_features = len(df_enhanced.columns) - original_features
-    print(f"[Server] 🎯 Feature engineering completato: {original_features} → {original_features + new_features} (+{new_features})")
+    if 'marker' in df_enhanced.columns:
+        new_features -= 1  # Non contare la colonna marker
+        
+    print(f"[{client_id}] 🎯 Feature engineering completato:")
+    print(f"[{client_id}]   Features originali: {original_features}")
+    print(f"[{client_id}]   Features aggiunte: {new_features}")
+    print(f"[{client_id}]   Features totali: {original_features + new_features}")
+    print(f"[{client_id}]   Shape finale: {df_enhanced.shape}")
     
     return df_enhanced
 
@@ -367,7 +401,7 @@ def apply_pca(X_preprocessed):
 def apply_preprocessing_pipeline(X_global):
     """
     Applica la stessa pipeline di preprocessing dei client sui dati globali del server.
-    AGGIORNATO: Include feature engineering e ottimizzazioni.
+    CORREZIONE: Applica feature engineering nella stessa sequenza dei client.
     """
     set_reproducibility_seeds()
 
@@ -380,18 +414,26 @@ def apply_preprocessing_pipeline(X_global):
     print(f"Scaling standard: {'ABILITATA' if ENABLE_SCALING else 'DISABILITATA'}")
     print(f"PCA: {'ABILITATA' if ENABLE_PCA else 'DISABILITATA'}")
 
-    # NUOVO STEP 0: Feature Engineering per SmartGrid
+    # ===== SEQUENZA IDENTICA AI CLIENT =====
+    
+    # Converti in DataFrame se necessario per feature engineering
+    if isinstance(X_global, np.ndarray):
+        X_global = pd.DataFrame(X_global)
+        
+    # STEP 0: Feature Engineering per SmartGrid (PRIMA del preprocessing)
     if ENABLE_FEATURE_ENGINEERING:
-        # Converti in DataFrame se necessario
-        if isinstance(X_global, np.ndarray):
-            X_global = pd.DataFrame(X_global)
-        X_global = create_smartgrid_features(X_global)
+        # Aggiungi colonna marker temporanea per compatibilità con create_smartgrid_features
+        X_global['marker'] = 'Natural'  # Valore dummy
+        X_global_enhanced = create_smartgrid_features(X_global, 'SERVER')
+        X_global_enhanced = X_global_enhanced.drop(columns=['marker'])  # Rimuovi marker dummy
+    else:
+        X_global_enhanced = X_global
     
     # STEP 1: Pulizia inf/NaN
     if ENABLE_CLEAN_INF_NAN:
-        X_cleaned = clean_data_for_pca(X_global)
+        X_cleaned = clean_data_for_pca(X_global_enhanced)
     else:
-        X_cleaned = X_global if hasattr(X_global, 'values') else X_global
+        X_cleaned = X_global_enhanced.values if hasattr(X_global_enhanced, 'values') else X_global_enhanced
         
     # STEP 2: Clipping outlier feature-wise
     if ENABLE_CLIPPING_OUTLIERS:
@@ -1528,9 +1570,9 @@ def main():
     strategy = SmartGridRandomForestFedAvgEnhanced(
         fraction_fit=1.0,
         fraction_evaluate=1.0,
-        min_fit_clients=2,
-        min_evaluate_clients=2,
-        min_available_clients=2,
+        min_fit_clients=13,  #prima 2
+        min_evaluate_clients=13,  #prima 2
+        min_available_clients=13,  #prima 2
         evaluate_fn=get_smartgrid_random_forest_evaluate_fn()
     )
     

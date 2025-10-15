@@ -76,6 +76,7 @@ def create_smartgrid_features(df, client_id):
     """
     Crea feature ingegnerizzate specifiche per il dataset SmartGrid.
     Basato sui patterns identificati nel paper MSU/ORNL per cyber-physical attacks.
+    AGGIORNATO: Versione migliorata con logging dettagliato per debug.
     
     Args:
         df: DataFrame originale con feature SmartGrid
@@ -84,29 +85,49 @@ def create_smartgrid_features(df, client_id):
     Returns:
         DataFrame con feature aggiuntive per detection attacchi
     """
-    print(f"[Client {client_id}] === FEATURE ENGINEERING SMARTGRID ===")
+    if not ENABLE_FEATURE_ENGINEERING:
+        return df
+        
+    print(f"[{client_id}] === FEATURE ENGINEERING SMARTGRID CLIENT ===")
     
     # Copia il dataframe
     df_enhanced = df.copy()
-    original_features = len(df_enhanced.columns) - 1  # -1 per 'marker'
     
-    # Seleziona solo colonne numeriche (escluso 'marker')
-    feature_cols = [col for col in df.columns if col != 'marker']
-    numeric_cols = df[feature_cols].select_dtypes(include=[np.number]).columns.tolist()
+    # Gestisci sia il caso con che senza colonna marker
+    if 'marker' in df_enhanced.columns:
+        original_features = len(df_enhanced.columns) - 1  # -1 per 'marker'
+        feature_cols = [col for col in df_enhanced.columns if col != 'marker']
+    else:
+        original_features = len(df_enhanced.columns)
+        feature_cols = list(df_enhanced.columns)
+    
+    print(f"[{client_id}] 🔍 DEBUG FEATURE ENGINEERING:")
+    print(f"[{client_id}]   DataFrame shape iniziale: {df_enhanced.shape}")
+    print(f"[{client_id}]   Feature originali: {original_features}")
+    print(f"[{client_id}]   Colonne totali: {list(df_enhanced.columns)[:10]}... ({len(df_enhanced.columns)} totali)")
+    
+    # Seleziona solo colonne numeriche
+    numeric_cols = df_enhanced[feature_cols].select_dtypes(include=[np.number]).columns.tolist()
     
     if len(numeric_cols) == 0:
-        print(f"[Client {client_id}] ⚠️ Nessuna colonna numerica trovata per feature engineering")
+        print(f"[{client_id}] ⚠️ Nessuna colonna numerica trovata per feature engineering")
         return df_enhanced
     
-    # Converti in numpy per efficienza
-    X = df[numeric_cols].values
+    print(f"[{client_id}]   Colonne numeriche trovate: {len(numeric_cols)}")
+    print(f"[{client_id}]   Prime 10 colonne numeriche: {numeric_cols[:10]}")
     
-    print(f"[Client {client_id}] Processing {len(numeric_cols)} numeric features...")
+    # Converti in numpy per efficienza
+    X = df_enhanced[numeric_cols].values
+    
+    print(f"[{client_id}] Processing {len(numeric_cols)} numeric features...")
+    
+    # Contatori per tracciare feature aggiunte
+    features_added = 0
     
     # 1. STATISTICAL FEATURES (papers SmartGrid indicano l'importanza di statistiche aggregate)
-    # Media mobile locale (simula temporal window)
     try:
         window_size = min(10, len(numeric_cols))
+        stat_features_added = 0
         for i in range(0, len(numeric_cols), window_size):
             end_idx = min(i + window_size, len(numeric_cols))
             window_data = X[:, i:end_idx]
@@ -116,47 +137,52 @@ def create_smartgrid_features(df, client_id):
             df_enhanced[f'window_{i}_std'] = np.std(window_data, axis=1)
             df_enhanced[f'window_{i}_range'] = np.ptp(window_data, axis=1)  # max - min
             df_enhanced[f'window_{i}_skew'] = stats.skew(window_data, axis=1)
+            stat_features_added += 4
         
-        print(f"[Client {client_id}] ✅ Aggiunte {4 * ((len(numeric_cols) - 1) // window_size + 1)} statistical features")
+        features_added += stat_features_added
+        print(f"[{client_id}] ✅ Aggiunte {stat_features_added} statistical features")
+        print(f"[{client_id}]   Shape dopo statistical: {df_enhanced.shape}")
     except Exception as e:
-        print(f"[Client {client_id}] ⚠️ Errore statistical features: {e}")
+        print(f"[{client_id}] ⚠️ Errore statistical features: {e}")
     
-    # 2. RATIO FEATURES (critiche per power systems - rapporti tra grandezze elettriche)
+    # 2. RATIO FEATURES (critiche per power systems)
     try:
         n_ratios = 0
-        # Crea ratios tra feature con correlazione potenzialmente fisica
-        for i in range(0, min(20, len(numeric_cols))):  # Primi 20 per controllo complessità
-            for j in range(i+1, min(i+5, len(numeric_cols))):  # Massimo 5 ratio per feature
+        for i in range(0, min(20, len(numeric_cols))):
+            for j in range(i+1, min(i+5, len(numeric_cols))):
                 col_i, col_j = numeric_cols[i], numeric_cols[j]
-                denominator = df[col_j].replace(0, np.nan)  # Evita divisione per 0
+                denominator = df_enhanced[col_j].replace(0, np.nan)
                 
                 if not denominator.isna().all():
-                    df_enhanced[f'ratio_{i}_{j}'] = df[col_i] / denominator
+                    df_enhanced[f'ratio_{i}_{j}'] = df_enhanced[col_i] / denominator
                     n_ratios += 1
                 
-                if n_ratios >= 50:  # Limita il numero di ratios
+                if n_ratios >= 50:
                     break
             if n_ratios >= 50:
                 break
         
-        print(f"[Client {client_id}] ✅ Aggiunti {n_ratios} ratio features")
+        features_added += n_ratios
+        print(f"[{client_id}] ✅ Aggiunti {n_ratios} ratio features")
+        print(f"[{client_id}]   Shape dopo ratios: {df_enhanced.shape}")
     except Exception as e:
-        print(f"[Client {client_id}] ⚠️ Errore ratio features: {e}")
+        print(f"[{client_id}] ⚠️ Errore ratio features: {e}")
     
-    # 3. ANOMALY INDICATORS (deviation-based features)
+    # 3. ANOMALY INDICATORS 
     try:
-        # Z-scores per rilevare anomalie
         n_zscore = 0
-        for col in numeric_cols[:15]:  # Prime 15 feature più importanti
-            col_mean = df[col].mean()
-            col_std = df[col].std()
+        for col in numeric_cols[:15]:
+            col_mean = df_enhanced[col].mean()
+            col_std = df_enhanced[col].std()
             if col_std > 0:
-                df_enhanced[f'zscore_{col}'] = np.abs((df[col] - col_mean) / col_std)
+                df_enhanced[f'zscore_{col}'] = np.abs((df_enhanced[col] - col_mean) / col_std)
                 n_zscore += 1
         
-        print(f"[Client {client_id}] ✅ Aggiunti {n_zscore} anomaly indicators")
+        features_added += n_zscore
+        print(f"[{client_id}] ✅ Aggiunti {n_zscore} anomaly indicators")
+        print(f"[{client_id}]   Shape dopo anomaly: {df_enhanced.shape}")
     except Exception as e:
-        print(f"[Client {client_id}] ⚠️ Errore anomaly features: {e}")
+        print(f"[{client_id}] ⚠️ Errore anomaly features: {e}")
     
     # 4. INTERACTION FEATURES (importanti per cyber-attacks che influenzano multiple variabili)
     try:
@@ -165,7 +191,7 @@ def create_smartgrid_features(df, client_id):
         for i in range(0, min(10, len(numeric_cols))):
             for j in range(i+1, min(i+3, len(numeric_cols))):
                 col_i, col_j = numeric_cols[i], numeric_cols[j]
-                df_enhanced[f'interact_{i}_{j}'] = df[col_i] * df[col_j]
+                df_enhanced[f'interact_{i}_{j}'] = df_enhanced[col_i] * df_enhanced[col_j]
                 n_interactions += 1
                 
                 if n_interactions >= 20:  # Limita interazioni
@@ -173,12 +199,21 @@ def create_smartgrid_features(df, client_id):
             if n_interactions >= 20:
                 break
         
-        print(f"[Client {client_id}] ✅ Aggiunte {n_interactions} interaction features")
+        features_added += n_interactions
+        print(f"[{client_id}] ✅ Aggiunte {n_interactions} interaction features")
+        print(f"[{client_id}]   Shape dopo interactions: {df_enhanced.shape}")
     except Exception as e:
-        print(f"[Client {client_id}] ⚠️ Errore interaction features: {e}")
+        print(f"[{client_id}] ⚠️ Errore interaction features: {e}")
     
-    new_features = len(df_enhanced.columns) - 1 - original_features
-    print(f"[Client {client_id}] 🎯 Feature engineering completato: {original_features} → {original_features + new_features} (+{new_features})")
+    new_features = len(df_enhanced.columns) - original_features
+    if 'marker' in df_enhanced.columns:
+        new_features -= 1  # Non contare la colonna marker
+        
+    print(f"[{client_id}] 🎯 Feature engineering completato:")
+    print(f"[{client_id}]   Features originali: {original_features}")
+    print(f"[{client_id}]   Features aggiunte: {new_features}")
+    print(f"[{client_id}]   Features totali: {original_features + new_features}")
+    print(f"[{client_id}]   Shape finale: {df_enhanced.shape}")
     
     return df_enhanced
 
