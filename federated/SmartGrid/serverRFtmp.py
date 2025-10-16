@@ -205,12 +205,15 @@ def save_federated_metrics_report(metrics_list):
 def create_smartgrid_features(X_global, client_id='SERVER'):
     """
     Crea feature ingegnerizzate specifiche per il dataset SmartGrid su server.
-    AGGIORNATO: Include interaction features per compatibilità con client.
+    VERSIONE DETERMINISTICA: Garantisce sempre lo stesso numero di feature del client.
     """
     if not ENABLE_FEATURE_ENGINEERING:
         return X_global
+    
+    # ✅ SEED FISSO per operazioni deterministiche (STESSO DEL CLIENT)
+    np.random.seed(RANDOM_SEED)
         
-    print(f"[{client_id}] === FEATURE ENGINEERING SMARTGRID ===")
+    print(f"[{client_id}] === FEATURE ENGINEERING SMARTGRID SERVER DETERMINISTICO ===")
     
     # Copia il dataframe
     df_enhanced = X_global.copy()
@@ -223,107 +226,107 @@ def create_smartgrid_features(X_global, client_id='SERVER'):
         original_features = len(df_enhanced.columns)
         feature_cols = list(df_enhanced.columns)
     
-    print(f"[{client_id}] 🔍 DEBUG FEATURE ENGINEERING:")
+    print(f"[{client_id}] 🔍 DEBUG FEATURE ENGINEERING DETERMINISTICO:")
     print(f"[{client_id}]   DataFrame shape iniziale: {df_enhanced.shape}")
     print(f"[{client_id}]   Feature originali: {original_features}")
-    print(f"[{client_id}]   Colonne totali: {list(df_enhanced.columns)[:10]}... ({len(df_enhanced.columns)} totali)")
     
-    # Seleziona solo colonne numeriche
+    # ✅ Seleziona solo colonne numeriche e ORDINA per determinismo (STESSO DEL CLIENT)
     numeric_cols = df_enhanced[feature_cols].select_dtypes(include=[np.number]).columns.tolist()
+    numeric_cols = sorted(numeric_cols)  # ORDINAMENTO per determinismo
     
     if len(numeric_cols) == 0:
         print(f"[{client_id}] ⚠️ Nessuna colonna numerica trovata per feature engineering")
         return df_enhanced
     
-    print(f"[{client_id}]   Colonne numeriche trovate: {len(numeric_cols)}")
-    print(f"[{client_id}]   Prime 10 colonne numeriche: {numeric_cols[:10]}")
+    print(f"[{client_id}]   Colonne numeriche ordinate: {len(numeric_cols)}")
     
     # Converti in numpy per efficienza
     X = df_enhanced[numeric_cols].values
     
-    print(f"[{client_id}] Processing {len(numeric_cols)} numeric features...")
+    # ✅ PARAMETRI FISSI IDENTICI AL CLIENT
+    FIXED_WINDOW_SIZE = 10
+    FIXED_MAX_RATIOS = 50
+    FIXED_MAX_ANOMALY = 15
+    FIXED_MAX_INTERACTIONS = 20
     
-    # Contatori per tracciare feature aggiunte
     features_added = 0
     
-    # 1. STATISTICAL FEATURES (papers SmartGrid indicano l'importanza di statistiche aggregate)
+    # 1. STATISTICAL FEATURES con parametri fissi IDENTICI
     try:
-        window_size = min(10, len(numeric_cols))
+        window_size = min(FIXED_WINDOW_SIZE, len(numeric_cols))
         stat_features_added = 0
+        
         for i in range(0, len(numeric_cols), window_size):
             end_idx = min(i + window_size, len(numeric_cols))
             window_data = X[:, i:end_idx]
             
-            # Statistiche finestra
+            # Statistiche finestra con nomi DETERMINISTICI IDENTICI
             df_enhanced[f'window_{i}_mean'] = np.mean(window_data, axis=1)
             df_enhanced[f'window_{i}_std'] = np.std(window_data, axis=1)
-            df_enhanced[f'window_{i}_range'] = np.ptp(window_data, axis=1)  # max - min
+            df_enhanced[f'window_{i}_range'] = np.ptp(window_data, axis=1)
             df_enhanced[f'window_{i}_skew'] = stats.skew(window_data, axis=1)
             stat_features_added += 4
         
         features_added += stat_features_added
-        print(f"[{client_id}] ✅ Aggiunte {stat_features_added} statistical features")
-        print(f"[{client_id}]   Shape dopo statistical: {df_enhanced.shape}")
+        print(f"[{client_id}] ✅ Aggiunte {stat_features_added} statistical features DETERMINISTICHE")
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore statistical features: {e}")
     
-    # 2. RATIO FEATURES (critiche per power systems)
+    # 2. RATIO FEATURES con limite FISSO IDENTICO
     try:
         n_ratios = 0
         for i in range(0, min(20, len(numeric_cols))):
             for j in range(i+1, min(i+5, len(numeric_cols))):
+                if n_ratios >= FIXED_MAX_RATIOS:  # ✅ LIMITE FISSO IDENTICO
+                    break
+                    
                 col_i, col_j = numeric_cols[i], numeric_cols[j]
                 denominator = df_enhanced[col_j].replace(0, np.nan)
                 
                 if not denominator.isna().all():
                     df_enhanced[f'ratio_{i}_{j}'] = df_enhanced[col_i] / denominator
                     n_ratios += 1
-                
-                if n_ratios >= 50:
-                    break
-            if n_ratios >= 50:
+            
+            if n_ratios >= FIXED_MAX_RATIOS:  # ✅ LIMITE FISSO IDENTICO
                 break
         
         features_added += n_ratios
-        print(f"[{client_id}] ✅ Aggiunti {n_ratios} ratio features")
-        print(f"[{client_id}]   Shape dopo ratios: {df_enhanced.shape}")
+        print(f"[{client_id}] ✅ Aggiunti {n_ratios} ratio features DETERMINISTICI (max {FIXED_MAX_RATIOS})")
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore ratio features: {e}")
     
-    # 3. ANOMALY INDICATORS 
+    # 3. ANOMALY INDICATORS con numero FISSO IDENTICO
     try:
         n_zscore = 0
-        for col in numeric_cols[:15]:
+        for i, col in enumerate(numeric_cols[:FIXED_MAX_ANOMALY]):  # ✅ NUMERO FISSO IDENTICO
             col_mean = df_enhanced[col].mean()
             col_std = df_enhanced[col].std()
             if col_std > 0:
-                df_enhanced[f'zscore_{col}'] = np.abs((df_enhanced[col] - col_mean) / col_std)
+                df_enhanced[f'zscore_{i}'] = np.abs((df_enhanced[col] - col_mean) / col_std)  # ✅ Nome deterministico IDENTICO
                 n_zscore += 1
         
         features_added += n_zscore
-        print(f"[{client_id}] ✅ Aggiunti {n_zscore} anomaly indicators")
-        print(f"[{client_id}]   Shape dopo anomaly: {df_enhanced.shape}")
+        print(f"[{client_id}] ✅ Aggiunti {n_zscore} anomaly indicators DETERMINISTICI (max {FIXED_MAX_ANOMALY})")
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore anomaly features: {e}")
     
-    # 4. INTERACTION FEATURES (AGGIUNTO: mancava nel server!)
+    # 4. INTERACTION FEATURES con numero FISSO IDENTICO
     try:
         n_interactions = 0
-        # Prodotti tra feature correlate (simula interazioni fisiche)
         for i in range(0, min(10, len(numeric_cols))):
             for j in range(i+1, min(i+3, len(numeric_cols))):
+                if n_interactions >= FIXED_MAX_INTERACTIONS:  # ✅ LIMITE FISSO IDENTICO
+                    break
+                    
                 col_i, col_j = numeric_cols[i], numeric_cols[j]
                 df_enhanced[f'interact_{i}_{j}'] = df_enhanced[col_i] * df_enhanced[col_j]
                 n_interactions += 1
-                
-                if n_interactions >= 20:  # Limita interazioni
-                    break
-            if n_interactions >= 20:
+            
+            if n_interactions >= FIXED_MAX_INTERACTIONS:  # ✅ LIMITE FISSO IDENTICO
                 break
         
         features_added += n_interactions
-        print(f"[{client_id}] ✅ Aggiunte {n_interactions} interaction features")
-        print(f"[{client_id}]   Shape dopo interactions: {df_enhanced.shape}")
+        print(f"[{client_id}] ✅ Aggiunte {n_interactions} interaction features DETERMINISTICHE (max {FIXED_MAX_INTERACTIONS})")
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore interaction features: {e}")
     
@@ -331,7 +334,7 @@ def create_smartgrid_features(X_global, client_id='SERVER'):
     if 'marker' in df_enhanced.columns:
         new_features -= 1  # Non contare la colonna marker
         
-    print(f"[{client_id}] 🎯 Feature engineering completato:")
+    print(f"[{client_id}] 🎯 Feature engineering DETERMINISTICO completato:")
     print(f"[{client_id}]   Features originali: {original_features}")
     print(f"[{client_id}]   Features aggiunte: {new_features}")
     print(f"[{client_id}]   Features totali: {original_features + new_features}")
@@ -809,7 +812,7 @@ def create_global_random_forest_enhanced(selected_trees):
             min_samples_leaf=RF_MIN_SAMPLES_LEAF,
             max_features=RF_MAX_FEATURES,
             bootstrap=RF_BOOTSTRAP,
-            random_state=RANDOM_SEED,
+            random_state=RANDOM_SEED,  # ✅ FISSO per aggregazione riproducibile
             n_jobs=-1,
             class_weight=RF_CLASS_WEIGHT,
             criterion=RF_CRITERION
