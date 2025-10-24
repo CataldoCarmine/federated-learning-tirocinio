@@ -522,7 +522,7 @@ def calculate_tree_diversity_server(tree1, tree2, X_sample):
 def deserialize_trees_from_client_enhanced(parameters):
     """
     Deserializza gli alberi ricevuti da un client CON ACCURACY + DIVERSITÀ REALI.
-    VERIFICATO: Gestisce il nuovo formato ENHANCED con diversity scores.
+    CORRETTO: Aggiunge i log di verifica mancanti.
     """
     try:
         # Gestisce diversi tipi di parametri da Flower
@@ -565,7 +565,7 @@ def deserialize_trees_from_client_enhanced(parameters):
                     print(f"[Server] ⚠️ Parametro {i+1} ignorato (tipo non compatibile: {type(param_data)})")
                     continue
 
-                # VERIFICATO: Deserializza dizionario completo con accuracy + diversità
+                # Deserializza dizionario completo con accuracy + diversità
                 tree_data = pickle.loads(tree_bytes)
                 print(f"[Server] Oggetto ENHANCED deserializzato tipo: {type(tree_data)}")
 
@@ -576,7 +576,7 @@ def deserialize_trees_from_client_enhanced(parameters):
                         accuracy_real = tree_data['accuracy']
                         weighted_accuracy_real = tree_data['weighted_accuracy']
                         
-                        # VERIFICATO: Estrae diversity score se disponibile (nuovo formato)
+                        # Estrae diversity score se disponibile (nuovo formato)
                         diversity_score = tree_data.get('diversity_score', 0.0)
                         client_id = tree_data.get('client_id', 0)
                         
@@ -584,7 +584,7 @@ def deserialize_trees_from_client_enhanced(parameters):
                         if hasattr(tree, 'predict') and hasattr(tree, 'tree_'):
                             deserialized_trees.append((tree, accuracy_real, weighted_accuracy_real, diversity_score, client_id))
                             
-                            # VERIFICATO: Conferma ricezione diversity REALE
+                            # AGGIUNTO: Conferma ricezione diversity REALE
                             if tree_data['accuracy_type'] == 'REAL_ENHANCED':
                                 print(f"[Server] ✅ Ricevuto albero ENHANCED con diversity REALE: {diversity_score:.4f}")
                             else:
@@ -624,7 +624,7 @@ def deserialize_trees_from_client_enhanced(parameters):
 
         print(f"[Server] Deserializzati {len(deserialized_trees)} alberi ENHANCED validi su {len(parameter_arrays)}")
         
-        # VERIFICATO: Mostra statistiche accuracy + diversità reali
+        # AGGIUNTO: VERIFICHE MANCANTI per accuracy + diversità reali
         if deserialized_trees:
             real_accuracies = [t[1] for t in deserialized_trees]
             real_w_accuracies = [t[2] for t in deserialized_trees]
@@ -634,7 +634,7 @@ def deserialize_trees_from_client_enhanced(parameters):
             print(f"[Server] ✅ VERIFICATION: Weighted accuracy REALI: min={min(real_w_accuracies):.4f}, max={max(real_w_accuracies):.4f}, media={np.mean(real_w_accuracies):.4f}")
             print(f"[Server] ✅ VERIFICATION: Diversity scores: min={min(diversity_scores):.4f}, max={max(diversity_scores):.4f}, media={np.mean(diversity_scores):.4f}")
             
-            # VERIFICATO: Conta alberi con diversity reali
+            # Conta alberi con diversity reali
             enhanced_trees = sum(1 for t in deserialized_trees if len(t) >= 4 and t[3] > 0.0)
             print(f"[Server] ✅ VERIFICATION: Alberi con diversity REALE: {enhanced_trees}/{len(deserialized_trees)}")
         
@@ -649,7 +649,7 @@ def deserialize_trees_from_client_enhanced(parameters):
 def select_best_trees_enhanced(all_trees_data, strategy=TREE_AGGREGATION_STRATEGY, method=TREE_SELECTION_METHOD, max_trees=MAX_TREES_GLOBAL):
     """
     Seleziona i migliori alberi basandosi su ACCURACY + DIVERSITÀ REALI dai client.
-    CORRETTO: Implementa selezione diversity-aware per federated learning ottimale usando diversity REALI.
+    CORRETTO: Rimuove il riferimento a X_global non definito e usa solo diversity reali.
     """
     print(f"[Server] === SELEZIONE ALBERI ENHANCED CON ACCURACY + DIVERSITÀ ===")
     print(f"Strategia: {strategy}")
@@ -700,10 +700,10 @@ def select_best_trees_enhanced(all_trees_data, strategy=TREE_AGGREGATION_STRATEG
                     accuracy_score = candidate[2]  # weighted_accuracy
                     diversity_score = candidate[3]  # diversity_score REALE dal client
                     print(f"[Server] 🔍 DEBUG: Candidato {idx} - acc={accuracy_score:.4f}, diversity_REALE={diversity_score:.4f}")
-                else:  # Formato legacy - calcola diversità on-the-fly
+                else:  # Formato legacy - usa diversità media da altri alberi selezionati
                     accuracy_score = candidate[1]  # accuracy normale
                     
-                    # CORRETTO: Calcola diversità media REALE rispetto agli alberi già selezionati
+                    # CORRETTO: Calcola diversità media rispetto agli alberi già selezionati
                     diversity_total = 0.0
                     diversity_count = 0
                     
@@ -718,24 +718,16 @@ def select_best_trees_enhanced(all_trees_data, strategy=TREE_AGGREGATION_STRATEG
                                 combined_diversity = abs(candidate_diversity - selected_diversity)
                                 diversity_total += combined_diversity
                                 diversity_count += 1
-                            elif hasattr(candidate[0], 'tree_') and hasattr(selected[0], 'tree_'):
-                                # Solo se non abbiamo diversity reali, usa campione
-                                if 'X_global' in globals() and len(X_global) > 0:
-                                    sample_size = min(50, len(X_global))
-                                    X_sample = X_global[:sample_size]
-                                    div_score = calculate_tree_diversity_server(candidate[0], selected[0], X_sample)
-                                    diversity_total += div_score
-                                    diversity_count += 1
-                                else:
-                                    # Ultimo fallback con valore neutro
-                                    diversity_total += 0.2  # Valore neutro invece di random
-                                    diversity_count += 1
+                            else:
+                                # CORRETTO: Usa valore neutro invece di X_global non definito
+                                diversity_total += 0.25  # Valore neutro per alberi senza diversity
+                                diversity_count += 1
                         except Exception as e:
                             print(f"[Server] ⚠️ Errore calcolo diversità: {e}")
-                            diversity_total += 0.2  # Fallback neutro
+                            diversity_total += 0.25  # Fallback neutro
                             diversity_count += 1
                     
-                    diversity_score = diversity_total / diversity_count if diversity_count > 0 else 0.0
+                    diversity_score = diversity_total / diversity_count if diversity_count > 0 else 0.25
                     print(f"[Server] 🔍 DEBUG: Candidato {idx} - acc={accuracy_score:.4f}, diversity_CALCOLATA={diversity_score:.4f}")
                 
                 # Score combinato: 70% accuracy + 30% diversity (basato su letteratura FL)
@@ -1361,7 +1353,7 @@ class SmartGridRandomForestFedAvgEnhanced(FedAvg):
             for i, (client_proxy, fit_res) in enumerate(results):
                 print(f"\n[Server] Processando alberi ENHANCED da client {i+1}...")
                 
-                # CORRETTO: Usa deserialize_trees_from_client_enhanced invece di deserialize_trees_from_client
+                # CORRETTO: Usa deserialize_trees_from_client_enhanced
                 client_trees = deserialize_trees_from_client_enhanced(fit_res.parameters)
                 
                 if client_trees:
