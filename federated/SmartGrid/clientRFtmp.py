@@ -607,6 +607,7 @@ def extract_trees_from_forest(model, X_val, y_val):
             n_comparisons += 1
         
         diversity_score = diversity_score / n_comparisons if n_comparisons > 0 else 0.0
+        print(f"[Client {client_id}] DIVERSITY DEBUG: n_comparisons={n_comparisons}, diversities={[div_score for j, div_score in enumerate(comparison_indices) if j < 3]}")
         
         trees_performance.append((tree, accuracy_real, weighted_acc_real, diversity_score))
         
