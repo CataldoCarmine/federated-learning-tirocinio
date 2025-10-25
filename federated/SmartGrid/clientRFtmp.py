@@ -329,9 +329,37 @@ def load_client_smartgrid_data(client_id):
     print(f"Scaling standard: {'ABILITATA' if ENABLE_SCALING else 'DISABILITATA'}")
     print(f"PCA: {'ABILITATA' if ENABLE_PCA else 'DISABILITATA'}")
 
+    # ========== QUICK CHECK 1: FEATURE ENGINEERING ==========
+    if ENABLE_FEATURE_ENGINEERING:
+        df_original = df.copy()  # Salva copia per confronto
+    
     # NUOVO: Feature Engineering per SmartGrid
     if ENABLE_FEATURE_ENGINEERING:
         df = create_smartgrid_features(df, client_id)
+        
+        # ✅ QUICK CHECK 1: Verifica feature engineering
+        print(f"\n[Client {client_id}] 🔍 QUICK CHECK 1 - FEATURE ENGINEERING:")
+        print(f"  Shape PRIMA FE: {df_original.shape}")
+        print(f"  Shape DOPO FE: {df.shape}")
+        print(f"  Feature aggiunte: {df.shape[1] - df_original.shape[1]}")
+        
+        X_check = df.drop(columns=["marker"], errors='ignore')
+        nan_count = X_check.isna().sum().sum()
+        inf_count = np.isinf(X_check.select_dtypes(include=[np.number]).values).sum()
+        
+        print(f"  NaN dopo FE: {nan_count}")
+        print(f"  Inf dopo FE: {inf_count}")
+        
+        # Verifica varianza delle nuove feature
+        if df.shape[1] > df_original.shape[1]:
+            new_cols = [col for col in df.columns if col not in df_original.columns]
+            new_data = df[new_cols].select_dtypes(include=[np.number])
+            if len(new_data.columns) > 0:
+                variances = new_data.var()
+                zero_var_count = (variances < 1e-10).sum()
+                print(f"  Nuove feature con varianza ~0: {zero_var_count}/{len(new_cols)}")
+                if zero_var_count > len(new_cols) * 0.5:
+                    print(f"  ⚠️ ATTENZIONE: >50% delle nuove feature hanno varianza quasi zero!")
     
     X = df.drop(columns=["marker"])
     y = (df["marker"] != "Natural").astype(int)
@@ -339,6 +367,8 @@ def load_client_smartgrid_data(client_id):
     natural_samples = (y == 0).sum()
     attack_ratio = y.mean()
     print(f"[Client {client_id}] Distribuzione: {attack_samples} attacchi ({attack_ratio*100:.1f}%), {natural_samples} naturali")
+    
+    # [... resto del preprocessing invariato ...]
     
     # STEP 1: Pulizia inf/NaN 
     print(f"[Client {client_id}] Pulizia valori infiniti e NaN...")
@@ -425,7 +455,6 @@ def load_client_smartgrid_data(client_id):
     # VERIFICA FINALE: nessun valore infinito o NaN
     if np.any(np.isinf(X_train_final)) or np.any(np.isnan(X_train_final)):
         print(f"[Client {client_id}] ❌ ERRORE: Dati finali contengono ancora inf/NaN")
-        # Pulizia di emergenza
         X_train_final = np.nan_to_num(X_train_final, nan=0.0, posinf=1e10, neginf=-1e10)
         X_val_final = np.nan_to_num(X_val_final, nan=0.0, posinf=1e10, neginf=-1e10)
         print(f"[Client {client_id}] ⚠️ Pulizia di emergenza applicata")
@@ -644,6 +673,21 @@ def serialize_trees_for_aggregation(trees_performance, max_trees=None):
     else:
         selected_trees = trees_performance
         print(f"[Client {client_id}] Invio tutti i {len(selected_trees)} alberi")
+    
+    # ✅ QUICK CHECK 2: DIVERSITY SCORES
+    if selected_trees:
+        diversity_scores = [d for _, _, _, d in selected_trees]
+        print(f"\n[Client {client_id}] 🔍 QUICK CHECK 2 - DIVERSITY SCORES:")
+        print(f"  Media: {np.mean(diversity_scores):.4f}")
+        print(f"  Min: {np.min(diversity_scores):.4f}")
+        print(f"  Max: {np.max(diversity_scores):.4f}")
+        zero_count = sum(1 for d in diversity_scores if d == 0.0)
+        print(f"  Zero count: {zero_count}/{len(diversity_scores)}")
+        
+        if zero_count == len(diversity_scores):
+            print(f"  ⚠️ ATTENZIONE: TUTTI i diversity scores sono ZERO!")
+        elif zero_count > len(diversity_scores) * 0.8:
+            print(f"  ⚠️ ATTENZIONE: >80% dei diversity scores sono ZERO!")
     
     serialized_data = []
     

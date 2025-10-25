@@ -699,7 +699,7 @@ def select_best_trees_enhanced(all_trees_data, strategy=TREE_AGGREGATION_STRATEG
                 if len(candidate) >= 4:  # CORRETTO: Ha diversity score REALE
                     accuracy_score = candidate[2]  # weighted_accuracy
                     diversity_score = candidate[3]  # diversity_score REALE dal client
-                    print(f"[Server] 🔍 DEBUG: Candidato {idx} - acc={accuracy_score:.4f}, diversity_REALE={diversity_score:.4f}")
+                    # print(f"[Server] 🔍 DEBUG: Candidato {idx} - acc={accuracy_score:.4f}, diversity_REALE={diversity_score:.4f}")
                 else:  # Formato legacy - usa diversità media da altri alberi selezionati
                     accuracy_score = candidate[1]  # accuracy normale
                     
@@ -728,7 +728,7 @@ def select_best_trees_enhanced(all_trees_data, strategy=TREE_AGGREGATION_STRATEG
                             diversity_count += 1
                     
                     diversity_score = diversity_total / diversity_count if diversity_count > 0 else 0.25
-                    print(f"[Server] 🔍 DEBUG: Candidato {idx} - acc={accuracy_score:.4f}, diversity_CALCOLATA={diversity_score:.4f}")
+                    # print(f"[Server] 🔍 DEBUG: Candidato {idx} - acc={accuracy_score:.4f}, diversity_CALCOLATA={diversity_score:.4f}")
                 
                 # Score combinato: 70% accuracy + 30% diversity (basato su letteratura FL)
                 combined_score = 0.7 * accuracy_score + 0.3 * diversity_score
@@ -803,13 +803,22 @@ def select_best_trees_enhanced(all_trees_data, strategy=TREE_AGGREGATION_STRATEG
     
     print(f"[Server] ✅ Alberi selezionati totali: {len(selected_trees)} (metodo ENHANCED: {method})")
     
+    # ✅ QUICK CHECK 3: SELECTION CHECK
+    if selected_trees and len(selected_trees) >= 5:
+        print(f"\n[Server] 🔍 QUICK CHECK 3 - SELECTION CHECK:")
+        for i in range(min(5, len(selected_trees))):
+            tree_data = selected_trees[i]
+            _, acc, w_acc, div = tree_data[:4]
+            combined = 0.7 * w_acc + 0.3 * div
+            print(f"  Tree {i+1}: acc={acc:.4f}, w_acc={w_acc:.4f}, div={div:.4f}, combined={combined:.4f}")
+    
     # Statistiche finali CORRETTE
     if selected_trees:
         final_accuracies = [t[1] for t in selected_trees]
         final_w_accuracies = [t[2] for t in selected_trees]
         final_diversities = [t[3] if len(t) >= 4 else 0.0 for t in selected_trees]
         
-        print(f"[Server] Accuracy finali: min={min(final_accuracies):.4f}, max={max(final_accuracies):.4f}, media={np.mean(final_accuracies):.4f}")
+        print(f"\n[Server] Accuracy finali: min={min(final_accuracies):.4f}, max={max(final_accuracies):.4f}, media={np.mean(final_accuracies):.4f}")
         print(f"[Server] Weighted accuracy finali: min={min(final_w_accuracies):.4f}, max={max(final_w_accuracies):.4f}, media={np.mean(final_w_accuracies):.4f}")
         print(f"[Server] Diversity scores finali: min={min(final_diversities):.4f}, max={max(final_diversities):.4f}, media={np.mean(final_diversities):.4f}")
         print(f"[Server] 🎯 UTILIZZO DIVERSITY REALI DAI CLIENT per selezione ottimale!")
