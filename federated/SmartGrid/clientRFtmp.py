@@ -78,7 +78,7 @@ def set_reproducibility_seeds(preserve_client_diversity=False):
 def create_smartgrid_features(df, client_id):
     """
     Crea feature ingegnerizzate specifiche per il dataset SmartGrid.
-    VERSIONE CORRETTA: Previene NaN/Inf con validazione robusta.
+    VERSIONE CORRETTA: Previene NaN/Inf con validazione robusta E garantisce numero feature fisso.
     """
     if not ENABLE_FEATURE_ENGINEERING:
         return df
@@ -126,7 +126,7 @@ def create_smartgrid_features(df, client_id):
     nan_created = 0
     inf_created = 0
     
-    # 1. STATISTICAL FEATURES con parametri fissi
+    # 1. STATISTICAL FEATURES con parametri fissi (INVARIATO)
     try:
         window_size = min(FIXED_WINDOW_SIZE, len(numeric_cols))
         stat_features_added = 0
@@ -159,7 +159,7 @@ def create_smartgrid_features(df, client_id):
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore statistical features: {e}")
     
-    # 2. RATIO FEATURES con VALIDAZIONE ROBUSTA
+    # 2. RATIO FEATURES con VALIDAZIONE ROBUSTA E CREAZIONE FORZATA
     try:
         n_ratios = 0
         for i in range(0, min(20, len(numeric_cols))):
@@ -176,33 +176,36 @@ def create_smartgrid_features(df, client_id):
                 # Crea maschera per valori validi (denominatore != 0)
                 valid_mask = np.abs(denominator) > 1e-10
                 
-                # Se > 50% dei valori sono validi, crea la feature
-                if np.mean(valid_mask) > 0.5:
-                    ratio_val = np.zeros(len(numerator))
+                # ✅ CORREZIONE: CREA SEMPRE LA FEATURE indipendentemente dalla percentuale valida
+                ratio_val = np.zeros(len(numerator))
+                
+                if np.any(valid_mask):
+                    # Calcola ratio per valori validi
                     ratio_val[valid_mask] = numerator[valid_mask] / denominator[valid_mask]
                     
                     # ✅ Clip valori estremi per prevenire inf
                     ratio_val = np.clip(ratio_val, -1e6, 1e6)
                     
-                    # ✅ Sostituisci valori non validi con mediana
-                    median_ratio = np.median(ratio_val[valid_mask]) if np.any(valid_mask) else 0.0
+                    # ✅ Sostituisci valori non validi con mediana (o 0 se nessun valore valido)
+                    median_ratio = np.median(ratio_val[valid_mask]) if np.sum(valid_mask) > 0 else 0.0
                     ratio_val[~valid_mask] = median_ratio
-                    
-                    df_enhanced[f'ratio_{i}_{j}'] = ratio_val
-                    n_ratios += 1
                 else:
-                    # Skip ratio se troppi zeri nel denominatore
-                    continue
+                    # ✅ Se NESSUN valore valido, usa 0 per tutti
+                    ratio_val[:] = 0.0
+                
+                # ✅ SEMPRE aggiungi la feature (deterministico)
+                df_enhanced[f'ratio_{i}_{j}'] = ratio_val
+                n_ratios += 1
             
             if n_ratios >= FIXED_MAX_RATIOS:
                 break
         
         features_added += n_ratios
-        print(f"[{client_id}] ✅ Aggiunti {n_ratios} ratio features ROBUSTI (max {FIXED_MAX_RATIOS})")
+        print(f"[{client_id}] ✅ Aggiunti {n_ratios} ratio features ROBUSTI E DETERMINISTICI (max {FIXED_MAX_RATIOS})")
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore ratio features: {e}")
     
-    # 3. ANOMALY INDICATORS con VALIDAZIONE ROBUSTA
+    # 3. ANOMALY INDICATORS con VALIDAZIONE ROBUSTA (INVARIATO)
     try:
         n_zscore = 0
         for i, col in enumerate(numeric_cols[:FIXED_MAX_ANOMALY]):
@@ -227,7 +230,7 @@ def create_smartgrid_features(df, client_id):
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore anomaly features: {e}")
     
-    # 4. INTERACTION FEATURES con VALIDAZIONE
+    # 4. INTERACTION FEATURES con VALIDAZIONE (INVARIATO)
     try:
         n_interactions = 0
         for i in range(0, min(10, len(numeric_cols))):
@@ -263,7 +266,7 @@ def create_smartgrid_features(df, client_id):
     if 'marker' in df_enhanced.columns:
         new_features -= 1
     
-    print(f"[{client_id}] 🎯 Feature engineering ROBUSTO completato:")
+    print(f"[{client_id}] 🎯 Feature engineering ROBUSTO E DETERMINISTICO completato:")
     print(f"[{client_id}]   Features originali: {original_features}")
     print(f"[{client_id}]   Features aggiunte: {new_features}")
     print(f"[{client_id}]   Features totali: {original_features + new_features}")

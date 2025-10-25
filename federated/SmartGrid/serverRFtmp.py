@@ -251,7 +251,7 @@ def create_smartgrid_features(X_global, client_id='SERVER'):
     
     features_added = 0
     
-    # 1. STATISTICAL FEATURES con parametri fissi IDENTICI
+    # 1. STATISTICAL FEATURES con parametri fissi IDENTICI (INVARIATO)
     try:
         window_size = min(FIXED_WINDOW_SIZE, len(numeric_cols))
         stat_features_added = 0
@@ -272,7 +272,7 @@ def create_smartgrid_features(X_global, client_id='SERVER'):
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore statistical features: {e}")
     
-    # 2. RATIO FEATURES con limite FISSO IDENTICO
+    # 2. RATIO FEATURES con limite FISSO IDENTICO E CREAZIONE FORZATA
     try:
         n_ratios = 0
         for i in range(0, min(20, len(numeric_cols))):
@@ -281,28 +281,50 @@ def create_smartgrid_features(X_global, client_id='SERVER'):
                     break
                     
                 col_i, col_j = numeric_cols[i], numeric_cols[j]
-                denominator = df_enhanced[col_j].replace(0, np.nan)
                 
-                if not denominator.isna().all():
-                    df_enhanced[f'ratio_{i}_{j}'] = df_enhanced[col_i] / denominator
-                    n_ratios += 1
+                # ✅ VALIDAZIONE ROBUSTA: Calcola ratio con gestione denominatore zero
+                numerator = df_enhanced[col_i].values
+                denominator = df_enhanced[col_j].values
+                
+                # Crea maschera per valori validi
+                valid_mask = np.abs(denominator) > 1e-10
+                
+                # ✅ CORREZIONE: CREA SEMPRE LA FEATURE
+                ratio_val = np.zeros(len(numerator))
+                
+                if np.any(valid_mask):
+                    ratio_val[valid_mask] = numerator[valid_mask] / denominator[valid_mask]
+                    # Clip per prevenire inf
+                    ratio_val = np.clip(ratio_val, -1e6, 1e6)
+                    # Imputa valori non validi con mediana
+                    median_ratio = np.median(ratio_val[valid_mask]) if np.sum(valid_mask) > 0 else 0.0
+                    ratio_val[~valid_mask] = median_ratio
+                else:
+                    ratio_val[:] = 0.0
+                
+                # ✅ SEMPRE aggiungi la feature
+                df_enhanced[f'ratio_{i}_{j}'] = ratio_val
+                n_ratios += 1
             
             if n_ratios >= FIXED_MAX_RATIOS:  # ✅ LIMITE FISSO IDENTICO
                 break
         
         features_added += n_ratios
-        print(f"[{client_id}] ✅ Aggiunti {n_ratios} ratio features DETERMINISTICI (max {FIXED_MAX_RATIOS})")
+        print(f"[{client_id}] ✅ Aggiunti {n_ratios} ratio features DETERMINISTICI E ROBUSTI (max {FIXED_MAX_RATIOS})")
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore ratio features: {e}")
     
-    # 3. ANOMALY INDICATORS con numero FISSO IDENTICO
+    # 3. ANOMALY INDICATORS con numero FISSO IDENTICO (INVARIATO)
     try:
         n_zscore = 0
         for i, col in enumerate(numeric_cols[:FIXED_MAX_ANOMALY]):  # ✅ NUMERO FISSO IDENTICO
             col_mean = df_enhanced[col].mean()
             col_std = df_enhanced[col].std()
-            if col_std > 0:
-                df_enhanced[f'zscore_{i}'] = np.abs((df_enhanced[col] - col_mean) / col_std)  # ✅ Nome deterministico IDENTICO
+            if col_std > 1e-10:
+                df_enhanced[f'zscore_{i}'] = np.abs((df_enhanced[col] - col_mean) / col_std)
+                n_zscore += 1
+            else:
+                df_enhanced[f'zscore_{i}'] = 0.0
                 n_zscore += 1
         
         features_added += n_zscore
@@ -310,7 +332,7 @@ def create_smartgrid_features(X_global, client_id='SERVER'):
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore anomaly features: {e}")
     
-    # 4. INTERACTION FEATURES con numero FISSO IDENTICO
+    # 4. INTERACTION FEATURES con numero FISSO IDENTICO (INVARIATO)
     try:
         n_interactions = 0
         for i in range(0, min(10, len(numeric_cols))):
@@ -319,7 +341,9 @@ def create_smartgrid_features(X_global, client_id='SERVER'):
                     break
                     
                 col_i, col_j = numeric_cols[i], numeric_cols[j]
-                df_enhanced[f'interact_{i}_{j}'] = df_enhanced[col_i] * df_enhanced[col_j]
+                interaction = df_enhanced[col_i] * df_enhanced[col_j]
+                interaction = np.clip(interaction, -1e10, 1e10)
+                df_enhanced[f'interact_{i}_{j}'] = interaction
                 n_interactions += 1
             
             if n_interactions >= FIXED_MAX_INTERACTIONS:  # ✅ LIMITE FISSO IDENTICO
@@ -334,7 +358,7 @@ def create_smartgrid_features(X_global, client_id='SERVER'):
     if 'marker' in df_enhanced.columns:
         new_features -= 1  # Non contare la colonna marker
         
-    print(f"[{client_id}] 🎯 Feature engineering DETERMINISTICO completato:")
+    print(f"[{client_id}] 🎯 Feature engineering DETERMINISTICO E ROBUSTO completato:")
     print(f"[{client_id}]   Features originali: {original_features}")
     print(f"[{client_id}]   Features aggiunte: {new_features}")
     print(f"[{client_id}]   Features totali: {original_features + new_features}")
