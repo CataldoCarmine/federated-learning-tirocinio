@@ -78,7 +78,7 @@ def set_reproducibility_seeds(preserve_client_diversity=False):
 def create_smartgrid_features(df, client_id):
     """
     Crea feature ingegnerizzate specifiche per il dataset SmartGrid.
-    VERSIONE DETERMINISTICA: Garantisce sempre lo stesso numero di feature.
+    VERSIONE CORRETTA: Previene NaN/Inf con validazione robusta.
     """
     if not ENABLE_FEATURE_ENGINEERING:
         return df
@@ -86,14 +86,14 @@ def create_smartgrid_features(df, client_id):
     # ✅ SEED FISSO per operazioni deterministiche
     np.random.seed(RANDOM_SEED)
     
-    print(f"[{client_id}] === FEATURE ENGINEERING SMARTGRID CLIENT DETERMINISTICO ===")
+    print(f"[{client_id}] === FEATURE ENGINEERING SMARTGRID CLIENT ROBUSTO ===")
     
     # Copia il dataframe
     df_enhanced = df.copy()
     
     # Gestisci sia il caso con che senza colonna marker
     if 'marker' in df_enhanced.columns:
-        original_features = len(df_enhanced.columns) - 1  # -1 per 'marker'
+        original_features = len(df_enhanced.columns) - 1
         feature_cols = [col for col in df_enhanced.columns if col != 'marker']
     else:
         original_features = len(df_enhanced.columns)
@@ -105,7 +105,7 @@ def create_smartgrid_features(df, client_id):
     
     # ✅ Seleziona solo colonne numeriche e ORDINA per determinismo
     numeric_cols = df_enhanced[feature_cols].select_dtypes(include=[np.number]).columns.tolist()
-    numeric_cols = sorted(numeric_cols)  # ORDINAMENTO per determinismo
+    numeric_cols = sorted(numeric_cols)
     
     if len(numeric_cols) == 0:
         print(f"[{client_id}] ⚠️ Nessuna colonna numerica trovata per feature engineering")
@@ -123,6 +123,8 @@ def create_smartgrid_features(df, client_id):
     FIXED_MAX_INTERACTIONS = 20
     
     features_added = 0
+    nan_created = 0
+    inf_created = 0
     
     # 1. STATISTICAL FEATURES con parametri fissi
     try:
@@ -133,85 +135,146 @@ def create_smartgrid_features(df, client_id):
             end_idx = min(i + window_size, len(numeric_cols))
             window_data = X[:, i:end_idx]
             
-            # Statistiche finestra con nomi DETERMINISTICI
-            df_enhanced[f'window_{i}_mean'] = np.mean(window_data, axis=1)
-            df_enhanced[f'window_{i}_std'] = np.std(window_data, axis=1)
-            df_enhanced[f'window_{i}_range'] = np.ptp(window_data, axis=1)
-            df_enhanced[f'window_{i}_skew'] = stats.skew(window_data, axis=1)
+            # ✅ Gestione robusta con controllo NaN/Inf
+            mean_val = np.mean(window_data, axis=1)
+            std_val = np.std(window_data, axis=1)
+            range_val = np.ptp(window_data, axis=1)
+            
+            # Calcola skew con gestione errori
+            try:
+                skew_val = stats.skew(window_data, axis=1, nan_policy='propagate')
+                # Sostituisci NaN/Inf con valori sicuri
+                skew_val = np.nan_to_num(skew_val, nan=0.0, posinf=3.0, neginf=-3.0)
+            except:
+                skew_val = np.zeros(len(window_data))
+            
+            df_enhanced[f'window_{i}_mean'] = mean_val
+            df_enhanced[f'window_{i}_std'] = std_val
+            df_enhanced[f'window_{i}_range'] = range_val
+            df_enhanced[f'window_{i}_skew'] = skew_val
             stat_features_added += 4
         
         features_added += stat_features_added
-        print(f"[{client_id}] ✅ Aggiunte {stat_features_added} statistical features DETERMINISTICHE")
+        print(f"[{client_id}] ✅ Aggiunte {stat_features_added} statistical features ROBUSTE")
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore statistical features: {e}")
     
-    # 2. RATIO FEATURES con limite FISSO
+    # 2. RATIO FEATURES con VALIDAZIONE ROBUSTA
     try:
         n_ratios = 0
         for i in range(0, min(20, len(numeric_cols))):
             for j in range(i+1, min(i+5, len(numeric_cols))):
-                if n_ratios >= FIXED_MAX_RATIOS:  # ✅ LIMITE FISSO
+                if n_ratios >= FIXED_MAX_RATIOS:
                     break
                     
                 col_i, col_j = numeric_cols[i], numeric_cols[j]
-                denominator = df_enhanced[col_j].replace(0, np.nan)
                 
-                if not denominator.isna().all():
-                    df_enhanced[f'ratio_{i}_{j}'] = df_enhanced[col_i] / denominator
+                # ✅ VALIDAZIONE ROBUSTA: Verifica denominatore
+                numerator = df_enhanced[col_i].values
+                denominator = df_enhanced[col_j].values
+                
+                # Crea maschera per valori validi (denominatore != 0)
+                valid_mask = np.abs(denominator) > 1e-10
+                
+                # Se > 50% dei valori sono validi, crea la feature
+                if np.mean(valid_mask) > 0.5:
+                    ratio_val = np.zeros(len(numerator))
+                    ratio_val[valid_mask] = numerator[valid_mask] / denominator[valid_mask]
+                    
+                    # ✅ Clip valori estremi per prevenire inf
+                    ratio_val = np.clip(ratio_val, -1e6, 1e6)
+                    
+                    # ✅ Sostituisci valori non validi con mediana
+                    median_ratio = np.median(ratio_val[valid_mask]) if np.any(valid_mask) else 0.0
+                    ratio_val[~valid_mask] = median_ratio
+                    
+                    df_enhanced[f'ratio_{i}_{j}'] = ratio_val
                     n_ratios += 1
+                else:
+                    # Skip ratio se troppi zeri nel denominatore
+                    continue
             
-            if n_ratios >= FIXED_MAX_RATIOS:  # ✅ LIMITE FISSO
+            if n_ratios >= FIXED_MAX_RATIOS:
                 break
         
         features_added += n_ratios
-        print(f"[{client_id}] ✅ Aggiunti {n_ratios} ratio features DETERMINISTICI (max {FIXED_MAX_RATIOS})")
+        print(f"[{client_id}] ✅ Aggiunti {n_ratios} ratio features ROBUSTI (max {FIXED_MAX_RATIOS})")
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore ratio features: {e}")
     
-    # 3. ANOMALY INDICATORS con numero FISSO
+    # 3. ANOMALY INDICATORS con VALIDAZIONE ROBUSTA
     try:
         n_zscore = 0
-        for i, col in enumerate(numeric_cols[:FIXED_MAX_ANOMALY]):  # ✅ NUMERO FISSO
-            col_mean = df_enhanced[col].mean()
-            col_std = df_enhanced[col].std()
-            if col_std > 0:
-                df_enhanced[f'zscore_{i}'] = np.abs((df_enhanced[col] - col_mean) / col_std)  # ✅ Nome deterministico
+        for i, col in enumerate(numeric_cols[:FIXED_MAX_ANOMALY]):
+            col_data = df_enhanced[col].values
+            col_mean = np.mean(col_data)
+            col_std = np.std(col_data)
+            
+            # ✅ VALIDAZIONE: Solo se std > 0
+            if col_std > 1e-10:
+                zscore_val = np.abs((col_data - col_mean) / col_std)
+                # ✅ Clip valori estremi per prevenire inf
+                zscore_val = np.clip(zscore_val, 0.0, 10.0)
+                df_enhanced[f'zscore_{i}'] = zscore_val
+                n_zscore += 1
+            else:
+                # Se std = 0, tutti i valori sono costanti → zscore = 0
+                df_enhanced[f'zscore_{i}'] = np.zeros(len(col_data))
                 n_zscore += 1
         
         features_added += n_zscore
-        print(f"[{client_id}] ✅ Aggiunti {n_zscore} anomaly indicators DETERMINISTICI (max {FIXED_MAX_ANOMALY})")
+        print(f"[{client_id}] ✅ Aggiunti {n_zscore} anomaly indicators ROBUSTI (max {FIXED_MAX_ANOMALY})")
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore anomaly features: {e}")
     
-    # 4. INTERACTION FEATURES con numero FISSO
+    # 4. INTERACTION FEATURES con VALIDAZIONE
     try:
         n_interactions = 0
         for i in range(0, min(10, len(numeric_cols))):
             for j in range(i+1, min(i+3, len(numeric_cols))):
-                if n_interactions >= FIXED_MAX_INTERACTIONS:  # ✅ LIMITE FISSO
+                if n_interactions >= FIXED_MAX_INTERACTIONS:
                     break
                     
                 col_i, col_j = numeric_cols[i], numeric_cols[j]
-                df_enhanced[f'interact_{i}_{j}'] = df_enhanced[col_i] * df_enhanced[col_j]
+                
+                # ✅ Calcola prodotto e clip per prevenire overflow
+                interaction = df_enhanced[col_i] * df_enhanced[col_j]
+                interaction = np.clip(interaction, -1e10, 1e10)
+                
+                df_enhanced[f'interact_{i}_{j}'] = interaction
                 n_interactions += 1
             
-            if n_interactions >= FIXED_MAX_INTERACTIONS:  # ✅ LIMITE FISSO
+            if n_interactions >= FIXED_MAX_INTERACTIONS:
                 break
         
         features_added += n_interactions
-        print(f"[{client_id}] ✅ Aggiunte {n_interactions} interaction features DETERMINISTICHE (max {FIXED_MAX_INTERACTIONS})")
+        print(f"[{client_id}] ✅ Aggiunte {n_interactions} interaction features ROBUSTE (max {FIXED_MAX_INTERACTIONS})")
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore interaction features: {e}")
     
+    # ✅ VERIFICA FINALE: Conta NaN/Inf creati
+    new_cols = [col for col in df_enhanced.columns if col not in df.columns and col != 'marker']
+    if new_cols:
+        new_data = df_enhanced[new_cols].select_dtypes(include=[np.number])
+        nan_created = new_data.isna().sum().sum()
+        inf_created = np.isinf(new_data.values).sum()
+    
     new_features = len(df_enhanced.columns) - original_features
     if 'marker' in df_enhanced.columns:
-        new_features -= 1  # Non contare la colonna marker
+        new_features -= 1
     
-    print(f"[{client_id}] 🎯 Feature engineering DETERMINISTICO completato:")
+    print(f"[{client_id}] 🎯 Feature engineering ROBUSTO completato:")
     print(f"[{client_id}]   Features originali: {original_features}")
     print(f"[{client_id}]   Features aggiunte: {new_features}")
     print(f"[{client_id}]   Features totali: {original_features + new_features}")
     print(f"[{client_id}]   Shape finale: {df_enhanced.shape}")
+    print(f"[{client_id}]   ✅ NaN creati: {nan_created} (target: <1000)")
+    print(f"[{client_id}]   ✅ Inf creati: {inf_created} (target: <100)")
+    
+    if nan_created > 1000:
+        print(f"[{client_id}]   ⚠️ ATTENZIONE: Troppi NaN creati dal feature engineering!")
+    if inf_created > 100:
+        print(f"[{client_id}]   ⚠️ ATTENZIONE: Troppi Inf creati dal feature engineering!")
     
     return df_enhanced
 
@@ -534,7 +597,7 @@ def create_random_forest_model():
 
 def calculate_tree_diversity(tree1, tree2, X_sample):
     """
-    Calcola la diversità tra due alberi con sampling deterministico.
+    Calcola la diversità tra due alberi con sampling RANDOMIZZATO per massimizzare diversità.
     
     Args:
         tree1, tree2: Due decision trees
@@ -544,27 +607,36 @@ def calculate_tree_diversity(tree1, tree2, X_sample):
         float: Punteggio diversità [0,1] (1 = massima diversità)
     """
     try:
-        # ✅ SEED FISSO per sampling riproducibile
-        np.random.seed(RANDOM_SEED)
+        # ✅ SAMPLING RANDOMIZZATO per catturare vera diversità
+        # NON usiamo seed fisso qui per massimizzare la diversità rilevata
+        sample_size = min(200, len(X_sample))  # Aumentato da 100 a 200
         
-        # Usa indici fissi invece di random sampling per determinismo
-        sample_size = min(100, len(X_sample))
-        sample_indices = np.linspace(0, len(X_sample)-1, sample_size, dtype=int)
-        X_deterministic = X_sample[sample_indices]
+        # ✅ Random sampling invece di linspace deterministico
+        if len(X_sample) > sample_size:
+            # Usa random state locale per non interferire con training
+            rng = np.random.RandomState(seed=None)  # Seed None = random vero
+            sample_indices = rng.choice(len(X_sample), size=sample_size, replace=False)
+        else:
+            sample_indices = np.arange(len(X_sample))
         
-        pred1 = tree1.predict(X_deterministic)
-        pred2 = tree2.predict(X_deterministic)
+        X_random = X_sample[sample_indices]
+        
+        # Predizioni degli alberi
+        pred1 = tree1.predict(X_random)
+        pred2 = tree2.predict(X_random)
         
         # Calcola disagreement rate (diversità)
         disagreement = np.mean(pred1 != pred2)
+        
         return float(disagreement)
-    except:
+    except Exception as e:
+        print(f"⚠️ Errore calcolo diversità: {e}")
         return 0.0
 
 def extract_trees_from_forest(model, X_val, y_val):
     """
     Estrae gli alberi dal Random Forest e calcola le loro performance individuali REALI + DIVERSITÀ.
-    Implementa la metodologia del paper per la selezione degli alberi migliori con diversificazione.
+    VERSIONE MIGLIORATA: Calcola diversità su campione più grande con random sampling.
     
     Args:
         model: Random Forest addestrato
@@ -574,30 +646,24 @@ def extract_trees_from_forest(model, X_val, y_val):
     Returns:
         Lista di tuple (tree, accuracy_reale, weighted_accuracy_reale, diversity_score) per ogni albero
     """
-    print(f"[Client {client_id}] === ESTRAZIONE ALBERI CON ACCURACY + DIVERSITÀ REALI ===")
-
-    print(f"[Client {client_id}] 🔍 DEBUG extract_trees_from_forest: INIZIO")
-    print(f"[Client {client_id}] 🔍 DEBUG: model type = {type(model)}")
-    print(f"[Client {client_id}] 🔍 DEBUG: X_val shape = {X_val.shape}")
-    print(f"[Client {client_id}] 🔍 DEBUG: y_val shape = {y_val.shape}")
+    print(f"[Client {client_id}] === ESTRAZIONE ALBERI CON ACCURACY + DIVERSITÀ REALI (MIGLIORATA) ===")
 
     # CONTROLLO: Verifica se il modello è addestrato
     if not hasattr(model, 'estimators_') or len(model.estimators_) == 0:
         print(f"[Client {client_id}] ⚠️ Modello non ancora addestrato, nessun albero disponibile")
-        return []  # Restituisce lista vuota
+        return []
     
-    print(f"[Client {client_id}] 🔍 DEBUG: Modello ha {len(model.estimators_)} alberi")
     print(f"[Client {client_id}] === CALCOLO ACCURACY + DIVERSITÀ REALI PER {len(model.estimators_)} ALBERI ===")
     
     trees_performance = []
     
-    # Campione per calcolo diversità
-    sample_size = min(500, len(X_val))
+    # ✅ CAMPIONE PIÙ GRANDE per calcolo diversità (aumentato da 500 a 1000)
+    sample_size = min(1000, len(X_val))
     X_sample = X_val[:sample_size]
     
+    print(f"[Client {client_id}] Campione diversità: {sample_size} esempi")
+    
     for i, tree in enumerate(model.estimators_):
-        print(f"[Client {client_id}] 🔍 DEBUG: Calcolo metrics per albero {i+1}/{len(model.estimators_)}")
-
         # Predizioni dell'albero singolo
         tree_predictions = tree.predict(X_val)
         
@@ -605,12 +671,10 @@ def extract_trees_from_forest(model, X_val, y_val):
         accuracy_real = accuracy_score(y_val, tree_predictions)
         
         # Calcola weighted accuracy REALE
-        # Weighted accuracy considera la distribuzione delle classi
         class_counts = np.bincount(y_val)
-        weights = 1.0 / class_counts  # Peso inversamente proporzionale alla frequenza
-        class_weights_norm = weights / weights.sum()  # Normalizza i pesi
+        weights = 1.0 / class_counts
+        class_weights_norm = weights / weights.sum()
         
-        # Calcola accuracy pesata per classe REALE
         weighted_acc_real = 0.0
         for class_label in np.unique(y_val):
             class_mask = (y_val == class_label)
@@ -618,37 +682,45 @@ def extract_trees_from_forest(model, X_val, y_val):
                 class_accuracy = accuracy_score(y_val[class_mask], tree_predictions[class_mask])
                 weighted_acc_real += class_accuracy * class_weights_norm[class_label]
         
-        # NUOVO: Calcola diversity score medio rispetto agli altri alberi
+        # ✅ CALCOLO DIVERSITÀ MIGLIORATO: Confronta con PIÙ alberi (15 invece di 10)
         diversity_score = 0.0
         n_comparisons = 0
         
-        # Confronta con al massimo 10 altri alberi per efficienza
-        comparison_indices = np.random.choice(
-            [idx for idx in range(len(model.estimators_)) if idx != i],
-            size=min(10, len(model.estimators_) - 1),
-            replace=False
-        ) if len(model.estimators_) > 1 else []
+        # ✅ Usa seed diverso per ogni albero per variare i confronti
+        comparison_size = min(15, len(model.estimators_) - 1)
         
+        if len(model.estimators_) > 1:
+            # ✅ Seed diverso per ogni albero ma deterministico
+            rng_local = np.random.RandomState(seed=RANDOM_SEED + i)
+            comparison_indices = rng_local.choice(
+                [idx for idx in range(len(model.estimators_)) if idx != i],
+                size=comparison_size,
+                replace=False
+            )
+        else:
+            comparison_indices = []
+        
+        diversities_list = []
         for j in comparison_indices:
             other_tree = model.estimators_[j]
             div_score = calculate_tree_diversity(tree, other_tree, X_sample)
             diversity_score += div_score
+            diversities_list.append(div_score)
             n_comparisons += 1
         
         diversity_score = diversity_score / n_comparisons if n_comparisons > 0 else 0.0
-        print(f"[Client {client_id}] DIVERSITY DEBUG: n_comparisons={n_comparisons}, diversities={[div_score for j, div_score in enumerate(comparison_indices) if j < 3]}")
         
         trees_performance.append((tree, accuracy_real, weighted_acc_real, diversity_score))
         
         if i < 5:  # Stampa info per i primi 5 alberi
-            print(f"[Client {client_id}] Albero {i+1}: Accuracy={accuracy_real:.4f}, W_Accuracy={weighted_acc_real:.4f}, Diversity={diversity_score:.4f}")
+            print(f"[Client {client_id}] Albero {i+1}: Acc={accuracy_real:.4f}, W_Acc={weighted_acc_real:.4f}, Div={diversity_score:.4f} (n_comp={n_comparisons})")
     
-    print(f"[Client {client_id}] 🔍 DEBUG extract_trees_from_forest: COMPLETATO con {len(trees_performance)} alberi CON ACCURACY + DIVERSITÀ REALI")
+    print(f"[Client {client_id}] ✅ Estrazione completata con {len(trees_performance)} alberi CON ACCURACY + DIVERSITÀ REALI MIGLIORATE")
 
     # Ordina gli alberi per performance combinata (accuracy + diversity)
     def combined_score(tree_perf):
         _, acc, w_acc, div = tree_perf
-        # Combina weighted accuracy (70%) + diversity (30%) per federated learning
+        # Combina weighted accuracy (70%) + diversity (30%)
         return 0.7 * w_acc + 0.3 * div
     
     trees_performance.sort(key=combined_score, reverse=True)
@@ -657,6 +729,14 @@ def extract_trees_from_forest(model, X_val, y_val):
     worst_tree = trees_performance[-1]
     print(f"[Client {client_id}] Migliore albero (COMBINATO): Acc={best_tree[1]:.4f}, W_Acc={best_tree[2]:.4f}, Div={best_tree[3]:.4f}")
     print(f"[Client {client_id}] Peggiore albero (COMBINATO): Acc={worst_tree[1]:.4f}, W_Acc={worst_tree[2]:.4f}, Div={worst_tree[3]:.4f}")
+    
+    # ✅ Statistiche diversità finali
+    all_diversities = [t[3] for t in trees_performance]
+    print(f"[Client {client_id}] 📊 Statistiche Diversity:")
+    print(f"[Client {client_id}]   Media: {np.mean(all_diversities):.4f}")
+    print(f"[Client {client_id}]   Min: {np.min(all_diversities):.4f}")
+    print(f"[Client {client_id}]   Max: {np.max(all_diversities):.4f}")
+    print(f"[Client {client_id}]   Std: {np.std(all_diversities):.4f}")
     
     return trees_performance
 
