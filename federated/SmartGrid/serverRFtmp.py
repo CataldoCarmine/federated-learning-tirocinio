@@ -31,7 +31,7 @@ ENABLE_IMPUTATION = True              # Imputazione mediana
 ENABLE_SCALING = False                 # ABILITATO: StandardScaler (mean=0, std=1) 
 ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # ABILITATO: Rimozione feature quasi-costanti
 ENABLE_PCA = False                    # PCA per riduzione dimensionalità
-ENABLE_FEATURE_ENGINEERING = True    # NUOVO: Feature engineering per SmartGrid
+ENABLE_FEATURE_ENGINEERING = False    # NUOVO: Feature engineering per SmartGrid
 
 if ENABLE_PCA:
     ENABLE_IMPUTATION = True # Per eseguire la PCA non si possono avere NaN
