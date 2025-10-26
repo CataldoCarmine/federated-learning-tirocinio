@@ -43,7 +43,7 @@ if ENABLE_PCA == False and not ENABLE_FEATURE_ENGINEERING:
 
 # CONFIGURAZIONE MODELLO RANDOM FOREST - OTTIMIZZATA
 # Basato sui risultati del paper: hyperparameter tuning per ottimizzare performance
-RF_N_ESTIMATORS = 100      # AUMENTATO da 65 per maggiore diversità
+RF_N_ESTIMATORS = 150      # AUMENTATO da 65 per maggiore diversità
 RF_MAX_DEPTH = 15         # LIMITATO da None per ridurre overfitting
 RF_MIN_SAMPLES_SPLIT = 5  # AUMENTATO da 2 per ridurre overfitting
 RF_MIN_SAMPLES_LEAF = 2   # AUMENTATO da 1 per ridurre overfitting
@@ -159,7 +159,7 @@ def create_smartgrid_features(df, client_id):
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore statistical features: {e}")
     
-    # 2. RATIO FEATURES con VALIDAZIONE ROBUSTA E CREAZIONE FORZATA
+    # 2. RATIO FEATURES con CLIP PREVENTIVO
     try:
         n_ratios = 0
         for i in range(0, min(20, len(numeric_cols))):
@@ -173,20 +173,23 @@ def create_smartgrid_features(df, client_id):
                 numerator = df_enhanced[col_i].values
                 denominator = df_enhanced[col_j].values
                 
-                # Crea maschera per valori validi (denominatore != 0)
-                valid_mask = np.abs(denominator) > 1e-10
+                # ✅ CLIP VALORI ESTREMI **PRIMA** DELLA DIVISIONE
+                numerator_clipped = np.clip(numerator, -1e6, 1e6)
+                denominator_clipped = np.clip(denominator, -1e6, 1e6)
                 
-                # ✅ CORREZIONE: CREA SEMPRE LA FEATURE indipendentemente dalla percentuale valida
-                ratio_val = np.zeros(len(numerator))
+                # Maschera per valori validi (denominatore != 0)
+                valid_mask = np.abs(denominator_clipped) > 1e-10
+                
+                ratio_val = np.zeros(len(numerator_clipped))
                 
                 if np.any(valid_mask):
-                    # Calcola ratio per valori validi
-                    ratio_val[valid_mask] = numerator[valid_mask] / denominator[valid_mask]
+                    # Calcola ratio con valori già clippati
+                    ratio_val[valid_mask] = numerator_clipped[valid_mask] / denominator_clipped[valid_mask]
                     
-                    # ✅ Clip valori estremi per prevenire inf
+                    # ✅ SECONDO CLIP per sicurezza (raramente necessario ora)
                     ratio_val = np.clip(ratio_val, -1e6, 1e6)
                     
-                    # ✅ Sostituisci valori non validi con mediana (o 0 se nessun valore valido)
+                    # Imputa valori non validi con mediana
                     median_ratio = np.median(ratio_val[valid_mask]) if np.sum(valid_mask) > 0 else 0.0
                     ratio_val[~valid_mask] = median_ratio
                 else:
@@ -201,7 +204,7 @@ def create_smartgrid_features(df, client_id):
                 break
         
         features_added += n_ratios
-        print(f"[{client_id}] ✅ Aggiunti {n_ratios} ratio features ROBUSTI E DETERMINISTICI (max {FIXED_MAX_RATIOS})")
+        print(f"[{client_id}] ✅ Aggiunti {n_ratios} ratio features CON CLIP PREVENTIVO")
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore ratio features: {e}")
     
@@ -568,15 +571,28 @@ def create_random_forest_model():
 
     # DIVERSIFICAZIONE DETERMINISTICA per client
     client_random_state = RANDOM_SEED + client_id
+
+    # ✅ DIVERSIFICA max_features per aumentare diversity tra alberi
+    # Client con ID pari: 'sqrt'
+    # Client con ID dispari: 'log2'
+    max_features_client = 'sqrt' if client_id % 2 == 0 else 'log2'
+    
+    # ✅ DIVERSIFICA max_depth leggermente per client
+    # Range: 12-18 (invece di fisso 15)
+    max_depth_client = 12 + (client_id % 7) - 1  #Range: 12-18 (7 valori)
+
+    # ✅ DIVERSIFICA min_samples_split
+    # Range: 4-7 (invece di fisso 5)
+    min_samples_split_client = 3 + (client_id % 5) - 1  # Range: 3-7 (5 valori)
     
     # PARAMETRI OTTIMIZZATI PER FEDERATED LEARNING
     model = RandomForestClassifier(
         n_estimators=RF_N_ESTIMATORS,           # Aumentato per diversità
         criterion=RF_CRITERION,                 # Entropy per cybersecurity
-        max_depth=RF_MAX_DEPTH,                 # Limitato contro overfitting
-        min_samples_split=RF_MIN_SAMPLES_SPLIT, # Aumentato contro overfitting
+        max_depth=max_depth_client,              # ✅ DIVERSIFICATO
+        min_samples_split=min_samples_split_client,  # ✅ DIVERSIFICATO
         min_samples_leaf=RF_MIN_SAMPLES_LEAF,   # Aumentato contro overfitting
-        max_features=RF_MAX_FEATURES,           # Feature selection sqrt
+        max_features=max_features_client,        # ✅ DIVERSIFICATO
         bootstrap=RF_BOOTSTRAP,                 # Bootstrap sampling
         random_state=client_random_state,       # ✅ DETERMINISTICA MA DIVERSIFICATA
         n_jobs=-1,                              # Parallelismo
@@ -584,16 +600,17 @@ def create_random_forest_model():
         oob_score=True                          # Out-of-bag validation
     )
     
-    print(f"[Client {client_id}] Parametri Random Forest Ottimizzati:")
+    print(f"[Client {client_id}] Iperparametri diversificati:")
     print(f"  - N. estimatori: {RF_N_ESTIMATORS} (diversificato)")
     print(f"  - Criterio: {RF_CRITERION}")
-    print(f"  - Max depth: {RF_MAX_DEPTH} (contro overfitting)")
-    print(f"  - Min samples split: {RF_MIN_SAMPLES_SPLIT}")
+    print(f"  - Max depth: {max_depth_client} (range 14-17)")
+    print(f"  - Min samples split: {min_samples_split_client} (range 4-6)")
     print(f"  - Min samples leaf: {RF_MIN_SAMPLES_LEAF}")
-    print(f"  - Max features: {RF_MAX_FEATURES}")
+    print(f"  - Max features: {max_features_client} (varia per client)")
     print(f"  - Bootstrap: {RF_BOOTSTRAP}")
     print(f"  - Class weight: {RF_CLASS_WEIGHT}")
     print(f"  - Random state: {RANDOM_SEED + client_id} (diversificato)")
+    print(f"  🎯 MAGGIORE DIVERSITÀ tra client attivata!")
     print(f"  - OOB Score: True")
     
     return model

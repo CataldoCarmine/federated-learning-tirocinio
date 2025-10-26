@@ -2,7 +2,7 @@
 REPORT ANALISI AUTOMATICA - ENHANCED RF DEBUG
 ================================================================================
 
-Timestamp: 20251025_194750
+Timestamp: 20251026_113919
 Numero client: 3
 Round eseguiti: 2
 
@@ -45,24 +45,18 @@ Round eseguiti: 2
 3. SERVER SELECTION CHECK
 ================================================================================
 
-  [Server] 🔍 QUICK CHECK 3 - SELECTION CHECK:
-  Tree 1: acc=0.9020, w_acc=0.8941, div=0.1483, combined=0.6703
-  Tree 2: acc=0.8899, w_acc=0.8841, div=0.1550, combined=0.6654
-  Tree 3: acc=0.8470, w_acc=0.8654, div=0.1857, combined=0.6615
-  Tree 4: acc=0.8497, w_acc=0.8683, div=0.1773, combined=0.6610
-  Tree 5: acc=0.8784, w_acc=0.8642, div=0.1853, combined=0.6605
-  
 
 ================================================================================
 4. VERIFICATION CHECK (Server)
 ================================================================================
 
-  [Server] Client 1 - Alberi con diversity REALE: 100/100
-  [Server] Client 2 - Alberi con diversity REALE: 100/100
   [Server] Client 1 - Alberi con diversity REALE: 150/150
   [Server] Client 2 - Alberi con diversity REALE: 150/150
   [Server] Client 1 - Alberi con diversity REALE: 150/150
   [Server] Client 2 - Alberi con diversity REALE: 150/150
+  [Server] Client 1 - Alberi con diversity REALE: 150/150
+  [Server] Client 2 - Alberi con diversity REALE: 150/150
+  [Server] Client 3 - Alberi con diversity REALE: 150/150
   [Server] Client 1 - Alberi con diversity REALE: 150/150
   [Server] Client 2 - Alberi con diversity REALE: 150/150
   [Server] Client 3 - Alberi con diversity REALE: 150/150

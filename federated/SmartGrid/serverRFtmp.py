@@ -54,7 +54,7 @@ ENSEMBLE_METHOD = 'weighted_voting'           # 'simple_voting' o 'weighted_voti
 MIN_TREES_PER_CLIENT = 5                     # DIMINUITO: per maggiore selettività
 
 # Configurazione Random Forest del server (ottimizzata)
-RF_N_ESTIMATORS = 100      # AUMENTATO: da 65 a 100 per maggiore diversità
+RF_N_ESTIMATORS = 200      # AUMENTATO: da 65 a 100 per maggiore diversità
 RF_MAX_DEPTH = 15         # LIMITATO: da None a 15 per ridurre overfitting
 RF_MIN_SAMPLES_SPLIT = 5  # AUMENTATO: da 2 a 5 per ridurre overfitting
 RF_MIN_SAMPLES_LEAF = 2   # AUMENTATO: da 1 a 2 per ridurre overfitting
@@ -205,7 +205,8 @@ def save_federated_metrics_report(metrics_list):
 def create_smartgrid_features(X_global, client_id='SERVER'):
     """
     Crea feature ingegnerizzate specifiche per il dataset SmartGrid su server.
-    VERSIONE DETERMINISTICA: Garantisce sempre lo stesso numero di feature del client.
+    VERSIONE DETERMINISTICA E ROBUSTA: Garantisce sempre lo stesso numero di feature del client.
+    Previene NaN/Inf con validazione completa.
     """
     if not ENABLE_FEATURE_ENGINEERING:
         return X_global
@@ -213,7 +214,7 @@ def create_smartgrid_features(X_global, client_id='SERVER'):
     # ✅ SEED FISSO per operazioni deterministiche (STESSO DEL CLIENT)
     np.random.seed(RANDOM_SEED)
         
-    print(f"[{client_id}] === FEATURE ENGINEERING SMARTGRID SERVER DETERMINISTICO ===")
+    print(f"[{client_id}] === FEATURE ENGINEERING SMARTGRID SERVER DETERMINISTICO E ROBUSTO ===")
     
     # Copia il dataframe
     df_enhanced = X_global.copy()
@@ -250,8 +251,10 @@ def create_smartgrid_features(X_global, client_id='SERVER'):
     FIXED_MAX_INTERACTIONS = 20
     
     features_added = 0
+    nan_created = 0
+    inf_created = 0
     
-    # 1. STATISTICAL FEATURES con parametri fissi IDENTICI (INVARIATO)
+    # 1. STATISTICAL FEATURES con parametri fissi IDENTICI
     try:
         window_size = min(FIXED_WINDOW_SIZE, len(numeric_cols))
         stat_features_added = 0
@@ -260,19 +263,31 @@ def create_smartgrid_features(X_global, client_id='SERVER'):
             end_idx = min(i + window_size, len(numeric_cols))
             window_data = X[:, i:end_idx]
             
-            # Statistiche finestra con nomi DETERMINISTICI IDENTICI
-            df_enhanced[f'window_{i}_mean'] = np.mean(window_data, axis=1)
-            df_enhanced[f'window_{i}_std'] = np.std(window_data, axis=1)
-            df_enhanced[f'window_{i}_range'] = np.ptp(window_data, axis=1)
-            df_enhanced[f'window_{i}_skew'] = stats.skew(window_data, axis=1)
+            # ✅ Gestione robusta con controllo NaN/Inf
+            mean_val = np.mean(window_data, axis=1)
+            std_val = np.std(window_data, axis=1)
+            range_val = np.ptp(window_data, axis=1)
+            
+            # Calcola skew con gestione errori
+            try:
+                skew_val = stats.skew(window_data, axis=1, nan_policy='propagate')
+                # Sostituisci NaN/Inf con valori sicuri
+                skew_val = np.nan_to_num(skew_val, nan=0.0, posinf=3.0, neginf=-3.0)
+            except:
+                skew_val = np.zeros(len(window_data))
+            
+            df_enhanced[f'window_{i}_mean'] = mean_val
+            df_enhanced[f'window_{i}_std'] = std_val
+            df_enhanced[f'window_{i}_range'] = range_val
+            df_enhanced[f'window_{i}_skew'] = skew_val
             stat_features_added += 4
         
         features_added += stat_features_added
-        print(f"[{client_id}] ✅ Aggiunte {stat_features_added} statistical features DETERMINISTICHE")
+        print(f"[{client_id}] ✅ Aggiunte {stat_features_added} statistical features DETERMINISTICHE E ROBUSTE")
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore statistical features: {e}")
     
-    # 2. RATIO FEATURES con limite FISSO IDENTICO E CREAZIONE FORZATA
+    # 2. RATIO FEATURES con VALIDAZIONE ROBUSTA E CREAZIONE FORZATA
     try:
         n_ratios = 0
         for i in range(0, min(20, len(numeric_cols))):
@@ -294,7 +309,7 @@ def create_smartgrid_features(X_global, client_id='SERVER'):
                 
                 if np.any(valid_mask):
                     ratio_val[valid_mask] = numerator[valid_mask] / denominator[valid_mask]
-                    # Clip per prevenire inf
+                    # ✅ Clip per prevenire inf
                     ratio_val = np.clip(ratio_val, -1e6, 1e6)
                     # Imputa valori non validi con mediana
                     median_ratio = np.median(ratio_val[valid_mask]) if np.sum(valid_mask) > 0 else 0.0
@@ -314,25 +329,32 @@ def create_smartgrid_features(X_global, client_id='SERVER'):
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore ratio features: {e}")
     
-    # 3. ANOMALY INDICATORS con numero FISSO IDENTICO (INVARIATO)
+    # 3. ANOMALY INDICATORS con numero FISSO IDENTICO E VALIDAZIONE ROBUSTA
     try:
         n_zscore = 0
         for i, col in enumerate(numeric_cols[:FIXED_MAX_ANOMALY]):  # ✅ NUMERO FISSO IDENTICO
-            col_mean = df_enhanced[col].mean()
-            col_std = df_enhanced[col].std()
+            col_data = df_enhanced[col].values
+            col_mean = np.mean(col_data)
+            col_std = np.std(col_data)
+            
+            # ✅ VALIDAZIONE: Solo se std > 0
             if col_std > 1e-10:
-                df_enhanced[f'zscore_{i}'] = np.abs((df_enhanced[col] - col_mean) / col_std)
+                zscore_val = np.abs((col_data - col_mean) / col_std)
+                # ✅ Clip valori estremi per prevenire inf
+                zscore_val = np.clip(zscore_val, 0.0, 10.0)
+                df_enhanced[f'zscore_{i}'] = zscore_val
                 n_zscore += 1
             else:
-                df_enhanced[f'zscore_{i}'] = 0.0
+                # Se std = 0, tutti i valori sono costanti → zscore = 0
+                df_enhanced[f'zscore_{i}'] = np.zeros(len(col_data))
                 n_zscore += 1
         
         features_added += n_zscore
-        print(f"[{client_id}] ✅ Aggiunti {n_zscore} anomaly indicators DETERMINISTICI (max {FIXED_MAX_ANOMALY})")
+        print(f"[{client_id}] ✅ Aggiunti {n_zscore} anomaly indicators DETERMINISTICI E ROBUSTI (max {FIXED_MAX_ANOMALY})")
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore anomaly features: {e}")
     
-    # 4. INTERACTION FEATURES con numero FISSO IDENTICO (INVARIATO)
+    # 4. INTERACTION FEATURES con numero FISSO IDENTICO E VALIDAZIONE
     try:
         n_interactions = 0
         for i in range(0, min(10, len(numeric_cols))):
@@ -341,8 +363,11 @@ def create_smartgrid_features(X_global, client_id='SERVER'):
                     break
                     
                 col_i, col_j = numeric_cols[i], numeric_cols[j]
+                
+                # ✅ Calcola prodotto e clip per prevenire overflow
                 interaction = df_enhanced[col_i] * df_enhanced[col_j]
                 interaction = np.clip(interaction, -1e10, 1e10)
+                
                 df_enhanced[f'interact_{i}_{j}'] = interaction
                 n_interactions += 1
             
@@ -350,9 +375,16 @@ def create_smartgrid_features(X_global, client_id='SERVER'):
                 break
         
         features_added += n_interactions
-        print(f"[{client_id}] ✅ Aggiunte {n_interactions} interaction features DETERMINISTICHE (max {FIXED_MAX_INTERACTIONS})")
+        print(f"[{client_id}] ✅ Aggiunte {n_interactions} interaction features DETERMINISTICHE E ROBUSTE (max {FIXED_MAX_INTERACTIONS})")
     except Exception as e:
         print(f"[{client_id}] ⚠️ Errore interaction features: {e}")
+    
+    # ✅ VERIFICA FINALE: Conta NaN/Inf creati
+    new_cols = [col for col in df_enhanced.columns if col not in df_enhanced.columns[:original_features] and col != 'marker']
+    if new_cols:
+        new_data = df_enhanced[new_cols].select_dtypes(include=[np.number])
+        nan_created = new_data.isna().sum().sum()
+        inf_created = np.isinf(new_data.values).sum()
     
     new_features = len(df_enhanced.columns) - original_features
     if 'marker' in df_enhanced.columns:
@@ -363,6 +395,13 @@ def create_smartgrid_features(X_global, client_id='SERVER'):
     print(f"[{client_id}]   Features aggiunte: {new_features}")
     print(f"[{client_id}]   Features totali: {original_features + new_features}")
     print(f"[{client_id}]   Shape finale: {df_enhanced.shape}")
+    print(f"[{client_id}]   ✅ NaN creati: {nan_created} (target: <1000)")
+    print(f"[{client_id}]   ✅ Inf creati: {inf_created} (target: <100)")
+    
+    if nan_created > 1000:
+        print(f"[{client_id}]   ⚠️ ATTENZIONE: Troppi NaN creati dal feature engineering!")
+    if inf_created > 100:
+        print(f"[{client_id}]   ⚠️ ATTENZIONE: Troppi Inf creati dal feature engineering!")
     
     return df_enhanced
 
@@ -673,7 +712,17 @@ def deserialize_trees_from_client_enhanced(parameters):
 def select_best_trees_enhanced(all_trees_data, strategy=TREE_AGGREGATION_STRATEGY, method=TREE_SELECTION_METHOD, max_trees=MAX_TREES_GLOBAL):
     """
     Seleziona i migliori alberi basandosi su ACCURACY + DIVERSITÀ REALI dai client.
-    CORRETTO: Rimuove il riferimento a X_global non definito e usa solo diversity reali.
+    VERSIONE CORRETTA: Usa diversity reali dai client senza X_global non definito.
+    
+    Args:
+        all_trees_data: Lista di liste, ogni elemento contiene gli alberi di un client
+                       Formato albero: (tree, accuracy, weighted_accuracy, diversity_score, client_id)
+        strategy: 'global' o 'per_forest' per strategia di selezione
+        method: 'diversity_weighted', 'weighted_accuracy', o 'accuracy' per metrica di selezione
+        max_trees: Numero massimo di alberi da selezionare globalmente
+        
+    Returns:
+        Lista di alberi selezionati con i loro metadati
     """
     print(f"[Server] === SELEZIONE ALBERI ENHANCED CON ACCURACY + DIVERSITÀ ===")
     print(f"Strategia: {strategy}")
@@ -701,10 +750,10 @@ def select_best_trees_enhanced(all_trees_data, strategy=TREE_AGGREGATION_STRATEG
         print(f"[Server] 🎯 Selezione DIVERSITY-WEIGHTED per ottimizzazione federated learning")
         
         # ALGORITMO DIVERSITY-AWARE SELECTION CORRETTO
-        # Step 1: Seleziona il miglior albero iniziale (per accuracy)
+        # Step 1: Seleziona il miglior albero iniziale (per weighted_accuracy)
         if len(all_trees_flat[0]) >= 4:  # Nuovo formato con diversità
             sorted_by_accuracy = sorted(all_trees_flat, key=lambda x: x[2], reverse=True)  # weighted_accuracy
-        else:  # Formato vecchio
+        else:  # Formato vecchio (fallback)
             sorted_by_accuracy = sorted(all_trees_flat, key=lambda x: x[1], reverse=True)  # accuracy
         
         selected_trees.append(sorted_by_accuracy[0])
@@ -719,49 +768,23 @@ def select_best_trees_enhanced(all_trees_data, strategy=TREE_AGGREGATION_STRATEG
             best_idx = -1
             
             for idx, candidate in enumerate(remaining_trees):
-                # Calcola score combinato: accuracy (70%) + diversity (30%)
-                if len(candidate) >= 4:  # CORRETTO: Ha diversity score REALE
+                # ✅ CORREZIONE PRINCIPALE: Usa SOLO diversity score REALE dal client
+                if len(candidate) >= 4:  # Ha diversity score REALE
                     accuracy_score = candidate[2]  # weighted_accuracy
                     diversity_score = candidate[3]  # diversity_score REALE dal client
-                    # print(f"[Server] 🔍 DEBUG: Candidato {idx} - acc={accuracy_score:.4f}, diversity_REALE={diversity_score:.4f}")
-                else:  # Formato legacy - usa diversità media da altri alberi selezionati
+                else:  # Formato legacy - usa valore neutro
                     accuracy_score = candidate[1]  # accuracy normale
-                    
-                    # CORRETTO: Calcola diversità media rispetto agli alberi già selezionati
-                    diversity_total = 0.0
-                    diversity_count = 0
-                    
-                    for selected in selected_trees:
-                        try:
-                            if len(candidate) >= 4 and len(selected) >= 4:
-                                # CORRETTO: Usa diversity score reale dai client
-                                candidate_diversity = candidate[3]  # diversity_score reale
-                                selected_diversity = selected[3]    # diversity_score reale
-                                
-                                # Calcola diversità combinata (differenza tra diversity scores)
-                                combined_diversity = abs(candidate_diversity - selected_diversity)
-                                diversity_total += combined_diversity
-                                diversity_count += 1
-                            else:
-                                # CORRETTO: Usa valore neutro invece di X_global non definito
-                                diversity_total += 0.25  # Valore neutro per alberi senza diversity
-                                diversity_count += 1
-                        except Exception as e:
-                            print(f"[Server] ⚠️ Errore calcolo diversità: {e}")
-                            diversity_total += 0.25  # Fallback neutro
-                            diversity_count += 1
-                    
-                    diversity_score = diversity_total / diversity_count if diversity_count > 0 else 0.25
-                    # print(f"[Server] 🔍 DEBUG: Candidato {idx} - acc={accuracy_score:.4f}, diversity_CALCOLATA={diversity_score:.4f}")
+                    diversity_score = 0.25  # Valore neutro per alberi senza diversity
                 
-                # Score combinato: 70% accuracy + 30% diversity (basato su letteratura FL)
-                combined_score = 0.7 * accuracy_score + 0.3 * diversity_score
+                # ✅ NUOVO PESO: 60% accuracy + 40% diversity (invece di 70/30)
+                # Aumenta influenza diversity nella selezione
+                combined_score = 0.6 * accuracy_score + 0.4 * diversity_score
                 
-                # DEBUG dettagliato per le prime 10 iterazioni
+                # DEBUG dettagliato solo per le prime 10 iterazioni e primi 10 candidati
                 if iteration < 10 and idx < 10:
                     print(f"[Server] 🔍 DEBUG Albero candidato {idx}:")
                     print(f"  - accuracy_score: {accuracy_score:.4f}")
-                    print(f"  - diversity_score: {diversity_score:.4f} (tipo: {'REALE' if len(candidate) >= 4 else 'CALCOLATO'})")
+                    print(f"  - diversity_score: {diversity_score:.4f} (tipo: {'REALE' if len(candidate) >= 4 else 'NEUTRO'})")
                     print(f"  - combined_score: {combined_score:.4f}")
                 
                 if combined_score > best_score:
@@ -772,7 +795,10 @@ def select_best_trees_enhanced(all_trees_data, strategy=TREE_AGGREGATION_STRATEG
             if best_tree is not None:
                 selected_trees.append(best_tree)
                 remaining_trees.pop(best_idx)
-                print(f"[Server] Albero {len(selected_trees)}: score_combinato={best_score:.4f} (REAL diversity)")
+                
+                # Mostra solo ogni 10 alberi per non saturare i log
+                if len(selected_trees) % 10 == 0 or len(selected_trees) <= 10:
+                    print(f"[Server] Albero {len(selected_trees)}: score_combinato={best_score:.4f} (REAL diversity)")
     
     elif strategy == 'global':
         # Selezione globale standard (per compatibilità)
@@ -827,14 +853,15 @@ def select_best_trees_enhanced(all_trees_data, strategy=TREE_AGGREGATION_STRATEG
     
     print(f"[Server] ✅ Alberi selezionati totali: {len(selected_trees)} (metodo ENHANCED: {method})")
     
-    # ✅ QUICK CHECK 3: SELECTION CHECK
+    # ✅ QUICK CHECK 3: SELECTION CHECK (mostra solo i primi 5)
     if selected_trees and len(selected_trees) >= 5:
-        print(f"\n[Server] 🔍 QUICK CHECK 3 - SELECTION CHECK:")
+        print(f"\n[Server] 🔍 QUICK CHECK 3 - SELECTION CHECK (primi 5):")
         for i in range(min(5, len(selected_trees))):
             tree_data = selected_trees[i]
-            _, acc, w_acc, div = tree_data[:4]
-            combined = 0.7 * w_acc + 0.3 * div
-            print(f"  Tree {i+1}: acc={acc:.4f}, w_acc={w_acc:.4f}, div={div:.4f}, combined={combined:.4f}")
+            if len(tree_data) >= 4:
+                _, acc, w_acc, div = tree_data[:4]
+                combined = 0.6 * w_acc + 0.4 * div
+                print(f"  Tree {i+1}: acc={acc:.4f}, w_acc={w_acc:.4f}, div={div:.4f}, combined={combined:.4f}")
     
     # Statistiche finali CORRETTE
     if selected_trees:
@@ -842,10 +869,15 @@ def select_best_trees_enhanced(all_trees_data, strategy=TREE_AGGREGATION_STRATEG
         final_w_accuracies = [t[2] for t in selected_trees]
         final_diversities = [t[3] if len(t) >= 4 else 0.0 for t in selected_trees]
         
-        print(f"\n[Server] Accuracy finali: min={min(final_accuracies):.4f}, max={max(final_accuracies):.4f}, media={np.mean(final_accuracies):.4f}")
-        print(f"[Server] Weighted accuracy finali: min={min(final_w_accuracies):.4f}, max={max(final_w_accuracies):.4f}, media={np.mean(final_w_accuracies):.4f}")
-        print(f"[Server] Diversity scores finali: min={min(final_diversities):.4f}, max={max(final_diversities):.4f}, media={np.mean(final_diversities):.4f}")
-        print(f"[Server] 🎯 UTILIZZO DIVERSITY REALI DAI CLIENT per selezione ottimale!")
+        print(f"\n[Server] 📊 Statistiche Finali Alberi Selezionati:")
+        print(f"[Server] Accuracy: min={min(final_accuracies):.4f}, max={max(final_accuracies):.4f}, media={np.mean(final_accuracies):.4f}")
+        print(f"[Server] Weighted accuracy: min={min(final_w_accuracies):.4f}, max={max(final_w_accuracies):.4f}, media={np.mean(final_w_accuracies):.4f}")
+        print(f"[Server] Diversity scores: min={min(final_diversities):.4f}, max={max(final_diversities):.4f}, media={np.mean(final_diversities):.4f}")
+        
+        # Conta alberi con diversity reale
+        real_diversity_count = sum(1 for d in final_diversities if d > 0.0)
+        print(f"[Server] 🎯 Alberi con DIVERSITY REALE: {real_diversity_count}/{len(selected_trees)}")
+        print(f"[Server] ✅ UTILIZZO DIVERSITY REALI DAI CLIENT per selezione ottimale!")
     
     return selected_trees
 
