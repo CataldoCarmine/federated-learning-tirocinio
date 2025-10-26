@@ -219,13 +219,21 @@ def create_smartgrid_features(X_global, client_id='SERVER'):
     # Copia il dataframe
     df_enhanced = X_global.copy()
     
-    # Gestisci sia il caso con che senza colonna marker
-    if 'marker' in df_enhanced.columns:
-        original_features = len(df_enhanced.columns) - 1  # -1 per 'marker'
-        feature_cols = [col for col in df_enhanced.columns if col != 'marker']
+    # ✅ CORREZIONE: Gestisci solo caso DataFrame SENZA marker
+    # (il server non ha mai la colonna marker nel dataset di test)
+    if isinstance(df_enhanced, pd.DataFrame):
+        if 'marker' in df_enhanced.columns:
+            # Caso con marker (non dovrebbe mai succedere sul server)
+            original_features = len(df_enhanced.columns) - 1
+            feature_cols = [col for col in df_enhanced.columns if col != 'marker']
+        else:
+            # Caso normale server: nessuna colonna marker
+            original_features = len(df_enhanced.columns)
+            feature_cols = list(df_enhanced.columns)
     else:
-        original_features = len(df_enhanced.columns)
-        feature_cols = list(df_enhanced.columns)
+        # Caso numpy array
+        original_features = df_enhanced.shape[1]
+        feature_cols = list(range(original_features))
     
     print(f"[{client_id}] 🔍 DEBUG FEATURE ENGINEERING DETERMINISTICO:")
     print(f"[{client_id}]   DataFrame shape iniziale: {df_enhanced.shape}")
@@ -502,10 +510,9 @@ def apply_preprocessing_pipeline(X_global):
         
     # STEP 0: Feature Engineering per SmartGrid (PRIMA del preprocessing)
     if ENABLE_FEATURE_ENGINEERING:
-        # Aggiungi colonna marker temporanea per compatibilità con create_smartgrid_features
-        X_global['marker'] = 'Natural'  # Valore dummy
+        # ✅ CORREZIONE: NON aggiungere marker dummy
+        # La funzione create_smartgrid_features deve gestire il caso senza marker
         X_global_enhanced = create_smartgrid_features(X_global, 'SERVER')
-        X_global_enhanced = X_global_enhanced.drop(columns=['marker'])  # Rimuovi marker dummy
     else:
         X_global_enhanced = X_global
     
@@ -997,8 +1004,8 @@ def get_smartgrid_random_forest_evaluate_fn():
     
     def load_global_test_data():
         """
-        Carica un dataset globale di test per la valutazione del server.
-        AGGIORNATO: Usa preprocessing ottimizzato identico ai client.
+        Carica dataset globale di test SENZA preprocessing pesante.
+        CORREZIONE: Applica solo pulizia minima per evitare incompatibilità.
         """
         set_reproducibility_seeds()
 
@@ -1012,7 +1019,7 @@ def get_smartgrid_random_forest_evaluate_fn():
 
         for client_id in test_clients:
             file_path = os.path.join(script_dir, "..", "..", "data", "SmartGrid", f"data{client_id}.csv")
-    
+
             try:
                 df = pd.read_csv(file_path)
                 df_list.append(df)
@@ -1034,11 +1041,11 @@ def get_smartgrid_random_forest_evaluate_fn():
         # Combina i dataframe
         df_global = pd.concat(df_list, ignore_index=True)
         
-        # Prepara X e y (mantiene distribuzione naturale)
+        # Prepara X e y
         X_global = df_global.drop(columns=["marker"])
         y_global = (df_global["marker"] != "Natural").astype(int)
         
-        # Statistiche distribuzione naturale globale
+        # Statistiche distribuzione
         attack_samples = y_global.sum()
         natural_samples = (y_global == 0).sum()
         attack_ratio = y_global.mean()
@@ -1046,10 +1053,48 @@ def get_smartgrid_random_forest_evaluate_fn():
         print(f"Dataset test globale: {len(df_global)} campioni")
         print(f"Distribuzione: {attack_samples} attacchi ({attack_ratio*100:.1f}%), {natural_samples} naturali")
         
-        # Applica pipeline preprocessing ottimizzata identica ai client
-        X_global_final = apply_preprocessing_pipeline(X_global)
+        # ✅ CORREZIONE: Applica SOLO pulizia minima identica ai client
+        # NO imputazione, NO scaling, NO remove constants
+        # SOLO feature engineering + pulizia inf/nan base
         
-        print(f"Dataset preprocessato OTTIMIZZATO: {len(X_global_final)} campioni, {X_global_final.shape[1]} feature")
+        print(f"[Server] Applicazione preprocessing MINIMALE per compatibilità...")
+        
+        # Feature Engineering (se abilitato)
+        if ENABLE_FEATURE_ENGINEERING:
+            X_global_fe = create_smartgrid_features(X_global, 'SERVER')
+        else:
+            X_global_fe = X_global
+        
+        # Pulizia inf/nan MINIMA (come i client)
+        X_array = X_global_fe.values if hasattr(X_global_fe, 'values') else X_global_fe
+        X_array = np.where(np.isinf(X_array), np.nan, X_array)
+        
+        # Gestisci infiniti con percentili (come client)
+        inf_mask = np.isinf(X_array)
+        if np.any(inf_mask):
+            for col in range(X_array.shape[1]):
+                col_data = X_array[:, col]
+                finite_mask = np.isfinite(col_data)
+                if np.any(finite_mask):
+                    percentile_99 = np.percentile(col_data[finite_mask], 99.9)
+                    percentile_01 = np.percentile(col_data[finite_mask], 0.1)
+                    X_array[np.isposinf(col_data), col] = percentile_99
+                    X_array[np.isneginf(col_data), col] = percentile_01
+                else:
+                    X_array[:, col] = 0.0
+        
+        # Imputa NaN con mediana LOCALE (non fittiamo imputer)
+        for col in range(X_array.shape[1]):
+            col_data = X_array[:, col]
+            nan_mask = np.isnan(col_data)
+            if np.any(nan_mask):
+                median_val = np.nanmedian(col_data)
+                X_array[nan_mask, col] = median_val if not np.isnan(median_val) else 0.0
+        
+        X_global_final = X_array
+        
+        print(f"Dataset preprocessato MINIMALE: {len(X_global_final)} campioni, {X_global_final.shape[1]} feature")
+        print(f"⚠️ NO IMPUTAZIONE FITTIATA, NO SCALING, NO REMOVE CONSTANTS per evitare distribution shift")
         
         return X_global_final, y_global, {
             'total_samples': len(df_global),
