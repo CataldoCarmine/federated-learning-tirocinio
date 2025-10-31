@@ -27,7 +27,7 @@ RANDOM_SEED = 42
 # ============== FLAGS GLOBALI PER CONTROLLO PREPROCESSING OTTIMIZZATO ==============
 ENABLE_CLEAN_INF_NAN = True           # Pulizia inf/NaN
 ENABLE_CLIPPING_OUTLIERS = False       # Clipping outlier per quantili (IQR)
-ENABLE_IMPUTATION = True              # Imputazione mediana
+ENABLE_IMPUTATION = False              # Imputazione mediana
 ENABLE_SCALING = False                 # ABILITATO: StandardScaler (mean=0, std=1) 
 ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # ABILITATO: Rimozione feature quasi-costanti
 ENABLE_PCA = False                    # PCA per riduzione dimensionalità
@@ -47,21 +47,21 @@ if ENABLE_PCA == False and not ENABLE_FEATURE_ENGINEERING:
 
 # ============== CONFIGURAZIONE RANDOM FOREST GLOBALE OTTIMIZZATA ==============
 # Configurazione aggregazione alberi (basata su ricerca recente)
-TREE_SELECTION_METHOD = 'diversity_weighted'  # AGGIORNATO: 'accuracy', 'weighted_accuracy', 'diversity_weighted'
+TREE_SELECTION_METHOD = 'weighted_accuracy'  # AGGIORNATO: 'accuracy', 'weighted_accuracy', 'diversity_weighted'
 TREE_AGGREGATION_STRATEGY = 'global'          # CAMBIATO: 'per_forest' o 'global' 
-MAX_TREES_GLOBAL = 150                        # AUMENTATO: da 100 a 150
+MAX_TREES_GLOBAL = 100                        # AUMENTATO: da 100 a 150
 ENSEMBLE_METHOD = 'weighted_voting'           # 'simple_voting' o 'weighted_voting'
-MIN_TREES_PER_CLIENT = 5                     # DIMINUITO: per maggiore selettività
+MIN_TREES_PER_CLIENT = 10                     # DIMINUITO: per maggiore selettività
 
 # Configurazione Random Forest del server (ottimizzata)
-RF_N_ESTIMATORS = 200      # AUMENTATO: da 65 a 100 per maggiore diversità
-RF_MAX_DEPTH = 15         # LIMITATO: da None a 15 per ridurre overfitting
-RF_MIN_SAMPLES_SPLIT = 5  # AUMENTATO: da 2 a 5 per ridurre overfitting
-RF_MIN_SAMPLES_LEAF = 2   # AUMENTATO: da 1 a 2 per ridurre overfitting
+RF_N_ESTIMATORS = 100      # AUMENTATO: da 65 a 100 per maggiore diversità
+RF_MAX_DEPTH = None         # LIMITATO: da None a 15 per ridurre overfitting
+RF_MIN_SAMPLES_SPLIT = 2  # AUMENTATO: da 2 a 5 per ridurre overfitting
+RF_MIN_SAMPLES_LEAF = 1   # AUMENTATO: da 1 a 2 per ridurre overfitting
 RF_MAX_FEATURES = 'sqrt'  # Feature da considerare per ogni split ('sqrt' dal paper)
 RF_BOOTSTRAP = True       # Usa bootstrap sampling
-RF_CLASS_WEIGHT = 'balanced_subsample'  # CAMBIATO: migliore per federated learning
-RF_CRITERION = 'entropy'  # Criterio di splitting (dal paper: entropy migliore di gini per molti dataset)
+RF_CLASS_WEIGHT = 'balanced'  # CAMBIATO: migliore per federated learning
+RF_CRITERION = 'gini'  # Criterio di splitting (dal paper: entropy migliore di gini per molti dataset)
 
 NUM_ROUNDS = 50  # Numero di round di addestramento federato
 
@@ -488,83 +488,44 @@ def apply_pca(X_preprocessed):
 
 def apply_preprocessing_pipeline(X_global):
     """
-    Applica la stessa pipeline di preprocessing dei client sui dati globali del server.
-    CORREZIONE: Applica feature engineering nella stessa sequenza dei client.
+    Preprocessing minimale per Random Forest sul server.
+    VERSIONE STABILE: Solo pulizia inf, nessuna imputazione.
     """
     set_reproducibility_seeds()
 
-    print(f"[Server] === PIPELINE PREPROCESSING SERVER OTTIMIZZATA ===")
-    print(f"Feature engineering: {'ABILITATA' if ENABLE_FEATURE_ENGINEERING else 'DISABILITATA'}")
-    print(f"Pulizia inf/NaN: {'ABILITATA' if ENABLE_CLEAN_INF_NAN else 'DISABILITATA'}")
-    print(f"Clipping outlier: {'ABILITATA' if ENABLE_CLIPPING_OUTLIERS else 'DISABILITATA'}")
-    print(f"Imputazione mediana: {'ABILITATA' if ENABLE_IMPUTATION else 'DISABILITATA'}")
-    print(f"Rimozione feature quasi-costanti: {'ABILITATA' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else 'DISABILITATA'}")
-    print(f"Scaling standard: {'ABILITATA' if ENABLE_SCALING else 'DISABILITATA'}")
-    print(f"PCA: {'ABILITATA' if ENABLE_PCA else 'DISABILITATA'}")
+    print(f"[Server] === PIPELINE PREPROCESSING SERVER - VERSIONE MINIMALE ===")
+    print(f"Pulizia inf: ABILITATA")
+    print(f"Feature engineering: DISABILITATA")
+    print(f"Imputazione: DISABILITATA (RF gestisce NaN)")
 
-    # ===== SEQUENZA IDENTICA AI CLIENT =====
+    # Converti in array
+    if isinstance(X_global, pd.DataFrame):
+        X_global = X_global.values
     
-    # Converti in DataFrame se necessario per feature engineering
-    if isinstance(X_global, np.ndarray):
-        X_global = pd.DataFrame(X_global)
-        
-    # STEP 0: Feature Engineering per SmartGrid (PRIMA del preprocessing)
-    if ENABLE_FEATURE_ENGINEERING:
-        # ✅ CORREZIONE: NON aggiungere marker dummy
-        # La funzione create_smartgrid_features deve gestire il caso senza marker
-        X_global_enhanced = create_smartgrid_features(X_global, 'SERVER')
-    else:
-        X_global_enhanced = X_global
+    # SOLO pulizia inf
+    X_array = np.array(X_global, dtype=float)
+    X_array = np.where(np.isinf(X_array), np.nan, X_array)
     
-    # STEP 1: Pulizia inf/NaN
-    if ENABLE_CLEAN_INF_NAN:
-        X_cleaned = clean_data_for_pca(X_global_enhanced)
-    else:
-        X_cleaned = X_global_enhanced.values if hasattr(X_global_enhanced, 'values') else X_global_enhanced
-        
-    # STEP 2: Clipping outlier feature-wise
-    if ENABLE_CLIPPING_OUTLIERS:
-        X_np = np.array(X_cleaned, dtype=float)
-        lower, upper = fit_clip_outliers_iqr(X_np, k=5.0)
-        X_clipped = transform_clip_outliers_iqr(X_np, lower, upper)
-    else:
-        X_clipped = X_cleaned
-
-    # STEP 3: Imputazione mediana
-    if ENABLE_IMPUTATION:
-        imputer = SimpleImputer(strategy='median')
-        X_imputed = imputer.fit_transform(X_clipped)
-    else:
-        X_imputed = X_clipped
-
-    # STEP 4: Rimozione feature quasi-costanti
-    if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES:
-        X_reduced, keep_mask = remove_near_constant_features(X_imputed, threshold_var=1e-12, threshold_ratio=0.999)
-        print(f"[Server] Feature dopo rimozione quasi-costanti: {X_reduced.shape[1]} (da {X_imputed.shape[1]})")
-    else:
-        X_reduced = X_imputed
-        print(f"[Server] Rimozione feature quasi-costanti DISABILITATA - mantenute {X_reduced.shape[1]} feature")
+    # Gestisci infiniti
+    inf_mask = np.isinf(X_array)
+    if np.any(inf_mask):
+        for col in range(X_array.shape[1]):
+            col_data = X_array[:, col]
+            finite_mask = np.isfinite(col_data)
+            if np.any(finite_mask):
+                percentile_99 = np.percentile(col_data[finite_mask], 99.9)
+                percentile_01 = np.percentile(col_data[finite_mask], 0.1)
+                X_array[np.isposinf(col_data), col] = percentile_99
+                X_array[np.isneginf(col_data), col] = percentile_01
+            else:
+                X_array[:, col] = 0.0
     
-    # STEP 5: Scaling standard
-    if ENABLE_SCALING:
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X_reduced)
-        print(f"[Server] Scaling standard applicato")
-    else:
-        X_scaled = X_reduced
-        print(f"[Server] Scaling DISABILITATO")
-
-    # STEP 6: PCA (se abilitata)
-    if ENABLE_PCA:
-        X_global_final = apply_pca(X_scaled)
-        if X_global_final.shape[1] != PCA_COMPONENTS:
-            raise RuntimeError(f"❌ Server PCA output shape inconsistente: {X_global_final.shape[1]} vs {PCA_COMPONENTS}")
-        print(f"[Server] ✅ Pipeline preprocessing con PCA completata")
-    else:
-        X_global_final = X_scaled
-        print(f"[Server] ✅ Pipeline preprocessing OTTIMIZZATA completata")
+    X_global_final = X_array
     
-    print(f"[Server] Risultato finale: {X_global_final.shape}")
+    nan_count = np.isnan(X_global_final).sum()
+    print(f"[Server] Preprocessing completato: {X_global_final.shape}")
+    print(f"[Server] NaN residui: {nan_count} (gestiti da RF)")
+    
     return X_global_final
 
 def calculate_tree_diversity_server(tree1, tree2, X_sample):
@@ -591,11 +552,10 @@ def calculate_tree_diversity_server(tree1, tree2, X_sample):
 
 def deserialize_trees_from_client_enhanced(parameters):
     """
-    Deserializza gli alberi ricevuti da un client CON ACCURACY + DIVERSITÀ REALI.
-    CORRETTO: Aggiunge i log di verifica mancanti.
+    Deserializza gli alberi ricevuti da un client CON WEIGHTED ACCURACY REALI.
+    VERSIONE STABILE: Formato semplificato.
     """
     try:
-        # Gestisce diversi tipi di parametri da Flower
         if hasattr(parameters, 'tensors'):
             parameter_arrays = parameters.tensors
         elif isinstance(parameters, list): 
@@ -607,142 +567,80 @@ def deserialize_trees_from_client_enhanced(parameters):
             print(f"[Server] ⚠️ Nessun parametro ricevuto dal client")
             return []
         
-        print(f"[Server] Ricevuti {len(parameter_arrays)} parametri ENHANCED dal client")
+        print(f"[Server] Ricevuti {len(parameter_arrays)} parametri dal client")
         
         deserialized_trees = []
         
         for i, param_data in enumerate(parameter_arrays):
             try:
-                print(f"[Server] Elaborazione parametro ENHANCED {i+1}/{len(parameter_arrays)}: tipo={type(param_data)}")
-                
                 # Gestisce formato NumPy di Flower
                 if isinstance(param_data, bytes):
                     if param_data.startswith(b'\x93NUMPY'):
-                        print(f"[Server] Rilevato formato NumPy ENHANCED da Flower")
                         from io import BytesIO
                         tree_array = np.load(BytesIO(param_data))
-                        print(f"[Server] Array NumPy ENHANCED caricato: shape={tree_array.shape}, dtype={tree_array.dtype}")
                         tree_bytes = tree_array.tobytes()
-                        print(f"[Server] Convertito in bytes per pickle: {len(tree_bytes)} bytes")
                     else:
                         tree_bytes = param_data
-                        print(f"[Server] Bytes diretti ENHANCED ricevuti: {len(tree_bytes)} bytes")
-                
                 elif isinstance(param_data, np.ndarray):
                     tree_bytes = param_data.tobytes()
-                    print(f"[Server] Convertito numpy array ENHANCED in bytes: {len(tree_bytes)} bytes")
                 else:
-                    print(f"[Server] ⚠️ Parametro {i+1} ignorato (tipo non compatibile: {type(param_data)})")
+                    print(f"[Server] ⚠️ Parametro {i+1} ignorato")
                     continue
 
-                # Deserializza dizionario completo con accuracy + diversità
                 tree_data = pickle.loads(tree_bytes)
-                print(f"[Server] Oggetto ENHANCED deserializzato tipo: {type(tree_data)}")
 
-                # Verifica se è il nuovo formato ENHANCED con accuracy + diversità
-                if isinstance(tree_data, dict) and 'tree' in tree_data and 'accuracy_type' in tree_data:
-                    if tree_data['accuracy_type'] in ['REAL_ENHANCED', 'REAL']:
-                        tree = tree_data['tree']
-                        accuracy_real = tree_data['accuracy']
-                        weighted_accuracy_real = tree_data['weighted_accuracy']
-                        
-                        # Estrae diversity score se disponibile (nuovo formato)
-                        diversity_score = tree_data.get('diversity_score', 0.0)
-                        client_id = tree_data.get('client_id', 0)
-                        
-                        # Verifica che sia un albero valido
-                        if hasattr(tree, 'predict') and hasattr(tree, 'tree_'):
-                            deserialized_trees.append((tree, accuracy_real, weighted_accuracy_real, diversity_score, client_id))
-                            
-                            # AGGIUNTO: Conferma ricezione diversity REALE
-                            if tree_data['accuracy_type'] == 'REAL_ENHANCED':
-                                print(f"[Server] ✅ Ricevuto albero ENHANCED con diversity REALE: {diversity_score:.4f}")
-                            else:
-                                print(f"[Server] ⚠️ Albero senza diversity REALE, formato: {tree_data.get('accuracy_type', 'UNKNOWN')}")
-                            
-                            print(f"[Server] ✅ Albero {i+1} ENHANCED: acc={accuracy_real:.4f}, w_acc={weighted_accuracy_real:.4f}, div={diversity_score:.4f}, client={client_id}")
-                        else:
-                            print(f"[Server] ⚠️ Oggetto {i+1} non è un albero valido")
-                    else:
-                        print(f"[Server] ⚠️ Albero {i+1} formato non supportato: {tree_data.get('accuracy_type', 'UNKNOWN')}")
-                        
-                # Fallback per compatibilità con formato standard
-                elif isinstance(tree_data, dict) and 'tree' in tree_data and tree_data.get('accuracy_type') == 'REAL':
+                # Formato con weighted accuracy
+                if isinstance(tree_data, dict) and 'tree' in tree_data:
                     tree = tree_data['tree']
-                    accuracy_real = tree_data['accuracy']
-                    weighted_accuracy_real = tree_data['weighted_accuracy']
+                    accuracy_real = tree_data.get('accuracy', 0.0)
+                    weighted_accuracy_real = tree_data.get('weighted_accuracy', 0.0)
+                    client_id = tree_data.get('client_id', 0)
                     
                     if hasattr(tree, 'predict') and hasattr(tree, 'tree_'):
-                        # Diversity score = 0 per compatibilità
-                        deserialized_trees.append((tree, accuracy_real, weighted_accuracy_real, 0.0, 0))
-                        print(f"[Server] ✅ Albero {i+1} STANDARD: acc={accuracy_real:.4f}, w_acc={weighted_accuracy_real:.4f}")
-                    
-                # Fallback per formato vecchio
+                        # ✅ Formato semplificato: (tree, accuracy, weighted_accuracy, client_id)
+                        deserialized_trees.append((tree, accuracy_real, weighted_accuracy_real, client_id))
+                        
+                        if i < 3:
+                            print(f"[Server] Albero {i+1}: acc={accuracy_real:.4f}, w_acc={weighted_accuracy_real:.4f}")
+                
+                # Fallback formato vecchio
                 elif hasattr(tree_data, 'predict') and hasattr(tree_data, 'tree_'):
-                    print(f"[Server] ⚠️ Albero {i+1} in formato vecchio, uso accuracy simulate")
                     simulated_accuracy = max(0.8, 0.95 - (i * 0.002))
                     simulated_weighted_acc = max(0.75, 0.94 - (i * 0.002))
-                    deserialized_trees.append((tree_data, simulated_accuracy, simulated_weighted_acc, 0.0, 0))
-                else:
-                    print(f"[Server] ⚠️ Formato dati non riconosciuto per parametro {i+1}")
+                    deserialized_trees.append((tree_data, simulated_accuracy, simulated_weighted_acc, 0))
 
             except Exception as e:
-                print(f"[Server] ❌ Errore nella deserializzazione parametro ENHANCED {i+1}: {e}")
-                import traceback
-                traceback.print_exc()
+                print(f"[Server] ❌ Errore deserializzazione {i+1}: {e}")
                 continue
 
-        print(f"[Server] Deserializzati {len(deserialized_trees)} alberi ENHANCED validi su {len(parameter_arrays)}")
+        print(f"[Server] Deserializzati {len(deserialized_trees)} alberi validi")
         
-        # AGGIUNTO: VERIFICHE MANCANTI per accuracy + diversità reali
         if deserialized_trees:
-            real_accuracies = [t[1] for t in deserialized_trees]
-            real_w_accuracies = [t[2] for t in deserialized_trees]
-            diversity_scores = [t[3] for t in deserialized_trees]
-            
-            print(f"[Server] ✅ VERIFICATION: Accuracy REALI ricevute: min={min(real_accuracies):.4f}, max={max(real_accuracies):.4f}, media={np.mean(real_accuracies):.4f}")
-            print(f"[Server] ✅ VERIFICATION: Weighted accuracy REALI: min={min(real_w_accuracies):.4f}, max={max(real_w_accuracies):.4f}, media={np.mean(real_w_accuracies):.4f}")
-            print(f"[Server] ✅ VERIFICATION: Diversity scores: min={min(diversity_scores):.4f}, max={max(diversity_scores):.4f}, media={np.mean(diversity_scores):.4f}")
-            
-            # Conta alberi con diversity reali
-            enhanced_trees = sum(1 for t in deserialized_trees if len(t) >= 4 and t[3] > 0.0)
-            print(f"[Server] ✅ VERIFICATION: Alberi con diversity REALE: {enhanced_trees}/{len(deserialized_trees)}")
+            accuracies = [t[1] for t in deserialized_trees]
+            w_accuracies = [t[2] for t in deserialized_trees]
+            print(f"[Server] Accuracy: min={min(accuracies):.4f}, max={max(accuracies):.4f}, media={np.mean(accuracies):.4f}")
+            print(f"[Server] Weighted acc: min={min(w_accuracies):.4f}, max={max(w_accuracies):.4f}, media={np.mean(w_accuracies):.4f}")
         
         return deserialized_trees
         
     except Exception as e:
-        print(f"[Server] ❌ Errore nella deserializzazione ENHANCED: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"[Server] ❌ Errore deserializzazione: {e}")
         return []
 
 def select_best_trees_enhanced(all_trees_data, strategy=TREE_AGGREGATION_STRATEGY, method=TREE_SELECTION_METHOD, max_trees=MAX_TREES_GLOBAL):
     """
-    Seleziona i migliori alberi basandosi su ACCURACY + DIVERSITÀ REALI dai client.
-    VERSIONE CORRETTA: Usa diversity reali dai client senza X_global non definito.
-    
-    Args:
-        all_trees_data: Lista di liste, ogni elemento contiene gli alberi di un client
-                       Formato albero: (tree, accuracy, weighted_accuracy, diversity_score, client_id)
-        strategy: 'global' o 'per_forest' per strategia di selezione
-        method: 'diversity_weighted', 'weighted_accuracy', o 'accuracy' per metrica di selezione
-        max_trees: Numero massimo di alberi da selezionare globalmente
-        
-    Returns:
-        Lista di alberi selezionati con i loro metadati
+    Seleziona i migliori alberi basandosi su WEIGHTED ACCURACY REALI.
+    VERSIONE STABILE: Selezione diretta senza diversity.
     """
-    print(f"[Server] === SELEZIONE ALBERI ENHANCED CON ACCURACY + DIVERSITÀ ===")
+    print(f"[Server] === SELEZIONE ALBERI - WEIGHTED ACCURACY ===")
     print(f"Strategia: {strategy}")
-    print(f"Metodo: {method}")
     print(f"Max alberi globale: {max_trees}")
     
     if not all_trees_data:
         print(f"[Server] ⚠️ Nessun dato alberi ricevuto")
         return []
     
-    selected_trees = []
-    
-    # Prepara pool globale di tutti gli alberi
+    # Pool globale
     all_trees_flat = []
     for client_trees in all_trees_data:
         all_trees_flat.extend(client_trees)
@@ -753,138 +651,50 @@ def select_best_trees_enhanced(all_trees_data, strategy=TREE_AGGREGATION_STRATEG
     
     print(f"[Server] Pool globale: {len(all_trees_flat)} alberi da {len(all_trees_data)} client")
     
-    if method == 'diversity_weighted':
-        print(f"[Server] 🎯 Selezione DIVERSITY-WEIGHTED per ottimizzazione federated learning")
+    # Selezione semplice per weighted accuracy
+    if strategy == 'global':
+        # Ordina per weighted accuracy (indice 2)
+        sorted_trees = sorted(all_trees_flat, key=lambda x: x[2], reverse=True)
+        selected_trees = sorted_trees[:max_trees]
         
-        # ALGORITMO DIVERSITY-AWARE SELECTION CORRETTO
-        # Step 1: Seleziona il miglior albero iniziale (per weighted_accuracy)
-        if len(all_trees_flat[0]) >= 4:  # Nuovo formato con diversità
-            sorted_by_accuracy = sorted(all_trees_flat, key=lambda x: x[2], reverse=True)  # weighted_accuracy
-        else:  # Formato vecchio (fallback)
-            sorted_by_accuracy = sorted(all_trees_flat, key=lambda x: x[1], reverse=True)  # accuracy
-        
-        selected_trees.append(sorted_by_accuracy[0])
-        remaining_trees = sorted_by_accuracy[1:]
-        
-        print(f"[Server] Albero iniziale selezionato: acc={sorted_by_accuracy[0][1]:.4f}, w_acc={sorted_by_accuracy[0][2]:.4f}")
-        
-        # Step 2: Selezione iterativa basata su accuracy + diversità REALI
-        for iteration in range(min(max_trees - 1, len(remaining_trees))):
-            best_score = -1
-            best_tree = None
-            best_idx = -1
-            
-            for idx, candidate in enumerate(remaining_trees):
-                # ✅ CORREZIONE PRINCIPALE: Usa SOLO diversity score REALE dal client
-                if len(candidate) >= 4:  # Ha diversity score REALE
-                    accuracy_score = candidate[2]  # weighted_accuracy
-                    diversity_score = candidate[3]  # diversity_score REALE dal client
-                else:  # Formato legacy - usa valore neutro
-                    accuracy_score = candidate[1]  # accuracy normale
-                    diversity_score = 0.25  # Valore neutro per alberi senza diversity
-                
-                # ✅ NUOVO PESO: 60% accuracy + 40% diversity (invece di 70/30)
-                # Aumenta influenza diversity nella selezione
-                combined_score = 0.6 * accuracy_score + 0.4 * diversity_score
-                
-                # DEBUG dettagliato solo per le prime 10 iterazioni e primi 10 candidati
-                if iteration < 10 and idx < 10:
-                    print(f"[Server] 🔍 DEBUG Albero candidato {idx}:")
-                    print(f"  - accuracy_score: {accuracy_score:.4f}")
-                    print(f"  - diversity_score: {diversity_score:.4f} (tipo: {'REALE' if len(candidate) >= 4 else 'NEUTRO'})")
-                    print(f"  - combined_score: {combined_score:.4f}")
-                
-                if combined_score > best_score:
-                    best_score = combined_score
-                    best_tree = candidate
-                    best_idx = idx
-            
-            if best_tree is not None:
-                selected_trees.append(best_tree)
-                remaining_trees.pop(best_idx)
-                
-                # Mostra solo ogni 10 alberi per non saturare i log
-                if len(selected_trees) % 10 == 0 or len(selected_trees) <= 10:
-                    print(f"[Server] Albero {len(selected_trees)}: score_combinato={best_score:.4f} (REAL diversity)")
-    
-    elif strategy == 'global':
-        # Selezione globale standard (per compatibilità)
-        if all_trees_flat:
-            # Ordina per metodo specificato
-            if method == 'weighted_accuracy':
-                metric_idx = 2
-            elif method == 'accuracy':
-                metric_idx = 1
-            else:  # fallback
-                metric_idx = 2
-                
-            sorted_trees = sorted(all_trees_flat, key=lambda x: x[metric_idx], reverse=True)
-            selected_trees = sorted_trees[:max_trees]
-            
-            if selected_trees:
-                best_score = selected_trees[0][metric_idx]
-                worst_score = selected_trees[-1][metric_idx]
-                print(f"[Server] Selezione globale standard: {len(selected_trees)} alberi")
-                print(f"[Server] Range {method}: {worst_score:.4f} - {best_score:.4f}")
+        if selected_trees:
+            best_w_acc = selected_trees[0][2]
+            worst_w_acc = selected_trees[-1][2]
+            print(f"[Server] Selezione globale: {len(selected_trees)} alberi")
+            print(f"[Server] Weighted accuracy range: {worst_w_acc:.4f} - {best_w_acc:.4f}")
     
     elif strategy == 'per_forest':
-        # Selezione per forest (distributiva tra client)
+        # Selezione distributiva
+        selected_trees = []
         trees_per_client = max_trees // len(all_trees_data)
         remaining_trees = max_trees % len(all_trees_data)
         
-        print(f"[Server] Seleziono {trees_per_client} alberi per client ({len(all_trees_data)} client)")
+        print(f"[Server] Seleziono {trees_per_client} alberi per client")
         
         for client_idx, client_trees in enumerate(all_trees_data):
             if not client_trees:
                 continue
-                
-            # Ordina gli alberi del client
-            if method == 'diversity_weighted' and len(client_trees[0]) >= 4:
-                # Usa score combinato per client con diversity REALI
-                sorted_trees = sorted(client_trees, key=lambda x: 0.7 * x[2] + 0.3 * x[3], reverse=True)
-            elif method == 'weighted_accuracy':
-                sorted_trees = sorted(client_trees, key=lambda x: x[2], reverse=True)
-            else:  # accuracy
-                sorted_trees = sorted(client_trees, key=lambda x: x[1], reverse=True)
             
-            # Seleziona i migliori per questo client
+            # Ordina per weighted accuracy
+            sorted_trees = sorted(client_trees, key=lambda x: x[2], reverse=True)
             num_to_select = trees_per_client + (1 if client_idx < remaining_trees else 0)
             client_selected = sorted_trees[:num_to_select]
             selected_trees.extend(client_selected)
             
             if client_selected:
-                if len(client_selected[0]) >= 4:
-                    print(f"[Server] Client {client_idx+1}: {len(client_selected)} alberi ENHANCED selezionati")
-                else:
-                    print(f"[Server] Client {client_idx+1}: {len(client_selected)} alberi STANDARD selezionati")
+                print(f"[Server] Client {client_idx+1}: {len(client_selected)} alberi selezionati")
+    else:
+        selected_trees = []
     
-    print(f"[Server] ✅ Alberi selezionati totali: {len(selected_trees)} (metodo ENHANCED: {method})")
+    print(f"[Server] ✅ Alberi selezionati totali: {len(selected_trees)}")
     
-    # ✅ QUICK CHECK 3: SELECTION CHECK (mostra solo i primi 5)
-    if selected_trees and len(selected_trees) >= 5:
-        print(f"\n[Server] 🔍 QUICK CHECK 3 - SELECTION CHECK (primi 5):")
-        for i in range(min(5, len(selected_trees))):
-            tree_data = selected_trees[i]
-            if len(tree_data) >= 4:
-                _, acc, w_acc, div = tree_data[:4]
-                combined = 0.6 * w_acc + 0.4 * div
-                print(f"  Tree {i+1}: acc={acc:.4f}, w_acc={w_acc:.4f}, div={div:.4f}, combined={combined:.4f}")
-    
-    # Statistiche finali CORRETTE
     if selected_trees:
         final_accuracies = [t[1] for t in selected_trees]
         final_w_accuracies = [t[2] for t in selected_trees]
-        final_diversities = [t[3] if len(t) >= 4 else 0.0 for t in selected_trees]
         
-        print(f"\n[Server] 📊 Statistiche Finali Alberi Selezionati:")
-        print(f"[Server] Accuracy: min={min(final_accuracies):.4f}, max={max(final_accuracies):.4f}, media={np.mean(final_accuracies):.4f}")
-        print(f"[Server] Weighted accuracy: min={min(final_w_accuracies):.4f}, max={max(final_w_accuracies):.4f}, media={np.mean(final_w_accuracies):.4f}")
-        print(f"[Server] Diversity scores: min={min(final_diversities):.4f}, max={max(final_diversities):.4f}, media={np.mean(final_diversities):.4f}")
-        
-        # Conta alberi con diversity reale
-        real_diversity_count = sum(1 for d in final_diversities if d > 0.0)
-        print(f"[Server] 🎯 Alberi con DIVERSITY REALE: {real_diversity_count}/{len(selected_trees)}")
-        print(f"[Server] ✅ UTILIZZO DIVERSITY REALI DAI CLIENT per selezione ottimale!")
+        print(f"[Server] Statistiche finali:")
+        print(f"  Accuracy: min={min(final_accuracies):.4f}, max={max(final_accuracies):.4f}, media={np.mean(final_accuracies):.4f}")
+        print(f"  Weighted accuracy: min={min(final_w_accuracies):.4f}, max={max(final_w_accuracies):.4f}, media={np.mean(final_w_accuracies):.4f}")
     
     return selected_trees
 

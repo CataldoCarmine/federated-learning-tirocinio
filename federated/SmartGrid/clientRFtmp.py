@@ -23,7 +23,7 @@ RANDOM_SEED = 42
 # ============== FLAGS GLOBALI PER CONTROLLO PREPROCESSING ==============
 ENABLE_CLEAN_INF_NAN = True           # Pulizia inf/NaN
 ENABLE_CLIPPING_OUTLIERS = False       # Clipping outlier per quantili (IQR)
-ENABLE_IMPUTATION = True              # Imputazione mediana
+ENABLE_IMPUTATION = False              # Imputazione mediana
 ENABLE_SCALING = False                 # StandardScaler (mean=0, std=1) - ABILITATO
 ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Rimozione feature quasi-costanti - ABILITATO
 ENABLE_PCA = False  # PCA per riduzione dimensionalità
@@ -43,10 +43,10 @@ if ENABLE_PCA == False and not ENABLE_FEATURE_ENGINEERING:
 
 # CONFIGURAZIONE MODELLO RANDOM FOREST - OTTIMIZZATA
 # Basato sui risultati del paper: hyperparameter tuning per ottimizzare performance
-RF_N_ESTIMATORS = 150      # AUMENTATO da 65 per maggiore diversità
-RF_MAX_DEPTH = 15         # LIMITATO da None per ridurre overfitting
-RF_MIN_SAMPLES_SPLIT = 5  # AUMENTATO da 2 per ridurre overfitting
-RF_MIN_SAMPLES_LEAF = 2   # AUMENTATO da 1 per ridurre overfitting
+RF_N_ESTIMATORS = 100      # AUMENTATO da 65 per maggiore diversità
+RF_MAX_DEPTH = None         # LIMITATO da None per ridurre overfitting
+RF_MIN_SAMPLES_SPLIT = 2  # AUMENTATO da 2 per ridurre overfitting
+RF_MIN_SAMPLES_LEAF = 1   # AUMENTATO da 1 per ridurre overfitting
 RF_MAX_FEATURES = 'sqrt'  # Feature da considerare per ogni split ('sqrt' dal paper)
 RF_BOOTSTRAP = True       # Usa bootstrap sampling
 RF_CLASS_WEIGHT = 'balanced_subsample'  # CAMBIATO per migliore gestione sbilanciamento locale
@@ -55,7 +55,7 @@ RF_CRITERION = 'entropy'  # Criterio di splitting (dal paper: entropy migliore d
 # CONFIGURAZIONE ENSEMBLE PER FEDERATED RANDOM FOREST
 # Basato sulla metodologia del paper per aggregazione degli alberi
 ENSEMBLE_METHOD = 'weighted_voting'  # 'simple_voting' o 'weighted_voting'
-TREE_SELECTION_METHOD = 'diversity_weighted'  # NUOVO: accuracy + diversity
+TREE_SELECTION_METHOD = 'weighted_accuracy'  # NUOVO: accuracy + diversity
 
 def set_reproducibility_seeds(preserve_client_diversity=False):
     """
@@ -376,10 +376,8 @@ def apply_pca(X_preprocessed, client_id=None):
 def load_client_smartgrid_data(client_id):
     """
     Carica i dati SmartGrid per un client specifico.
-    Applica preprocessing completo per gestire valori infiniti e NaN.
-    AGGIORNATO: Include feature engineering per SmartGrid.
+    VERSIONE OTTIMIZZATA: Preprocessing minimale per Random Forest.
     """
-    # Imposta semi per riproducibilità del preprocessing
     set_reproducibility_seeds()
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -389,47 +387,10 @@ def load_client_smartgrid_data(client_id):
     
     df = pd.read_csv(file_path)
     
-    print(f"=== PREPROCESSING FEDERATO RANDOM FOREST ===")
-    print(f"Feature engineering: {'ABILITATA' if ENABLE_FEATURE_ENGINEERING else 'DISABILITATA'}")
-    print(f"Pulizia inf/NaN: {'ABILITATA' if ENABLE_CLEAN_INF_NAN else 'DISABILITATA'}")
-    print(f"Clipping outlier: {'ABILITATA' if ENABLE_CLIPPING_OUTLIERS else 'DISABILITATA'}")
-    print(f"Imputazione mediana: {'ABILITATA' if ENABLE_IMPUTATION else 'DISABILITATA'}")
-    print(f"Rimozione feature quasi-costanti: {'ABILITATA' if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES else 'DISABILITATA'}")
-    print(f"Scaling standard: {'ABILITATA' if ENABLE_SCALING else 'DISABILITATA'}")
-    print(f"PCA: {'ABILITATA' if ENABLE_PCA else 'DISABILITATA'}")
+    print(f"=== PREPROCESSING FEDERATO RANDOM FOREST - VERSIONE STABILE ===")
+    print(f"Feature engineering: DISABILITATA")
+    print(f"Imputazione mediana: DISABILITATA (RF gestisce NaN nativamente)")
 
-    # ========== QUICK CHECK 1: FEATURE ENGINEERING ==========
-    if ENABLE_FEATURE_ENGINEERING:
-        df_original = df.copy()  # Salva copia per confronto
-    
-    # NUOVO: Feature Engineering per SmartGrid
-    if ENABLE_FEATURE_ENGINEERING:
-        df = create_smartgrid_features(df, client_id)
-        
-        # ✅ QUICK CHECK 1: Verifica feature engineering
-        print(f"\n[Client {client_id}] 🔍 QUICK CHECK 1 - FEATURE ENGINEERING:")
-        print(f"  Shape PRIMA FE: {df_original.shape}")
-        print(f"  Shape DOPO FE: {df.shape}")
-        print(f"  Feature aggiunte: {df.shape[1] - df_original.shape[1]}")
-        
-        X_check = df.drop(columns=["marker"], errors='ignore')
-        nan_count = X_check.isna().sum().sum()
-        inf_count = np.isinf(X_check.select_dtypes(include=[np.number]).values).sum()
-        
-        print(f"  NaN dopo FE: {nan_count}")
-        print(f"  Inf dopo FE: {inf_count}")
-        
-        # Verifica varianza delle nuove feature
-        if df.shape[1] > df_original.shape[1]:
-            new_cols = [col for col in df.columns if col not in df_original.columns]
-            new_data = df[new_cols].select_dtypes(include=[np.number])
-            if len(new_data.columns) > 0:
-                variances = new_data.var()
-                zero_var_count = (variances < 1e-10).sum()
-                print(f"  Nuove feature con varianza ~0: {zero_var_count}/{len(new_cols)}")
-                if zero_var_count > len(new_cols) * 0.5:
-                    print(f"  ⚠️ ATTENZIONE: >50% delle nuove feature hanno varianza quasi zero!")
-    
     X = df.drop(columns=["marker"])
     y = (df["marker"] != "Natural").astype(int)
     attack_samples = y.sum()
@@ -437,21 +398,15 @@ def load_client_smartgrid_data(client_id):
     attack_ratio = y.mean()
     print(f"[Client {client_id}] Distribuzione: {attack_samples} attacchi ({attack_ratio*100:.1f}%), {natural_samples} naturali")
     
-    # [... resto del preprocessing invariato ...]
-    
-    # STEP 1: Pulizia inf/NaN 
-    print(f"[Client {client_id}] Pulizia valori infiniti e NaN...")
+    # STEP 1: Pulizia SOLO inf (NaN sono gestiti da RF)
+    print(f"[Client {client_id}] Pulizia valori infiniti...")
     X_cleaned = clean_data_for_pca(X)
-    
-    # Converti a numpy e sostituisci inf con valori finiti
     X_array = np.array(X_cleaned, dtype=float)
     
-    # Gestisci infiniti: sostituisci con valori estremi ma finiti
+    # Gestisci SOLO infiniti (non NaN)
     inf_mask = np.isinf(X_array)
     if np.any(inf_mask):
         print(f"[Client {client_id}] Trovati {np.sum(inf_mask)} valori infiniti, li sostituisco...")
-        # Sostituisci +inf con il 99.9° percentile della colonna
-        # Sostituisci -inf con il 0.1° percentile della colonna
         for col in range(X_array.shape[1]):
             col_data = X_array[:, col]
             finite_mask = np.isfinite(col_data)
@@ -461,7 +416,6 @@ def load_client_smartgrid_data(client_id):
                 X_array[np.isposinf(col_data), col] = percentile_99
                 X_array[np.isneginf(col_data), col] = percentile_01
             else:
-                # Se tutta la colonna è infinita, usa 0
                 X_array[:, col] = 0.0
 
     # Suddivisione train/validation
@@ -473,62 +427,17 @@ def load_client_smartgrid_data(client_id):
     )
     print(f"[Client {client_id}] Suddivisione: {len(X_train_raw)} training, {len(X_val_raw)} validation")
 
-    # STEP 2: Clipping outlier per quantili
-    if ENABLE_CLIPPING_OUTLIERS:
-        lower, upper = fit_clip_outliers_iqr(X_train_raw, k=5.0)
-        X_train_clipped = transform_clip_outliers_iqr(X_train_raw, lower, upper)
-        X_val_clipped = transform_clip_outliers_iqr(X_val_raw, lower, upper)
-    else:
-        X_train_clipped = X_train_raw
-        X_val_clipped = X_val_raw
-
-    # STEP 3: Imputazione mediana
-    print(f"[Client {client_id}] Applicazione imputazione mediana...")
-    imputer = SimpleImputer(strategy='median')
-    X_train_imputed = imputer.fit_transform(X_train_clipped)
-    X_val_imputed = imputer.transform(X_val_clipped)
-
-    # STEP 4: Rimozione feature quasi-costanti
-    if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES:
-        X_train_reduced, keep_mask = remove_near_constant_features(X_train_imputed, threshold_var=1e-12, threshold_ratio=0.999)
-        X_val_reduced = X_val_imputed[:, keep_mask]
-        print(f"[Client {client_id}] Feature dopo rimozione quasi-costanti: {X_train_reduced.shape[1]} (da {X_train_imputed.shape[1]})")
-    else:
-        X_train_reduced = X_train_imputed
-        X_val_reduced = X_val_imputed
-        print(f"[Client {client_id}] Rimozione feature quasi-costanti DISABILITATA - mantenute {X_train_reduced.shape[1]} feature")
-
-    # STEP 5: Scaling standard
-    if ENABLE_SCALING:
-        scaler = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train_reduced)
-        X_val_scaled = scaler.transform(X_val_reduced)
-        print(f"[Client {client_id}] Scaling applicato")
-    else:
-        X_train_scaled = X_train_reduced
-        X_val_scaled = X_val_reduced
-        print(f"[Client {client_id}] Scaling DISABILITATO")
-
-    # STEP 6: PCA
-    if ENABLE_PCA:
-        X_train_final = apply_pca(X_train_scaled, client_id=client_id)
-        X_val_final = apply_pca(X_val_scaled, client_id=client_id)
-        expected_features = PCA_COMPONENTS
-        if X_train_final.shape[1] != expected_features:
-            raise RuntimeError(f"Client {client_id}: ⚠️ PCA output shape inconsistente: {X_train_final.shape} vs {expected_features}")
-    else:
-        X_train_final = X_train_scaled
-        X_val_final = X_val_scaled
-        print(f"[Client {client_id}] PCA DISABILITATA - usando dati preprocessati: {X_train_final.shape}")
+    # NESSUN preprocessing aggiuntivo - RF è robusto
+    X_train_final = X_train_raw
+    X_val_final = X_val_raw
     
-    # VERIFICA FINALE: nessun valore infinito o NaN
-    if np.any(np.isinf(X_train_final)) or np.any(np.isnan(X_train_final)):
-        print(f"[Client {client_id}] ❌ ERRORE: Dati finali contengono ancora inf/NaN")
-        X_train_final = np.nan_to_num(X_train_final, nan=0.0, posinf=1e10, neginf=-1e10)
-        X_val_final = np.nan_to_num(X_val_final, nan=0.0, posinf=1e10, neginf=-1e10)
-        print(f"[Client {client_id}] ⚠️ Pulizia di emergenza applicata")
+    print(f"[Client {client_id}] ✅ Preprocessing minimale completato: {X_train_final.shape}, {X_val_final.shape}")
     
-    print(f"[Client {client_id}] ✅ Preprocessing completato: {X_train_final.shape}, {X_val_final.shape}")
+    # Verifica NaN finali
+    nan_count_train = np.isnan(X_train_final).sum()
+    nan_count_val = np.isnan(X_val_final).sum()
+    print(f"[Client {client_id}] NaN nel training set: {nan_count_train} (gestiti da RF)")
+    print(f"[Client {client_id}] NaN nel validation set: {nan_count_val} (gestiti da RF)")
         
     # Info dataset
     dataset_info = {
@@ -543,11 +452,9 @@ def load_client_smartgrid_data(client_id):
         'val_attack_ratio': y_val.mean(),
         'original_features': X.shape[1],
         'final_features': X_train_final.shape[1],
-        'pca_enabled': ENABLE_PCA,
-        'feature_engineering_enabled': ENABLE_FEATURE_ENGINEERING,
-        'remove_near_constant_enabled': ENABLE_REMOVE_NEAR_CONSTANT_FEATURES,
-        'pca_components_fixed': PCA_COMPONENTS if ENABLE_PCA else None,
-        'preprocessing_method': f"enhanced_smartgrid{'_pca' if ENABLE_PCA else ''}",
+        'pca_enabled': False,
+        'feature_engineering_enabled': False,
+        'preprocessing_method': 'minimal_for_rf',
         'compatibility_guaranteed': True
     }
     print(f"[Client {client_id}] === CARICAMENTO COMPLETATO ===")
@@ -556,62 +463,34 @@ def load_client_smartgrid_data(client_id):
 def create_random_forest_model():
     """
     Crea il modello Random Forest per SmartGrid.
-    Implementa la configurazione ottimizzata basata su ricerca recente.
-    
-    Returns:
-        Modello RandomForestClassifier configurato secondo ricerca ottimizzata
+    VERSIONE STABILE: Configurazione standard ottimizzata.
     """
+    set_reproducibility_seeds()
 
-    print(f"[Client {client_id}] === CREAZIONE RANDOM FOREST OTTIMIZZATO ===")
-    print(f"[Client {client_id}] Modello: Random Forest con {RF_N_ESTIMATORS} alberi (diversificato)")
-    print(f"[Client {client_id}] Criterio: {RF_CRITERION} (entropia per cyber-attacks)")
-    print(f"[Client {client_id}] Max features: {RF_MAX_FEATURES} (feature selection automatica)")
-    print(f"[Client {client_id}] Class weight: {RF_CLASS_WEIGHT} (gestione sbilanciamento locale)")
-    print(f"[Client {client_id}] Max depth: {RF_MAX_DEPTH} (controllo overfitting)")
+    print(f"[Client {client_id}] === CREAZIONE RANDOM FOREST STABILE ===")
+    print(f"[Client {client_id}] Modello: Random Forest con {RF_N_ESTIMATORS} alberi")
+    print(f"[Client {client_id}] Configurazione: Standard ottimizzata per SmartGrid")
 
-    # DIVERSIFICAZIONE DETERMINISTICA per client
-    client_random_state = RANDOM_SEED + client_id
-
-    # ✅ DIVERSIFICA max_features per aumentare diversity tra alberi
-    # Client con ID pari: 'sqrt'
-    # Client con ID dispari: 'log2'
-    max_features_client = 'sqrt' if client_id % 2 == 0 else 'log2'
-    
-    # ✅ DIVERSIFICA max_depth leggermente per client
-    # Range: 12-18 (invece di fisso 15)
-    max_depth_client = 12 + (client_id % 7) - 1  #Range: 12-18 (7 valori)
-
-    # ✅ DIVERSIFICA min_samples_split
-    # Range: 4-7 (invece di fisso 5)
-    min_samples_split_client = 3 + (client_id % 5) - 1  # Range: 3-7 (5 valori)
-    
-    # PARAMETRI OTTIMIZZATI PER FEDERATED LEARNING
     model = RandomForestClassifier(
-        n_estimators=RF_N_ESTIMATORS,           # Aumentato per diversità
-        criterion=RF_CRITERION,                 # Entropy per cybersecurity
-        max_depth=max_depth_client,              # ✅ DIVERSIFICATO
-        min_samples_split=min_samples_split_client,  # ✅ DIVERSIFICATO
-        min_samples_leaf=RF_MIN_SAMPLES_LEAF,   # Aumentato contro overfitting
-        max_features=max_features_client,        # ✅ DIVERSIFICATO
-        bootstrap=RF_BOOTSTRAP,                 # Bootstrap sampling
-        random_state=client_random_state,       # ✅ DETERMINISTICA MA DIVERSIFICATA
-        n_jobs=-1,                              # Parallelismo
-        class_weight=RF_CLASS_WEIGHT,           # Balanced subsample per FL
-        oob_score=True                          # Out-of-bag validation
+        n_estimators=RF_N_ESTIMATORS,      
+        criterion=RF_CRITERION,             
+        max_depth=RF_MAX_DEPTH,             # None = massima capacità
+        min_samples_split=RF_MIN_SAMPLES_SPLIT,
+        min_samples_leaf=RF_MIN_SAMPLES_LEAF,
+        max_features=RF_MAX_FEATURES,
+        bootstrap=RF_BOOTSTRAP,
+        random_state=RANDOM_SEED,           # ✅ SEED FISSO per tutti i client
+        n_jobs=-1,
+        class_weight=RF_CLASS_WEIGHT,
+        oob_score=True
     )
     
-    print(f"[Client {client_id}] Iperparametri diversificati:")
-    print(f"  - N. estimatori: {RF_N_ESTIMATORS} (diversificato)")
+    print(f"[Client {client_id}] Parametri Random Forest:")
+    print(f"  - N. estimatori: {RF_N_ESTIMATORS}")
     print(f"  - Criterio: {RF_CRITERION}")
-    print(f"  - Max depth: {max_depth_client} (range 14-17)")
-    print(f"  - Min samples split: {min_samples_split_client} (range 4-6)")
-    print(f"  - Min samples leaf: {RF_MIN_SAMPLES_LEAF}")
-    print(f"  - Max features: {max_features_client} (varia per client)")
-    print(f"  - Bootstrap: {RF_BOOTSTRAP}")
+    print(f"  - Max depth: {RF_MAX_DEPTH} (illimitata per max capacità)")
     print(f"  - Class weight: {RF_CLASS_WEIGHT}")
-    print(f"  - Random state: {RANDOM_SEED + client_id} (diversificato)")
-    print(f"  🎯 MAGGIORE DIVERSITÀ tra client attivata!")
-    print(f"  - OOB Score: True")
+    print(f"  - Random state: {RANDOM_SEED} (fisso)")
     
     return model
 
@@ -655,42 +534,26 @@ def calculate_tree_diversity(tree1, tree2, X_sample):
 
 def extract_trees_from_forest(model, X_val, y_val):
     """
-    Estrae gli alberi dal Random Forest e calcola le loro performance individuali REALI + DIVERSITÀ.
-    VERSIONE MIGLIORATA: Calcola diversità su campione più grande con random sampling.
-    
-    Args:
-        model: Random Forest addestrato
-        X_val: Dati di validazione
-        y_val: Etichette di validazione
-        
-    Returns:
-        Lista di tuple (tree, accuracy_reale, weighted_accuracy_reale, diversity_score) per ogni albero
+    Estrae gli alberi dal Random Forest e calcola le loro performance individuali REALI.
+    VERSIONE STABILE: Solo weighted accuracy, nessuna diversity.
     """
-    print(f"[Client {client_id}] === ESTRAZIONE ALBERI CON ACCURACY + DIVERSITÀ REALI (MIGLIORATA) ===")
+    print(f"[Client {client_id}] === ESTRAZIONE ALBERI CON WEIGHTED ACCURACY REALI ===")
 
-    # CONTROLLO: Verifica se il modello è addestrato
     if not hasattr(model, 'estimators_') or len(model.estimators_) == 0:
         print(f"[Client {client_id}] ⚠️ Modello non ancora addestrato, nessun albero disponibile")
         return []
     
-    print(f"[Client {client_id}] === CALCOLO ACCURACY + DIVERSITÀ REALI PER {len(model.estimators_)} ALBERI ===")
+    print(f"[Client {client_id}] Calcolo weighted accuracy per {len(model.estimators_)} alberi")
     
     trees_performance = []
     
-    # ✅ CAMPIONE PIÙ GRANDE per calcolo diversità (aumentato da 500 a 1000)
-    sample_size = min(1000, len(X_val))
-    X_sample = X_val[:sample_size]
-    
-    print(f"[Client {client_id}] Campione diversità: {sample_size} esempi")
-    
     for i, tree in enumerate(model.estimators_):
-        # Predizioni dell'albero singolo
         tree_predictions = tree.predict(X_val)
         
-        # Calcola accuracy standard REALE
+        # Accuracy standard
         accuracy_real = accuracy_score(y_val, tree_predictions)
         
-        # Calcola weighted accuracy REALE
+        # Weighted accuracy
         class_counts = np.bincount(y_val)
         weights = 1.0 / class_counts
         class_weights_norm = weights / weights.sum()
@@ -702,134 +565,62 @@ def extract_trees_from_forest(model, X_val, y_val):
                 class_accuracy = accuracy_score(y_val[class_mask], tree_predictions[class_mask])
                 weighted_acc_real += class_accuracy * class_weights_norm[class_label]
         
-        # ✅ CALCOLO DIVERSITÀ MIGLIORATO: Confronta con PIÙ alberi (15 invece di 10)
-        diversity_score = 0.0
-        n_comparisons = 0
+        trees_performance.append((tree, accuracy_real, weighted_acc_real))
         
-        # ✅ Usa seed diverso per ogni albero per variare i confronti
-        comparison_size = min(15, len(model.estimators_) - 1)
-        
-        if len(model.estimators_) > 1:
-            # ✅ Seed diverso per ogni albero ma deterministico
-            rng_local = np.random.RandomState(seed=RANDOM_SEED + i)
-            comparison_indices = rng_local.choice(
-                [idx for idx in range(len(model.estimators_)) if idx != i],
-                size=comparison_size,
-                replace=False
-            )
-        else:
-            comparison_indices = []
-        
-        diversities_list = []
-        for j in comparison_indices:
-            other_tree = model.estimators_[j]
-            div_score = calculate_tree_diversity(tree, other_tree, X_sample)
-            diversity_score += div_score
-            diversities_list.append(div_score)
-            n_comparisons += 1
-        
-        diversity_score = diversity_score / n_comparisons if n_comparisons > 0 else 0.0
-        
-        trees_performance.append((tree, accuracy_real, weighted_acc_real, diversity_score))
-        
-        if i < 5:  # Stampa info per i primi 5 alberi
-            print(f"[Client {client_id}] Albero {i+1}: Acc={accuracy_real:.4f}, W_Acc={weighted_acc_real:.4f}, Div={diversity_score:.4f} (n_comp={n_comparisons})")
+        if i < 5:
+            print(f"[Client {client_id}] Albero {i+1}: Acc={accuracy_real:.4f}, W_Acc={weighted_acc_real:.4f}")
     
-    print(f"[Client {client_id}] ✅ Estrazione completata con {len(trees_performance)} alberi CON ACCURACY + DIVERSITÀ REALI MIGLIORATE")
-
-    # Ordina gli alberi per performance combinata (accuracy + diversity)
-    def combined_score(tree_perf):
-        _, acc, w_acc, div = tree_perf
-        # Combina weighted accuracy (70%) + diversity (30%)
-        return 0.7 * w_acc + 0.3 * div
-    
-    trees_performance.sort(key=combined_score, reverse=True)
+    # Ordina per weighted accuracy
+    trees_performance.sort(key=lambda x: x[2], reverse=True)
     
     best_tree = trees_performance[0]
     worst_tree = trees_performance[-1]
-    print(f"[Client {client_id}] Migliore albero (COMBINATO): Acc={best_tree[1]:.4f}, W_Acc={best_tree[2]:.4f}, Div={best_tree[3]:.4f}")
-    print(f"[Client {client_id}] Peggiore albero (COMBINATO): Acc={worst_tree[1]:.4f}, W_Acc={worst_tree[2]:.4f}, Div={worst_tree[3]:.4f}")
+    print(f"[Client {client_id}] Migliore albero: Acc={best_tree[1]:.4f}, W_Acc={best_tree[2]:.4f}")
+    print(f"[Client {client_id}] Peggiore albero: Acc={worst_tree[1]:.4f}, W_Acc={worst_tree[2]:.4f}")
     
-    # ✅ Statistiche diversità finali
-    all_diversities = [t[3] for t in trees_performance]
-    print(f"[Client {client_id}] 📊 Statistiche Diversity:")
-    print(f"[Client {client_id}]   Media: {np.mean(all_diversities):.4f}")
-    print(f"[Client {client_id}]   Min: {np.min(all_diversities):.4f}")
-    print(f"[Client {client_id}]   Max: {np.max(all_diversities):.4f}")
-    print(f"[Client {client_id}]   Std: {np.std(all_diversities):.4f}")
+    print(f"[Client {client_id}] ✅ Estrazione completata - {len(trees_performance)} alberi")
     
     return trees_performance
 
 def serialize_trees_for_aggregation(trees_performance, max_trees=None):
     """
-    Serializza gli alberi con le loro accuracy reali + diversità per l'invio al server.
-    AGGIORNATO: Include diversity score per selezione server-side.
+    Serializza gli alberi con le loro weighted accuracy reali.
+    VERSIONE STABILE: Formato semplificato senza diversity.
     """
-    print(f"[Client {client_id}] === SERIALIZZAZIONE ALBERI CON ACCURACY + DIVERSITÀ REALI ===")
+    print(f"[Client {client_id}] === SERIALIZZAZIONE ALBERI (WEIGHTED ACCURACY) ===")
     
     if max_trees is not None:
         selected_trees = trees_performance[:max_trees]
-        print(f"[Client {client_id}] Selezionati {len(selected_trees)} migliori alberi su {len(trees_performance)}")
+        print(f"[Client {client_id}] Selezionati {len(selected_trees)} migliori alberi")
     else:
         selected_trees = trees_performance
         print(f"[Client {client_id}] Invio tutti i {len(selected_trees)} alberi")
     
-    # ✅ QUICK CHECK 2: DIVERSITY SCORES
-    if selected_trees:
-        diversity_scores = [d for _, _, _, d in selected_trees]
-        print(f"\n[Client {client_id}] 🔍 QUICK CHECK 2 - DIVERSITY SCORES:")
-        print(f"  Media: {np.mean(diversity_scores):.4f}")
-        print(f"  Min: {np.min(diversity_scores):.4f}")
-        print(f"  Max: {np.max(diversity_scores):.4f}")
-        zero_count = sum(1 for d in diversity_scores if d == 0.0)
-        print(f"  Zero count: {zero_count}/{len(diversity_scores)}")
-        
-        if zero_count == len(diversity_scores):
-            print(f"  ⚠️ ATTENZIONE: TUTTI i diversity scores sono ZERO!")
-        elif zero_count > len(diversity_scores) * 0.8:
-            print(f"  ⚠️ ATTENZIONE: >80% dei diversity scores sono ZERO!")
-    
     serialized_data = []
     
-    for i, (tree, accuracy_real, weighted_accuracy_real, diversity_score) in enumerate(selected_trees):
+    for i, (tree, accuracy_real, weighted_accuracy_real) in enumerate(selected_trees):
         try:
-            # AGGIORNATO: Include diversity score
             tree_data = {
                 'tree': tree,
                 'accuracy': accuracy_real,
                 'weighted_accuracy': weighted_accuracy_real,
-                'diversity_score': diversity_score,  # NUOVO
                 'tree_index': i,
-                'client_id': client_id,  # NUOVO: identifica origine
-                'accuracy_type': 'REAL_ENHANCED'  # Flag upgraded
+                'client_id': client_id,
+                'accuracy_type': 'REAL'  # ✅ Formato standard
             }
             
-            # Serializza l'intero dizionario con pickle
             tree_bytes = pickle.dumps(tree_data, protocol=pickle.HIGHEST_PROTOCOL)
-
-            # Converti in array uint8 (formato sicuro per Flower)
             tree_array = np.frombuffer(tree_bytes, dtype=np.uint8)
             serialized_data.append(tree_array)
 
-            print(f"[Client {client_id}] ✅ Albero {i+1} serializzato ENHANCED ({len(tree_bytes)} bytes)")
-            print(f"[Client {client_id}]    Acc={accuracy_real:.4f}, W_Acc={weighted_accuracy_real:.4f}, Div={diversity_score:.4f}")
+            if i < 3:  # Mostra solo primi 3
+                print(f"[Client {client_id}] Albero {i+1}: Acc={accuracy_real:.4f}, W_Acc={weighted_accuracy_real:.4f}")
 
         except Exception as e:
             print(f"[Client {client_id}] ❌ Errore serializzazione albero {i+1}: {e}")
-            import traceback; traceback.print_exc()
             continue
     
-    print(f"[Client {client_id}] Serializzati {len(serialized_data)} alberi con ACCURACY + DIVERSITÀ REALI")
-
-    # ===== DEBUG FLOWER FORMAT =====
-    if serialized_data:
-        first = serialized_data[0]
-        print(f"[Client {client_id}] DEBUG Primo albero serializzato ENHANCED:")
-        print(f"  Tipo: {type(first)}, dtype: {first.dtype}, shape: {first.shape}")
-        print(f"  Prime 10 byte: {first[:10].tolist()}")
-    else:
-        print(f"[Client {client_id}] ⚠️ Nessun albero serializzato!")
-
+    print(f"[Client {client_id}] Serializzati {len(serialized_data)} alberi")
     return serialized_data
 
 class SmartGridRandomForestClient(fl.client.NumPyClient):
@@ -1048,7 +839,7 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
 
     def evaluate(self, parameters, config):
         """
-        Valuta il modello Random Forest ottimizzato.
+        Valuta il modello Random Forest - VERSIONE STABILE.
         """
         global model, X_val, y_val
 
@@ -1100,7 +891,7 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             report = classification_report(y_val, val_predictions, target_names=["natural", "attack"], output_dict=True, zero_division=0)
             conf_matrix = confusion_matrix(y_val, val_predictions)
 
-            print(f"[Client {client_id}] Val Accuracy OTTIMIZZATO: {accuracy:.4f}, Val F1: {f1_score_val:.4f}")
+            print(f"[Client {client_id}] Val Accuracy: {accuracy:.4f}, Val F1: {f1_score_val:.4f}")
             print(f"[Client {client_id}] Val Balanced Acc: {balanced_acc:.4f}, Val AUC: {auc:.4f}")
             print(f"[Client {client_id}] Classification report (per classe):")
             print(classification_report(y_val, val_predictions, target_names=["natural", "attack"], zero_division=0))
@@ -1110,33 +901,35 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             # Simula loss per compatibilità (Random Forest non ha loss)
             loss = 1 - accuracy  # Loss simulata
             
+            # ✅ CORREZIONE: Converti None in valore valido per Flower
+            model_max_depth = model.max_depth if model.max_depth is not None else -1
+            
             # Metriche
             metrics = {
-                "accuracy": accuracy,
-                "precision": precision,
-                "recall": recall,
-                "auc": auc,
-                "f1_score": f1_score_val,
-                "balanced_accuracy": balanced_acc,
-                "val_samples": len(X_val),
-                "precision_natural": report["natural"]["precision"],
-                "recall_natural": report["natural"]["recall"],
-                "f1_natural": report["natural"]["f1-score"],
-                "precision_attack": report["attack"]["precision"],
-                "recall_attack": report["attack"]["recall"],
-                "f1_attack": report["attack"]["f1-score"],
-                "support_natural": report["natural"]["support"],
-                "support_attack": report["attack"]["support"],
+                "accuracy": float(accuracy),
+                "precision": float(precision),
+                "recall": float(recall),
+                "auc": float(auc),
+                "f1_score": float(f1_score_val),
+                "balanced_accuracy": float(balanced_acc),
+                "val_samples": int(len(X_val)),
+                "precision_natural": float(report["natural"]["precision"]),
+                "recall_natural": float(report["natural"]["recall"]),
+                "f1_natural": float(report["natural"]["f1-score"]),
+                "precision_attack": float(report["attack"]["precision"]),
+                "recall_attack": float(report["attack"]["recall"]),
+                "f1_attack": float(report["attack"]["f1-score"]),
+                "support_natural": int(report["natural"]["support"]),
+                "support_attack": int(report["attack"]["support"]),
                 # Confusion matrix
                 "tn": int(conf_matrix[0, 0]),
                 "fp": int(conf_matrix[0, 1]),
                 "fn": int(conf_matrix[1, 0]),
                 "tp": int(conf_matrix[1, 1]),
                 
-                # NUOVI: Info modello ottimizzato
+                # ✅ CORRETTO: model_max_depth non è mai None ora
                 "model_n_estimators": int(model.n_estimators),
-                "model_max_depth": model.max_depth,
-                "enhanced_features": bool(ENABLE_FEATURE_ENGINEERING),
+                "model_max_depth": int(model_max_depth),  # -1 se illimitato
             }
             
             return loss, len(X_val), metrics
