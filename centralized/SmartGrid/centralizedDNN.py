@@ -22,18 +22,18 @@ RANDOM_SEED = 42
 
 # ========== FLAGS GLOBALI PER CONTROLLO PREPROCESSING ==========
 ENABLE_CLEAN_INF_NAN = True           # Pulizia inf/NaN
-ENABLE_CLIPPING_OUTLIERS = True       # Clipping outlier per quantili (IQR)
+ENABLE_CLIPPING_OUTLIERS = False       # Clipping outlier per quantili (IQR)
 ENABLE_IMPUTATION = True              # Imputazione mediana
-ENABLE_SCALING = False                 # StandardScaler (mean=0, std=1)
+ENABLE_SCALING = True                 # StandardScaler (mean=0, std=1)
 ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Cambia a False per disabilitare rimozione feature quasi-costanti
-ENABLE_PCA = False  # Cambia a False per disabilitare la PCA
+ENABLE_PCA = True  # Cambia a False per disabilitare la PCA
 
 if ENABLE_PCA:
     ENABLE_IMPUTATION= True # Per eseguire la PCA non si possono avere NaN
 
 # CONFIGURAZIONE PCA STATICA
 PCA_COMPONENTS = 71  # NUMERO FISSO - garantisce compatibilità automatica
-PCA_RANDOM_SEED = 42  # Seme specifico per PCA
+PCA_RANDOM_SEED = 21  # Seme specifico per PCA
 
 # ========== CONFIGURAZIONE MODELLO ==========
 ACTIVATION_FUNCTION = 'leaky_relu'  # Ottimizzabile: 'leaky_relu', 'selu', 'relu'

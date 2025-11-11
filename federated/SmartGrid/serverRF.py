@@ -26,21 +26,19 @@ RANDOM_SEED = 42
 ENABLE_CLEAN_INF_NAN = True           # Pulizia inf/NaN
 ENABLE_CLIPPING_OUTLIERS = False       # Clipping outlier per quantili (IQR)
 ENABLE_IMPUTATION = True              # Imputazione mediana
-ENABLE_SCALING = False                 # StandardScaler (mean=0, std=1)
+ENABLE_SCALING = True                 # StandardScaler (mean=0, std=1)
 ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Rimozione feature quasi-costanti
 ENABLE_PCA = False  # PCA per riduzione dimensionalità
 
 if ENABLE_PCA:
     ENABLE_IMPUTATION = True # Per eseguire la PCA non si possono avere NaN
+else:
+    ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Quando PCA disabilitata, disabilita rimozione feature quasi-costanti per compatibilità dei modelli
+    PCA_COMPONENTS = None
 
 # CONFIGURAZIONE PCA STATICA
-PCA_COMPONENTS = 74  # NUMERO FISSO - garantisce compatibilità automatica
+PCA_COMPONENTS = 21  # NUMERO FISSO - garantisce compatibilità automatica (prima 74)
 PCA_RANDOM_SEED = 42  # Seme specifico per PCA
-  
-# Quando PCA disabilitata, disabilita rimozione feature quasi-costanti per compatibilità dei modelli
-if ENABLE_PCA == False:
-    ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False
-    PCA_COMPONENTS = None
 
 # ============== CONFIGURAZIONE RANDOM FOREST GLOBALE ==============
 # Configurazione aggregazione alberi (basata sul paper)
@@ -639,8 +637,8 @@ def get_smartgrid_random_forest_evaluate_fn():
         
         script_dir = os.path.dirname(os.path.abspath(__file__))
 
-        # Usa client 14-15 come dataset di test (stesso della versione DNN)
-        test_clients = [14, 15]
+        # Usa client 1-13 come dataset di test (stesso della versione DNN)
+        test_clients = [1, 13]
         df_list = []
 
         for client_id in test_clients:
@@ -987,7 +985,6 @@ class SmartGridRandomForestFedAvg(FedAvg):
         """
         Aggrega gli alberi Random Forest dai client secondo la metodologia del paper.
         """
-        set_reproducibility_seeds()
 
         print(f"\n=== AGGREGAZIONE RANDOM FOREST - ROUND {server_round} ===")
         print(f"Client partecipanti: {len(results)}")
@@ -1070,7 +1067,6 @@ class SmartGridRandomForestFedAvg(FedAvg):
         """
         Aggrega i risultati della valutazione Random Forest.
         """
-        set_reproducibility_seeds()
 
         print(f"\n=== AGGREGAZIONE VALUTAZIONE RANDOM FOREST ROUND {server_round} ===")
         print(f"Client che hanno valutato: {len(results)}")
@@ -1137,8 +1133,8 @@ def main():
     
     # Strategia Random Forest Federato personalizzata
     strategy = SmartGridRandomForestFedAvg(
-        fraction_fit=0.5, #prima 1.0
-        fraction_evaluate=0.5, #prima 1.0
+        fraction_fit=1, #prima 0.5
+        fraction_evaluate=1, #prima 0.5
         min_fit_clients=13, #prima 2
         min_evaluate_clients=13,    #prima 2
         min_available_clients=13,    #prima 2

@@ -22,14 +22,14 @@ ENABLE_CLEAN_INF_NAN = False           # Pulizia inf/NaN
 ENABLE_CLIPPING_OUTLIERS = False       # Clipping outlier per quantili (IQR)
 ENABLE_IMPUTATION = False              # Imputazione mediana
 ENABLE_SCALING = False                 # StandardScaler (mean=0, std=1)
-ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Rimozione feature quasi-costanti
+ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = True  # Rimozione feature quasi-costanti
 ENABLE_PCA = False  # Cambia a False per disabilitare la PCA
 
 if ENABLE_PCA:
     ENABLE_IMPUTATION= True # Per eseguire la PCA non si possono avere NaN
 
 # CONFIGURAZIONE PCA STATICA
-PCA_COMPONENTS = 71  # NUMERO FISSO - garantisce compatibilità automatica
+PCA_COMPONENTS = 21  # NUMERO FISSO - garantisce compatibilità automatica
 PCA_RANDOM_SEED = 42  # Seme specifico per PCA
 
 # ========== CONFIGURAZIONE MODELLO RANDOM FOREST ==========

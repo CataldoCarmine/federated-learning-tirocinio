@@ -23,21 +23,19 @@ RANDOM_SEED = 42
 ENABLE_CLEAN_INF_NAN = True           # Pulizia inf/NaN
 ENABLE_CLIPPING_OUTLIERS = False       # Clipping outlier per quantili (IQR)
 ENABLE_IMPUTATION = True              # Imputazione mediana
-ENABLE_SCALING = False                 # StandardScaler (mean=0, std=1)
+ENABLE_SCALING = True                 # StandardScaler (mean=0, std=1)
 ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Rimozione feature quasi-costanti
 ENABLE_PCA = False  # PCA per riduzione dimensionalità
 
 if ENABLE_PCA:
     ENABLE_IMPUTATION = True # Per eseguire la PCA non si possono avere NaN
+else:
+    ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False  # Quando PCA disabilitata, disabilita rimozione feature quasi-costanti per compatibilità dei modelli
+    PCA_COMPONENTS = None
 
 # CONFIGURAZIONE PCA STATICA
-PCA_COMPONENTS = 74  # NUMERO FISSO - garantisce compatibilità automatica
+PCA_COMPONENTS = 21  # NUMERO FISSO - garantisce compatibilità automatica (prima 74)
 PCA_RANDOM_SEED = 42  # Seme specifico per PCA
-  
-# Quando PCA disabilitata, disabilita rimozione feature quasi-costanti per compatibilità dei modelli
-if ENABLE_PCA == False:
-    ENABLE_REMOVE_NEAR_CONSTANT_FEATURES = False
-    PCA_COMPONENTS = None
 
 # CONFIGURAZIONE MODELLO RANDOM FOREST
 # Basato sui risultati del paper: hyperparameter tuning per ottimizzare performance
@@ -232,10 +230,14 @@ def load_client_smartgrid_data(client_id):
         X_val_clipped = X_val_raw
 
     # STEP 3: Imputazione mediana
-    print(f"[Client {client_id}] Applicazione imputazione mediana...")
-    imputer = SimpleImputer(strategy='median')
-    X_train_imputed = imputer.fit_transform(X_train_clipped)
-    X_val_imputed = imputer.transform(X_val_clipped)
+    if ENABLE_IMPUTATION:
+        print(f"[Client {client_id}] Applicazione imputazione mediana...")
+        imputer = SimpleImputer(strategy='median')
+        X_train_imputed = imputer.fit_transform(X_train_clipped)
+        X_val_imputed = imputer.transform(X_val_clipped)
+    else:
+        X_train_imputed = X_train_clipped
+        X_val_imputed = X_val_clipped
 
     # STEP 4: Rimozione feature quasi-costanti
     if ENABLE_REMOVE_NEAR_CONSTANT_FEATURES:
@@ -310,8 +312,6 @@ def create_random_forest_model():
     Returns:
         Modello RandomForestClassifier configurato secondo i risultati del paper
     """
-    # Imposta semi per riproducibilità del modello
-    set_reproducibility_seeds()
 
     print(f"[Client {client_id}] === CREAZIONE RANDOM FOREST ===")
     print(f"[Client {client_id}] Modello: Random Forest con {RF_N_ESTIMATORS} alberi")
@@ -329,7 +329,7 @@ def create_random_forest_model():
         min_samples_leaf=RF_MIN_SAMPLES_LEAF,   # Campioni minimi per foglia
         max_features=RF_MAX_FEATURES,           # Feature da considerare per ogni split
         bootstrap=RF_BOOTSTRAP,                 # Bootstrap sampling
-        random_state=RANDOM_SEED,               # Per riproducibilità
+        random_state=RANDOM_SEED + client_id,               # diversifica per client
         n_jobs=-1,                              # Usa tutti i core disponibili
         class_weight=RF_CLASS_WEIGHT,           # Gestione automatica dello sbilanciamento
         oob_score=True                          # Calcola out-of-bag score per validazione
@@ -577,9 +577,6 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
         Addestra il modello Random Forest locale.
         """
         global model, X_train, y_train, dataset_info
-
-        # Imposta semi per riproducibilità dell'addestramento
-        set_reproducibility_seeds()
     
         print(f"[Client {client_id}] Round di addestramento Random Forest...")
     
@@ -687,7 +684,7 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
         global model, X_val, y_val
 
         # Imposta semi per riproducibilità della valutazione
-        set_reproducibility_seeds()
+        # set_reproducibility_seeds()
         
         # Imposta parametri se ricevuti dal server
         if parameters:
@@ -791,9 +788,10 @@ def main():
         print("Esempio: python clientRF.py 1")
         sys.exit(1)
     
+    # momentaneamente modificato per testare su client 1-13 invece che 14-15
     try:
         client_id = int(sys.argv[1])
-        if client_id < 1 or client_id > 13:
+        if client_id < 1 or client_id > 15:
             raise ValueError("⚠️ Client ID deve essere tra 1 e 13")
     except ValueError as e:
         print(f"❌ Errore: Client ID non valido. {e}")
@@ -805,9 +803,6 @@ def main():
         # Carica i dati con preprocessing minimale per Random Forest
         print(f"[Client {client_id}] Caricamento dati per Random Forest...")
         X_train, y_train, X_val, y_val, dataset_info = load_client_smartgrid_data(client_id)
-        
-        # Imposta semi all'avvio del client
-        set_reproducibility_seeds()
 
         # Crea il modello Random Forest
         model = create_random_forest_model()

@@ -1,65 +1,65 @@
 RESOCONTO ADDESTRAMENTO CENTRALIZZATO SMARTGRID - RANDOM FOREST
 ===============================================================
-Data: 2025-10-02 20:54:16
+Data: 2025-11-10 15:13:31
 Modello: Random Forest
-N. Estimatori: 50
+N. Estimatori: 100
 Max Depth: None
 Random State: 42
 
 METRICHE FINALI:
 ========================================
-Accuracy: 0.915965
-F1-Score: 0.942685
-Balanced Accuracy: 0.874552
-Precision: 0.914154
-Recall: 0.973054
-AUC: 0.968522
+Accuracy: 0.916560
+F1-Score: 0.943265
+Balanced Accuracy: 0.872973
+Precision: 0.912090
+Recall: 0.976647
+AUC: 0.970873
 
 METRICHE PER CLASSE:
 ------------------------------
 CLASSE NATURAL:
-  Precision: 0.921575
-  Recall: 0.776049
-  F1-Score: 0.842575
+  Precision: 0.930753
+  Recall: 0.769299
+  F1-Score: 0.842359
   Support: 3407.0
 
 CLASSE ATTACK:
-  Precision: 0.914154
-  Recall: 0.973054
-  F1-Score: 0.942685
+  Precision: 0.912090
+  Recall: 0.976647
+  F1-Score: 0.943265
   Support: 8350.0
 
 MATRICE DI CONFUSIONE SUL VALIDATION SET:
 ----------------------------------------
-True Positive (TP):  8122
-False Positive (FP): 765
-False Negative (FN): 228
-True Negative (TN):  2642
+True Positive (TP):  8140
+False Positive (FP): 761
+False Negative (FN): 210
+True Negative (TN):  2646
 
 FEATURE IMPORTANCE DEL MODELLO RANDOM FOREST:
 ------------------------------------------------------------
 Rank   Feature         Importance  
 -----------------------------------
-1      Feature_3          0.026853
-2      Feature_61         0.026137
-3      Feature_90         0.021730
-4      Feature_100        0.016845
-5      Feature_30         0.015226
-6      Feature_56         0.015093
-7      Feature_114        0.014830
-8      Feature_67         0.014686
-9      Feature_85         0.014217
-10     Feature_96         0.014162
-11     Feature_38         0.014043
-12     Feature_88         0.013939
-13     Feature_92         0.013780
-14     Feature_9          0.013693
-15     Feature_13         0.013485
-16     Feature_27         0.013370
-17     Feature_34         0.013096
-18     Feature_84         0.012831
-19     Feature_31         0.012528
-20     Feature_2          0.012492
+1      Feature_61         0.028245
+2      Feature_3          0.025312
+3      Feature_90         0.022368
+4      Feature_100        0.016263
+5      Feature_56         0.014964
+6      Feature_114        0.014774
+7      Feature_38         0.014760
+8      Feature_85         0.014523
+9      Feature_92         0.014466
+10     Feature_96         0.014234
+11     Feature_27         0.014082
+12     Feature_30         0.014034
+13     Feature_67         0.013975
+14     Feature_9          0.013971
+15     Feature_88         0.013259
+16     Feature_13         0.012932
+17     Feature_34         0.012882
+18     Feature_42         0.012826
+19     Feature_84         0.012703
+20     Feature_2          0.012271
 
 FEATURE IMPORTANCE PRIMA DELLA PREPROCESSING:
 ------------------------------------------------------------

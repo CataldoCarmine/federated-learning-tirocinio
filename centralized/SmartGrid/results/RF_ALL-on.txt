@@ -1,0 +1,113 @@
+RESOCONTO ADDESTRAMENTO CENTRALIZZATO SMARTGRID - RANDOM FOREST
+===============================================================
+Data: 2025-11-10 15:16:40
+Modello: Random Forest
+N. Estimatori: 100
+Max Depth: None
+Random State: 42
+
+METRICHE FINALI:
+========================================
+Accuracy: 0.802671
+F1-Score: 0.874159
+Balanced Accuracy: 0.684892
+Precision: 0.798929
+Recall: 0.965030
+AUC: 0.871078
+
+METRICHE PER CLASSE:
+------------------------------
+CLASSE NATURAL:
+  Precision: 0.825254
+  Recall: 0.404755
+  F1-Score: 0.543127
+  Support: 3407.0
+
+CLASSE ATTACK:
+  Precision: 0.798929
+  Recall: 0.965030
+  F1-Score: 0.874159
+  Support: 8350.0
+
+MATRICE DI CONFUSIONE SUL VALIDATION SET:
+----------------------------------------
+True Positive (TP):  8050
+False Positive (FP): 2011
+False Negative (FN): 300
+True Negative (TN):  1396
+
+FEATURE IMPORTANCE DEL MODELLO RANDOM FOREST:
+------------------------------------------------------------
+Rank   Feature         Importance  
+-----------------------------------
+1      Feature_62         0.055221
+2      Feature_57         0.030600
+3      Feature_64         0.021355
+4      Feature_67         0.018672
+5      Feature_69         0.017307
+6      Feature_56         0.017034
+7      Feature_43         0.016987
+8      Feature_9          0.016950
+9      Feature_0          0.016710
+10     Feature_15         0.016688
+11     Feature_60         0.016561
+12     Feature_17         0.016522
+13     Feature_50         0.016365
+14     Feature_13         0.016012
+15     Feature_5          0.015630
+16     Feature_1          0.015541
+17     Feature_3          0.015297
+18     Feature_61         0.014877
+19     Feature_10         0.014765
+20     Feature_49         0.014693
+
+FEATURE IMPORTANCE PRIMA DELLA PREPROCESSING:
+------------------------------------------------------------
+Feature                   Importance  
+----------------------------------------
+R4-PM2:V                  0.019663
+R1-PM2:V                  0.019521
+R3-PM2:V                  0.019314
+R4-PM7:V                  0.017015
+R2-PA:ZH                  0.015685
+R3-PA:ZH                  0.015596
+R4-PA:ZH                  0.015114
+R1-PM5:I                  0.014625
+R1-PA:ZH                  0.014368
+R2-PM1:V                  0.014219
+R3-PM5:I                  0.014212
+R4-PM5:I                  0.014084
+R2-PM5:I                  0.013971
+R4-PM3:V                  0.013278
+R2-PM7:V                  0.013077
+R1-PA3:VH                 0.013022
+R4-PM1:V                  0.012784
+R1-PA2:VH                 0.012630
+R2-PA:Z                   0.012558
+R4-PA3:VH                 0.012389
+
+FEATURE IMPORTANCE DOPO LA PREPROCESSING:
+------------------------------------------------------------
+Feature/Componente        Importance  
+----------------------------------------
+F63                       0.038709
+F58                       0.024327
+F65                       0.018642
+F18                       0.018236
+F10                       0.017920
+F1                        0.017380
+F44                       0.017313
+F16                       0.016991
+F57                       0.016899
+F4                        0.016568
+F62                       0.016191
+F14                       0.016106
+F2                        0.016080
+F12                       0.016016
+F68                       0.015914
+F51                       0.015906
+F6                        0.015623
+F61                       0.015045
+F9                        0.014965
+F34                       0.014954
+
