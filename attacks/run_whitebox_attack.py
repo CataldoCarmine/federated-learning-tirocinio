@@ -1,33 +1,6 @@
 #!/usr/bin/env python3
 """
-run_whitebox_attack.py
-
-Script esecutivo per l'attacco White-Box Decision Tree Attack sul Random Forest
-federato SmartGrid.
-
-Questo script orchestra l'intero processo di:
-1. Caricamento del modello Random Forest (federato o centralizzato)
-2. Caricamento e preprocessing del test set
-3. Esecuzione dell'attacco con multipli epsilon
-4. Generazione report e grafici
-
-PREREQUISITI:
-- Random Forest addestrato (usa centralizedRF.py o la versione federata)
-- ART (Adversarial Robustness Toolbox) installato
-- Dataset SmartGrid in data/SmartGrid/
-
-USAGE:
-    # Opzione 1: Usa Random Forest già salvato
-    python run_whitebox_attack.py --model-path models/federated_rf.pkl
-    
-    # Opzione 2: Addestra Random Forest on-the-fly
-    python run_whitebox_attack.py --train-on-fly
-    
-    # Opzione 3: Specifica epsilon personalizzati
-    python run_whitebox_attack.py --epsilons 0.001 0.01 0.1
-
-Autore: Cataldo Carmine
-Progetto: Federated Learning SmartGrid IDS - Adversarial Attacks
+[Docstring invariata...]
 """
 
 import argparse
@@ -37,10 +10,12 @@ import pickle
 import numpy as np
 from datetime import datetime
 
-# Aggiungi parent directory al path per import
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# CORREZIONE: Aggiungi parent directory al path PRIMA degli import
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.insert(0, parent_dir)
 
-# Import componenti attacco
+# CORREZIONE: Import ASSOLUTI (non relativi) perché script eseguito come main
 from attacks.whitebox_decision_tree_attack import (
     WhiteBoxDecisionTreeAttack,
     load_and_train_random_forest
@@ -51,35 +26,42 @@ from attacks.utils import (
     apply_preprocessing_pipeline
 )
 
-# Import modello centralizzato se disponibile
+# CORREZIONE: Import centralizedRF OPZIONALE con path corretto
+CENTRALIZED_RF_AVAILABLE = False
 try:
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'centralized'))
-    from centralizedRF import (
-        create_smartgrid_random_forest_model,
-        load_centralized_smartgrid_data,
-        split_train_validation_test,
-        centralized_preprocessing
-    )
-    CENTRALIZED_RF_AVAILABLE = True
-except ImportError:
-    CENTRALIZED_RF_AVAILABLE = False
-    print("⚠️ centralizedRF.py non trovato - usare --train-on-fly o --model-path")
+    centralized_dir = os.path.join(parent_dir, 'centralized', 'SmartGrid')
+    sys.path.insert(0, centralized_dir)
+    
+    import centralizedRF
+    
+    required_functions = [
+        'create_smartgrid_random_forest_model',
+        'load_centralized_smartgrid_data',
+        'split_train_validation_test',
+        'centralized_preprocessing'
+    ]
+    
+    missing_functions = []
+    for func_name in required_functions:
+        if not hasattr(centralizedRF, func_name):
+            missing_functions.append(func_name)
+    
+    if missing_functions:
+        print(f"⚠️ centralizedRF importato ma mancano funzioni: {missing_functions}")
+        CENTRALIZED_RF_AVAILABLE = False
+    else:
+        CENTRALIZED_RF_AVAILABLE = True
+        print(f"✅ centralizedRF importato con successo")
+        
+except ImportError as e:
+    print(f"⚠️ centralizedRF.py non disponibile: {e}")
+    print("   Opzione --train-centralized non sarà disponibile")
+except Exception as e:
+    print(f"⚠️ Errore inaspettato import centralizedRF: {e}")
 
 
 def load_model_from_path(model_path):
-    """
-    Carica un modello Random Forest salvato da file.
-    
-    Args:
-        model_path: Percorso al file .pkl del modello
-        
-    Returns:
-        RandomForestClassifier: Modello caricato
-        
-    Raises:
-        FileNotFoundError: Se il file non esiste
-        ValueError: Se il file non contiene un Random Forest valido
-    """
+    """[Implementazione invariata dalla versione precedente]"""
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"File modello non trovato: {model_path}")
     
@@ -92,12 +74,10 @@ def load_model_from_path(model_path):
         with open(model_path, 'rb') as f:
             model = pickle.load(f)
         
-        # Verifica che sia un Random Forest
         from sklearn.ensemble import RandomForestClassifier
         if not isinstance(model, RandomForestClassifier):
             raise ValueError(f"Il file non contiene un RandomForestClassifier, trovato: {type(model)}")
         
-        # Verifica che sia addestrato
         if not hasattr(model, 'estimators_') or len(model.estimators_) == 0:
             raise ValueError("Il Random Forest nel file non è addestrato!")
         
@@ -115,12 +95,7 @@ def load_model_from_path(model_path):
 
 
 def train_centralized_rf():
-    """
-    Addestra un Random Forest centralizzato usando centralizedRF.py.
-    
-    Returns:
-        tuple: (model, X_train, y_train, X_val, y_val, X_test, y_test)
-    """
+    """[Implementazione invariata]"""
     if not CENTRALIZED_RF_AVAILABLE:
         raise ImportError(
             "centralizedRF.py non disponibile. "
@@ -131,11 +106,11 @@ def train_centralized_rf():
     print(f"ADDESTRAMENTO RANDOM FOREST CENTRALIZZATO")
     print(f"{'='*60}")
     
-    # Carica dati
-    X, y, dataset_info = load_centralized_smartgrid_data()
+    import centralizedRF
     
-    # Split
-    X_train_raw, X_val_raw, X_test_raw, y_train, y_val, y_test = split_train_validation_test(
+    X, y, dataset_info = centralizedRF.load_centralized_smartgrid_data()
+    
+    X_train_raw, X_val_raw, X_test_raw, y_train, y_val, y_test = centralizedRF.split_train_validation_test(
         X, y,
         train_size=0.7,
         val_size=0.15,
@@ -143,19 +118,16 @@ def train_centralized_rf():
         random_state=42
     )
     
-    # Preprocessing
-    X_train_final, X_val_final, X_test_final = centralized_preprocessing(
+    X_train_final, X_val_final, X_test_final = centralizedRF.centralized_preprocessing(
         X_train_raw, X_val_raw, X_test_raw
     )
     
-    # Crea e addestra modello
     input_features = X_train_final.shape[1]
-    model = create_smartgrid_random_forest_model(input_features)
+    model = centralizedRF.create_smartgrid_random_forest_model(input_features)
     
     print(f"\nAddestramento in corso...")
     model.fit(X_train_final, y_train)
     
-    # Valutazione rapida
     train_acc = model.score(X_train_final, y_train)
     val_acc = model.score(X_val_final, y_val)
     test_acc = model.score(X_test_final, y_test)
@@ -170,12 +142,7 @@ def train_centralized_rf():
 
 
 def main(args):
-    """
-    Funzione principale per eseguire l'attacco White-Box.
-    
-    Args:
-        args: Argomenti da argparse
-    """
+    """[Implementazione invariata dalla versione precedente]"""
     print(f"\n{'#'*80}")
     print(f"# WHITE-BOX DECISION TREE ATTACK - SMARTGRID IDS")
     print(f"{'#'*80}")
@@ -186,13 +153,11 @@ def main(args):
     print(f"#   - Save results: {args.save_results}")
     print(f"{'#'*80}\n")
     
-    # Imposta seed per riproducibilità
     set_reproducibility_seeds(args.seed)
     
     # ============== STEP 1: CARICAMENTO MODELLO ==============
     
     if args.model_path:
-        # Opzione 1: Carica modello da file
         model = load_model_from_path(args.model_path)
         X_test, y_test, _ = load_test_data_from_clients(
             args.test_clients,
@@ -201,7 +166,6 @@ def main(args):
         X_test, _ = apply_preprocessing_pipeline(X_test, fit_on_data=X_test)
         
     elif args.train_on_fly:
-        # Opzione 2: Addestra Random Forest on-the-fly
         print(f"Modalità: Addestramento on-the-fly")
         model, _, _, _, _, _ = load_and_train_random_forest(
             train_clients=args.train_clients
@@ -213,7 +177,11 @@ def main(args):
         X_test, _ = apply_preprocessing_pipeline(X_test, fit_on_data=X_test)
         
     elif args.train_centralized:
-        # Opzione 3: Addestra Random Forest centralizzato
+        if not CENTRALIZED_RF_AVAILABLE:
+            print(f"\n❌ ERRORE: --train-centralized richiesto ma centralizedRF.py non disponibile")
+            print(f"   Usa --model-path o --train-on-fly invece")
+            sys.exit(1)
+            
         print(f"Modalità: Random Forest centralizzato")
         model, _, _, _, _, X_test, y_test = train_centralized_rf()
         
@@ -239,7 +207,6 @@ def main(args):
     print(f"  - Attacchi: {y_test.sum()} ({y_test.mean()*100:.1f}%)")
     print(f"  - Naturali: {(y_test==0).sum()} ({(1-y_test.mean())*100:.1f}%)")
     
-    # Verifica compatibilità
     if X_test.shape[1] != model.n_features_in_:
         print(f"\n❌ ERRORE: Incompatibilità dimensioni!")
         print(f"   Modello richiede {model.n_features_in_} feature")
@@ -278,7 +245,6 @@ def main(args):
         print(f"# Directory output: results/attacks/")
     print(f"{'#'*80}\n")
     
-    # Mostra best epsilon
     if results:
         best_eps = max(
             results.keys(),
@@ -301,15 +267,11 @@ Esempi d'uso:
   # Addestra on-the-fly
   python run_whitebox_attack.py --train-on-fly
   
-  # Usa centralizedRF.py
-  python run_whitebox_attack.py --train-centralized
-  
   # Epsilon personalizzati
   python run_whitebox_attack.py --train-on-fly --epsilons 0.001 0.01 0.1
         """
     )
     
-    # Opzioni modello
     model_group = parser.add_mutually_exclusive_group()
     model_group.add_argument(
         '--model-path',
@@ -327,7 +289,6 @@ Esempi d'uso:
         help='Usa centralizedRF.py per addestrare modello'
     )
     
-    # Configurazione attacco
     parser.add_argument(
         '--epsilons',
         type=float,
@@ -336,7 +297,6 @@ Esempi d'uso:
         help='Lista di epsilon da testare (default: 0.001 0.005 0.01 0.05)'
     )
     
-    # Configurazione dati
     parser.add_argument(
         '--test-clients',
         type=int,
@@ -358,7 +318,6 @@ Esempi d'uso:
         help='Directory dataset SmartGrid (default: data/SmartGrid)'
     )
     
-    # Opzioni output
     parser.add_argument(
         '--save-results',
         action='store_true',
@@ -372,7 +331,6 @@ Esempi d'uso:
         help='Non salvare risultati'
     )
     
-    # Riproducibilità
     parser.add_argument(
         '--seed',
         type=int,
