@@ -984,6 +984,9 @@ class SmartGridRandomForestFedAvg(FedAvg):
     def aggregate_fit(self, server_round, results, failures):
         """
         Aggrega gli alberi Random Forest dai client secondo la metodologia del paper.
+        
+        MODIFICA: Salva il modello globale nell'ultimo round per permettere
+        attacchi adversarial post-training.
         """
 
         print(f"\n=== AGGREGAZIONE RANDOM FOREST - ROUND {server_round} ===")
@@ -1042,6 +1045,65 @@ class SmartGridRandomForestFedAvg(FedAvg):
             
             # Crea il Random Forest globale
             global_rf = create_global_random_forest(selected_trees)
+            
+            # =========================================================
+            # 🆕 NUOVA SEZIONE: SALVATAGGIO MODELLO NELL'ULTIMO ROUND
+            # =========================================================
+            if server_round == NUM_ROUNDS:
+                # Crea directory per salvare i modelli
+                models_dir = os.path.join("models")
+                os.makedirs(models_dir, exist_ok=True)
+                
+                # Genera timestamp per nome file univoco
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                model_filename = f"federated_rf_global_{timestamp}.pkl"
+                model_path = os.path.join(models_dir, model_filename)
+                
+                # Salva il modello usando joblib (formato standard per scikit-learn)
+                try:
+                    joblib.dump(global_rf, model_path)
+                    
+                    print(f"\n{'='*80}")
+                    print(f"🎉 TRAINING FEDERATO COMPLETATO!")
+                    print(f"{'='*80}")
+                    print(f"📁 Modello globale salvato: {model_path}")
+                    print(f"📊 Dettagli modello:")
+                    print(f"   - Numero alberi: {len(global_rf.estimators_)}")
+                    print(f"   - Numero feature: {global_rf.n_features_in_}")
+                    print(f"   - Classi: {global_rf.classes_}")
+                    print(f"   - Strategia aggregazione: {TREE_AGGREGATION_STRATEGY}")
+                    print(f"   - Metodo selezione: {TREE_SELECTION_METHOD}")
+                    print(f"\n🔬 Pronto per attacchi adversarial!")
+                    print(f"   Usa: python attacks/run_whitebox_attack.py --model-path {model_path}")
+                    print(f"{'='*80}\n")
+                    
+                    # Salva anche un file di metadati con informazioni sul modello
+                    metadata_path = os.path.join(models_dir, f"federated_rf_metadata_{timestamp}.txt")
+                    with open(metadata_path, 'w') as f:
+                        f.write("METADATI MODELLO RANDOM FOREST FEDERATO\n")
+                        f.write("="*60 + "\n\n")
+                        f.write(f"Data creazione: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                        f.write(f"Numero rounds: {NUM_ROUNDS}\n")
+                        f.write(f"Numero alberi globali: {len(global_rf.estimators_)}\n")
+                        f.write(f"Numero feature: {global_rf.n_features_in_}\n")
+                        f.write(f"Classi: {list(global_rf.classes_)}\n")
+                        f.write(f"Strategia aggregazione: {TREE_AGGREGATION_STRATEGY}\n")
+                        f.write(f"Metodo selezione alberi: {TREE_SELECTION_METHOD}\n")
+                        f.write(f"Max alberi globali: {MAX_TREES_GLOBAL}\n")
+                        f.write(f"Criterio: {RF_CRITERION}\n")
+                        f.write(f"Max features: {RF_MAX_FEATURES}\n")
+                        f.write(f"Class weight: {RF_CLASS_WEIGHT}\n")
+                        f.write(f"\nPath modello: {model_path}\n")
+                    
+                    print(f"[Server] ✅ Metadati salvati: {metadata_path}")
+                    
+                except Exception as e:
+                    print(f"[Server] ❌ ERRORE nel salvataggio del modello: {e}")
+                    import traceback
+                    traceback.print_exc()
+            # =========================================================
+            # FINE NUOVA SEZIONE
+            # =========================================================
             
             # Serializza il modello per l'invio ai client
             serialized_model = serialize_global_model(global_rf)
