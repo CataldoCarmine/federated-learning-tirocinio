@@ -492,7 +492,7 @@ def get_smartgrid_evaluate_fn():
         script_dir = os.path.dirname(os.path.abspath(__file__))
 
         # Costruzione path ai file CSV
-        test_clients = [14, 15]
+        test_clients = [1, 13]
         df_list = []
 
         for client_id in test_clients:
