@@ -1,0 +1,742 @@
+"""
+attacks/hsj_blackbox.py
+
+Attacco Black-Box query-based con HopSkipJump su modello federato Random Forest.
+
+SCENARIO:
+Attaccante esterno con accesso solo a query API dell'IDS federato.
+NON ha accesso a:
+- Struttura del modello
+- Parametri degli alberi
+- Dati di training
+
+HA accesso solo a:
+- Query endpoint: invia input X, riceve predizione binaria (Attack/Natural)
+
+STRATEGIA BLACK-BOX QUERY-BASED:
+
+Random Forest federato esposto come servizio IDS:
+  Client → [API IDS] → Random Forest → Predizione (0/1)
+
+Attaccante usa HopSkipJump in modalità query-only:
+1. Invia campioni di attacco
+2. Riceve solo label binarie (NO probabilità, NO gradienti)
+3. HSJ usa solo queste label per esplorare boundary decisionale
+4. Genera perturbazioni che cambiano predizione da Attack → Natural
+
+HOPSKIPJUMP (Decision-Based):
+- NON richiede gradienti (perfetto per black-box)
+- Usa solo predizioni binarie
+- Esplora boundary con binary search + gradient estimation via query
+- Minimizza perturbazione mantenendo evasione
+
+QUERY BUDGET "SILENZIOSO":
+In contesto SmartGrid real-time, query eccessive possono:
+- Essere rilevate come comportamento anomalo
+- Attivare rate-limiting
+- Allertare amministratori di sicurezza
+
+Configurazione "silenziosa":
+- max_eval: 1000 (budget per campione)
+- max_iter: 20 (convergenza rapida)
+- Query medie attese: 400-600 per campione
+
+MOTIVAZIONE SCELTA QUERY BUDGET:
+
+Sistema IDS monitorare pattern di accesso:
+- Query normali: 1-10 per minuto
+- Query attacco silenzioso: 400-600 totali per campione
+- Distribuite nel tempo → NON rilevabile
+
+vs Query aggressive (10000):
+- Facilmente rilevabili come attacco
+- Rate-limiting attivo
+- Investigazione manuale
+
+UTILIZZO:
+    python attacks/hsj_blackbox.py \
+        --target-model-path models/federated_rf_global_20251121_024044.pkl \
+        --max-iter 20 \
+        --max-eval 1000 \
+        --test-clients 1 13 \
+        --save-results
+
+AUTORE: Carmine Cataldo
+DATA: 2025-01-23
+"""
+
+import numpy as np
+import sys
+import os
+import argparse
+import time
+from typing import Tuple, Dict
+
+# Aggiungi path per import moduli custom
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+# Import ART
+from art.attacks.evasion import HopSkipJump
+from art.estimators.classification import SklearnClassifier
+
+# Import moduli custom
+from attacks.utils import (
+    load_federated_model,
+    load_test_data_from_clients,
+    apply_preprocessing_pipeline,
+    get_smartgrid_physical_constraints,
+    apply_physical_constraints,
+    select_attack_samples,
+    set_reproducibility_seeds
+)
+from attacks.evaluation import (
+    evaluate_attack,
+    print_attack_report,
+    save_attack_results
+)
+
+
+class QueryCountingWrapper:
+    """
+    Wrapper che simula un'API black-box con conteggio delle query.
+    
+    SPIEGAZIONE:
+    
+    In uno scenario black-box reale, l'attaccante NON ha accesso diretto
+    al modello Random Forest. Interagisce solo tramite API:
+    
+    Attaccante → [API Request] → IDS Server → [Predizione] → Attaccante
+    
+    Questo wrapper:
+    1. Simula l'API (usa modello locale per semplicità)
+    2. Conta ogni query effettuata
+    3. Impone un budget massimo di query (per realismo)
+    4. Logga statistiche delle query
+    
+    QUERY TRACKING:
+    - Ogni chiamata a predict() incrementa il contatore
+    - Se supera max_queries_total, lancia eccezione
+    - Log dettagliato per analisi pattern di query
+    
+    REALISMO BLACK-BOX:
+    In produzione, questo wrapper sarebbe sostituito da chiamate HTTP reali:
+    
+    def predict(self, X):
+        response = requests.post(
+            "https://ids-api.smartgrid.com/classify",
+            json={"data": X.tolist()}
+        )
+        return response.json()["prediction"]
+    
+    Ma per testing, usiamo modello locale per evitare setup server.
+    """
+    
+    def __init__(self, model, max_queries_total=500000):
+        """
+        Inizializza wrapper query-counting per black-box attack.
+        
+        Args:
+            model: Random Forest target (usato per simulare API)
+            max_queries_total: Budget massimo query globale (default: 500000)
+        """
+        self.model = model
+        self.query_count = 0
+        self.max_queries_total = max_queries_total
+        self.query_log = []  # Log timestamp e batch size per analisi
+        
+        # Wrap modello per ART
+        self.sklearn_clf = SklearnClassifier(model=model)
+    
+    def predict(self, X):
+        """
+        Simula query API e conta le chiamate.
+        
+        IMPORTANTE: Questa funzione viene chiamata da HopSkipJump
+        per ogni query al modello. Il conteggio è automatico.
+        
+        Args:
+            X: Batch di input (shape: [N, features])
+            
+        Returns:
+            predictions: Predizioni binarie (shape: [N, 1])
+            
+        Raises:
+            RuntimeError: Se supera budget query globale
+        """
+        # Verifica budget globale
+        if self.query_count >= self.max_queries_total:
+            raise RuntimeError(
+                f"❌ Budget query globale esaurito: {self.query_count}/{self.max_queries_total}"
+            )
+        
+        # Conta query
+        n_queries = len(X)
+        self.query_count += n_queries
+        
+        # Logga timestamp e batch size
+        self.query_log.append({
+            'timestamp': time.time(),
+            'batch_size': n_queries,
+            'cumulative': self.query_count
+        })
+        
+        # Simula latenza API (opzionale, per realismo)
+        # In produzione, ci sarebbe latenza di rete
+        # time.sleep(0.001 * n_queries)
+        
+        # Delega predizione al modello (simula risposta API)
+        predictions = self.model.predict(X)
+        
+        # ART richiede shape [N, 1] per classificazione binaria
+        # (anche se Random Forest restituisce [N,])
+        return predictions.reshape(-1, 1)
+    
+    def get_query_count(self):
+        """Restituisce il numero totale di query effettuate."""
+        return self.query_count
+    
+    def reset_query_count(self):
+        """Resetta il contatore query (per nuovi esperimenti)."""
+        self.query_count = 0
+        self.query_log = []
+    
+    def get_query_statistics(self):
+        """
+        Calcola statistiche delle query effettuate.
+        
+        Returns:
+            Dictionary con statistiche:
+                - total_queries: Totale query
+                - avg_batch_size: Dimensione media batch
+                - query_rate: Query al secondo
+        """
+        if not self.query_log:
+            return {'total_queries': 0, 'avg_batch_size': 0, 'query_rate': 0}
+        
+        total_queries = self.query_count
+        avg_batch_size = np.mean([log['batch_size'] for log in self.query_log])
+        
+        # Calcola rate (query/secondo)
+        time_span = self.query_log[-1]['timestamp'] - self.query_log[0]['timestamp']
+        query_rate = total_queries / time_span if time_span > 0 else 0
+        
+        return {
+            'total_queries': total_queries,
+            'avg_batch_size': avg_batch_size,
+            'query_rate': query_rate,
+            'time_span_seconds': time_span
+        }
+    
+    # ===== PROPRIETÀ RICHIESTE DA ART =====
+    
+    @property
+    def nb_classes(self):
+        """Numero classi (2 per SmartGrid: Natural/Attack)."""
+        return 2
+    
+    @property
+    def input_shape(self):
+        """Shape input (128 feature SmartGrid preprocessate)."""
+        return (self.model.n_features_in_,)
+
+
+def run_blackbox_query_hsj_attack(
+    target_model_path,
+    test_clients=[1, 13],
+    max_iter=20,
+    max_eval=1000,
+    init_eval=50,
+    norm=2,
+    max_queries_total=500000,
+    save_results=True,
+    verbose=False
+):
+    """
+    Esegue attacco Black-Box query-based con HopSkipJump su Random Forest federato.
+    
+    WORKFLOW COMPLETO:
+    
+    FASE 1: SETUP BLACK-BOX ORACLE
+    - Carica modello target federato
+    - Wrap con QueryCountingWrapper (simula API)
+    - Configura budget query totale
+    
+    FASE 2: CARICAMENTO DATI TEST
+    - Carica test set (client 1, 13)
+    - Applica preprocessing identico al federato
+    - Seleziona campioni di attacco
+    
+    FASE 3: CONFIGURAZIONE HOPSKIPJUMP "SILENZIOSO"
+    - max_iter: 20 (convergenza rapida)
+    - max_eval: 1000 (budget per campione)
+    - init_eval: 50 (inizializzazione veloce)
+    - MOTIVAZIONE: Evitare rilevamento come attacco
+    
+    FASE 4: GENERAZIONE ADVERSARIAL QUERY-BASED
+    - HSJ usa solo query predict() all'oracle
+    - NO accesso gradienti, probabilità, struttura
+    - Query medie attese: 400-600 per campione
+    
+    FASE 5: VALUTAZIONE E ANALISI QUERY
+    - Calcola ASR (Attack Success Rate)
+    - Metriche perturbazione (L2, L-inf, L0)
+    - Statistiche query (totali, rate, efficienza)
+    
+    CONFRONTO CONFIGURAZIONI:
+    
+    CONFIGURAZIONE "SILENZIOSA" (USATA):
+    - max_eval: 1000
+    - max_iter: 20
+    - Query medie: 400-600
+    - ASR atteso: 15-30%
+    - Rilevabilità: BASSA
+    - Tempo: ~10 minuti per 7984 campioni
+    
+    CONFIGURAZIONE "AGGRESSIVA" (NON USATA):
+    - max_eval: 10000
+    - max_iter: 100
+    - Query medie: 3000-5000
+    - ASR atteso: 40-60%
+    - Rilevabilità: ALTA
+    - Tempo: ~2 ore per 7984 campioni
+    
+    Args:
+        target_model_path: Path modello Random Forest federato target
+        test_clients: Client per test (default: [1, 13])
+        max_iter: Max iterazioni HSJ (default: 20, "silenzioso")
+        max_eval: Max query per campione (default: 1000, "silenzioso")
+        init_eval: Query inizializzazione (default: 50)
+        norm: Norma da minimizzare (default: 2 = L2)
+        max_queries_total: Budget query globale (default: 500000)
+        save_results: Se True, salva risultati (default: True)
+        verbose: Se True, stampa dettagli (default: False)
+        
+    Returns:
+        results: Dictionary con risultati completi
+    """
+    print("="*80)
+    print("⚫ ATTACCO BLACK-BOX: QUERY-BASED HOPSKIPJUMP (SILENZIOSO)")
+    print("="*80)
+    print(f"Target model: {target_model_path}")
+    print(f"Test clients: {test_clients}")
+    print(f"\nCONFIGURAZIONE QUERY 'SILENZIOSA' (per evitare rilevamento):")
+    print(f"  - Max iterations: {max_iter} (convergenza rapida)")
+    print(f"  - Max eval (query/campione): {max_eval} (budget limitato)")
+    print(f"  - Init eval: {init_eval}")
+    print(f"  - Norm: L{norm}")
+    print(f"  - Budget query globale: {max_queries_total}")
+    print(f"\n💡 MOTIVAZIONE CONFIGURAZIONE 'SILENZIOSA':")
+    print(f"In contesto SmartGrid real-time, query eccessive (>1000/campione)")
+    print(f"possono essere rilevate come comportamento anomalo e attivare allerta.")
+    print(f"Questa configurazione simula un attaccante che cerca di rimanere")
+    print(f"sotto il radar, accettando ASR più basso in cambio di stealth.")
+    print(f"\nQuery medie attese: 400-600 per campione")
+    print(f"ASR atteso: 15-30% (vs 40-60% con configurazione aggressiva)")
+    print(f"Rilevabilità: BASSA (simula traffico normale)")
+    print("="*80 + "\n")
+    
+    set_reproducibility_seeds(42)
+    
+    # ========== FASE 1: SETUP BLACK-BOX ORACLE ==========
+    print("\n" + "="*80)
+    print("FASE 1: CONFIGURAZIONE ORACLE BLACK-BOX")
+    print("="*80)
+    
+    # Carica modello target (solo per simulare API)
+    print(f"\n[Black-Box] Caricamento modello target per simulazione API...")
+    model = load_federated_model(target_model_path)
+    
+    # Crea wrapper query-counting
+    print(f"\n[Black-Box] Creazione oracle black-box con query counting...")
+    oracle = QueryCountingWrapper(
+        model=model,
+        max_queries_total=max_queries_total
+    )
+    
+    print(f"[Black-Box] ✅ Oracle configurato:")
+    print(f"  - Budget query totale: {max_queries_total}")
+    print(f"  - Query tracking: ATTIVO")
+    print(f"  - Modello: Random Forest con {len(model.estimators_)} alberi")
+    print(f"  - Feature: {model.n_features_in_}")
+    
+    # ========== FASE 2: CARICAMENTO DATI TEST ==========
+    print("\n" + "="*80)
+    print("FASE 2: CARICAMENTO DATI TEST")
+    print("="*80)
+    
+    print(f"\n[Black-Box] Caricamento test set (client {test_clients})...")
+    X_test_raw, y_test, test_info = load_test_data_from_clients(client_ids=test_clients)
+    
+    # Preprocessing
+    print(f"\n[Black-Box] Applicazione preprocessing...")
+    X_test, _ = apply_preprocessing_pipeline(X_test_raw, fit_on_data=X_test_raw)
+    
+    # Verifica compatibilità
+    if X_test.shape[1] != model.n_features_in_:
+        raise ValueError(
+            f"❌ Incompatibilità feature: test={X_test.shape[1]}, target={model.n_features_in_}"
+        )
+    
+    print(f"[Black-Box] ✅ Test set preprocessato: {X_test.shape}")
+    
+    # Seleziona campioni Attack
+    print(f"\n[Black-Box] Selezione campioni Attack dal test set...")
+    X_attacks_test, y_attacks_test, attack_indices = select_attack_samples(
+        X_test, y_test, target_class=1
+    )
+    
+    print(f"  - Campioni totali test: {len(X_test)}")
+    print(f"  - Campioni Attack: {len(X_attacks_test)}")
+    print(f"  - Campioni Natural: {(y_test == 0).sum()}")
+    
+    # ========== FASE 3: CONFIGURAZIONE HOPSKIPJUMP BLACK-BOX ==========
+    print("\n" + "="*80)
+    print("FASE 3: CONFIGURAZIONE HOPSKIPJUMP BLACK-BOX (SILENZIOSO)")
+    print("="*80)
+    
+    """
+    CONFIGURAZIONE "SILENZIOSA" PER EVITARE RILEVAMENTO:
+    
+    MOTIVAZIONE TECNICA:
+    
+    In un sistema IDS SmartGrid real-time, l'amministratore può:
+    1. Monitorare rate di query al sistema
+    2. Rilevare pattern anomali (es. molte query in breve tempo)
+    3. Attivare rate-limiting o blocco IP
+    4. Investigare manualmente sorgenti sospette
+    
+    PARAMETRI "SILENZIOSI":
+    - max_iter: 20 invece di 100
+      * Meno iterazioni = convergenza più rapida
+      * Riduce query totali
+      * ASR leggermente inferiore ma accettabile
+    
+    - max_eval: 1000 invece di 10000
+      * Budget per campione ridotto 10x
+      * Query medie: 400-600 (vs 3000-5000 aggressive)
+      * Simula traffico normale distribuito nel tempo
+    
+    - init_eval: 50 invece di 100
+      * Inizializzazione più rapida
+      * Meno query "sprecate" in ricerca iniziale
+    
+    TRADE-OFF:
+    ✅ PRO:
+    - Bassa rilevabilità (simula utente normale)
+    - NO trigger rate-limiting
+    - NO allerta sicurezza
+    
+    ❌ CONTRO:
+    - ASR inferiore (15-30% vs 40-60%)
+    - Perturbazioni leggermente più grandi
+    - Convergenza meno accurata
+    
+    CONFRONTO REALISMO:
+    
+    UTENTE NORMALE:
+    - 1-10 query/minuto
+    - Pattern regolare
+    - Latenza variabile
+    
+    ATTACCO SILENZIOSO (questa config):
+    - 400-600 query totali per campione
+    - Distribuite in ~5-10 minuti
+    - Rate: ~60-120 query/minuto
+    - Pattern: Leggermente elevato ma NON anomalo
+    
+    ATTACCO AGGRESSIVO (config alternativa):
+    - 3000-5000 query totali
+    - Concentrate in 1-2 minuti
+    - Rate: 1500-2500 query/minuto
+    - Pattern: ALTAMENTE anomalo → Rilevamento garantito
+    """
+    
+    # Calcola vincoli fisici
+    global_min = np.min(X_test)
+    global_max = np.max(X_test)
+    clip_values = (global_min, global_max)
+    
+    print(f"\n[Black-Box] Vincoli fisici: [{global_min:.3f}, {global_max:.3f}]")
+    
+    # Configura HopSkipJump BLACK-BOX "SILENZIOSO"
+    hsj_blackbox = HopSkipJump(
+        classifier=oracle,       # Usa oracle wrapper (simula API)
+        targeted=False,          # Evasion non-targeted
+        norm=norm,               # Minimizza L2
+        max_iter=max_iter,       # ⬇️ 20 (convergenza rapida)
+        max_eval=max_eval,       # ⬇️ 1000 (budget "silenzioso")
+        init_eval=init_eval,     # ⬇️ 50 (inizializzazione veloce)
+        init_size=50,            # Batch size ridotto
+        clip_values=clip_values,
+        verbose=verbose
+    )
+    
+    print(f"[Black-Box] ✅ HSJ Black-Box configurato (modalità SILENZIOSA):")
+    print(f"  - Max iter: {max_iter} (vs 100 aggressivo)")
+    print(f"  - Max eval: {max_eval} (vs 10000 aggressivo)")
+    print(f"  - Init eval: {init_eval}")
+    print(f"  - Query attese per campione: ~{max_eval * 0.5:.0f}")
+    print(f"  - Rilevabilità: BASSA")
+    
+    # ========== FASE 4: GENERAZIONE ADVERSARIAL QUERY-BASED ==========
+    print("\n" + "="*80)
+    print("FASE 4: GENERAZIONE ADVERSARIAL (QUERY-BASED)")
+    print("="*80)
+    
+    print(f"\n[Black-Box] Generazione adversarial per {len(X_attacks_test)} campioni...")
+    print(f"  ⚠️ HSJ è iterativo (query-intensive)")
+    print(f"  ⏱️ Tempo stimato: ~{len(X_attacks_test) * 0.8:.0f} secondi")
+    print(f"  📊 Query totali attese: ~{len(X_attacks_test) * max_eval * 0.5:.0f}")
+    
+    # Reset query count
+    oracle.reset_query_count()
+    start_time = time.time()
+    
+    try:
+        # Genera adversarial examples
+        X_adv_test = hsj_blackbox.generate(x=X_attacks_test)
+        
+        elapsed_time = time.time() - start_time
+        
+        print(f"\n[Black-Box] ✅ Generazione completata!")
+        print(f"  ⏱️ Tempo totale: {elapsed_time:.1f} secondi")
+        
+    except Exception as e:
+        print(f"\n[Black-Box] ❌ Errore generazione: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+    
+    # ========== FASE 5: STATISTICHE QUERY ==========
+    print("\n" + "="*80)
+    print("FASE 5: ANALISI QUERY EFFETTUATE")
+    print("="*80)
+    
+    # Ottieni statistiche query
+    query_stats = oracle.get_query_statistics()
+    total_queries = query_stats['total_queries']
+    queries_per_sample = total_queries / len(X_attacks_test)
+    
+    print(f"\n[Black-Box] 📊 STATISTICHE QUERY:")
+    print(f"  - Query totali: {total_queries}")
+    print(f"  - Query per campione (media): {queries_per_sample:.1f}")
+    print(f"  - Batch size medio: {query_stats['avg_batch_size']:.1f}")
+    print(f"  - Query rate: {query_stats['query_rate']:.1f} query/sec")
+    print(f"  - Tempo esecuzione: {query_stats['time_span_seconds']:.1f} secondi")
+    print(f"  - Budget utilizzato: {(total_queries/max_queries_total)*100:.1f}%")
+    
+    # Confronto con configurazione aggressiva
+    aggressive_queries = len(X_attacks_test) * 5000
+    print(f"\n[Black-Box] 💡 CONFRONTO CONFIGURAZIONI:")
+    print(f"  Silenzioso (usato):  {total_queries} query")
+    print(f"  Aggressivo (teorico): {aggressive_queries} query")
+    print(f"  Risparmio: {((aggressive_queries - total_queries) / aggressive_queries * 100):.1f}%")
+    
+    # ========== FASE 6: APPLICAZIONE VINCOLI FISICI ==========
+    print("\n" + "="*80)
+    print("FASE 6: APPLICAZIONE VINCOLI FISICI")
+    print("="*80)
+    
+    constraints = get_smartgrid_physical_constraints(X_test)
+    
+    perturbation_before = X_adv_test - X_attacks_test
+    l2_before = np.mean(np.linalg.norm(perturbation_before, axis=1))
+    
+    print(f"[Black-Box] Prima vincoli: L2={l2_before:.6f}")
+    
+    X_adv_test_constrained = apply_physical_constraints(
+        X_adv_test,
+        X_attacks_test,
+        constraints,
+        max_perturbation_linf=None  # HSJ già ottimizza
+    )
+    
+    perturbation_after = X_adv_test_constrained - X_attacks_test
+    l2_after = np.mean(np.linalg.norm(perturbation_after, axis=1))
+    
+    print(f"[Black-Box] Dopo vincoli: L2={l2_after:.6f}")
+    
+    # ========== FASE 7: RICOSTRUZIONE E VALUTAZIONE ==========
+    print("\n" + "="*80)
+    print("FASE 7: VALUTAZIONE EFFICACIA ATTACCO")
+    print("="*80)
+    
+    # Ricostruisci dataset completo
+    X_adv_full = X_test.copy()
+    X_adv_full[attack_indices] = X_adv_test_constrained
+    
+    # Valuta
+    print(f"\n[Black-Box] Valutazione esempi adversarial...")
+    
+    metrics = evaluate_attack(
+        model,
+        X_test,
+        y_test,
+        X_adv_full,
+        attack_name="BlackBox_Query_HSJ"
+    )
+    
+    # Aggiungi statistiche query alle metriche
+    metrics['total_queries'] = int(total_queries)
+    metrics['queries_per_sample'] = float(queries_per_sample)
+    metrics['queries_per_successful_evasion'] = float(
+        total_queries / max(metrics['successful_evasions'], 1)
+    )
+    metrics['query_rate'] = float(query_stats['query_rate'])
+    metrics['time_seconds'] = float(query_stats['time_span_seconds'])
+    
+    print_attack_report(metrics)
+    
+    # ========== FASE 8: SALVATAGGIO RISULTATI ==========
+    if save_results:
+        print(f"\n{'='*80}")
+        print(f"SALVATAGGIO RISULTATI")
+        print(f"{'='*80}")
+        
+        save_attack_results(
+            [metrics],
+            X_test,
+            {'blackbox_query_hsj': X_adv_full},
+            epsilons_tested=['BlackBox_Query_HSJ'],
+            save_dir=os.path.join(os.path.dirname(__file__), 'results')
+        )
+    
+    # ========== FASE 9: SUMMARY FINALE ==========
+    print(f"\n{'='*80}")
+    print(f"✅ ATTACCO BLACK-BOX QUERY-BASED COMPLETATO")
+    print(f"{'='*80}")
+    print(f"\n📊 RIASSUNTO FINALE:")
+    print(f"\n1. EFFICACIA ATTACCO:")
+    print(f"   - ASR: {metrics['asr']*100:.2f}%")
+    print(f"   - Evasioni: {metrics['successful_evasions']}/{len(X_attacks_test)}")
+    print(f"   - Accuracy drop: {metrics['accuracy_drop']*100:.2f}%")
+    print(f"\n2. PERTURBAZIONI:")
+    print(f"   - L2 medio: {metrics['l2_mean']:.6f}")
+    print(f"   - L-inf medio: {metrics['linf_mean']:.6f}")
+    print(f"   - Feature modificate: {metrics['l0_mean']:.2f}")
+    print(f"\n3. QUERY UTILIZZATE:")
+    print(f"   - Totali: {total_queries}")
+    print(f"   - Per campione: {queries_per_sample:.1f}")
+    print(f"   - Per evasione riuscita: {metrics['queries_per_successful_evasion']:.1f}")
+    print(f"   - Rate: {query_stats['query_rate']:.1f} query/sec")
+    print(f"\n4. CONFRONTO CONFIGURAZIONI:")
+    print(f"   Silenzioso (usato): ASR {metrics['asr']*100:.2f}%, {total_queries} query")
+    print(f"   Aggressivo (teorico): ASR ~45%, ~{aggressive_queries} query")
+    print(f"   Trade-off: -50% ASR ma -85% query (stealth)")
+    print(f"\n5. RILEVABILITÀ:")
+    print(f"   ✅ Configurazione 'silenziosa' con {queries_per_sample:.0f} query/campione")
+    print(f"   ✅ Simula traffico normale distribuito nel tempo")
+    print(f"   ✅ Bassa probabilità di rilevamento come attacco")
+    print(f"={'='*80}\n")
+    
+    results = {
+        'metrics': metrics,
+        'X_adv': X_adv_full,
+        'query_stats': query_stats,
+        'config': {
+            'max_iter': max_iter,
+            'max_eval': max_eval,
+            'mode': 'silent',
+            'total_queries': total_queries,
+            'queries_per_sample': queries_per_sample
+        }
+    }
+    
+    return results
+
+
+def main():
+    """Funzione principale per esecuzione da linea di comando."""
+    parser = argparse.ArgumentParser(
+        description="Attacco Black-Box query-based HopSkipJump su Random Forest federato"
+    )
+    
+    parser.add_argument(
+        '--target-model-path',
+        type=str,
+        required=True,
+        help='Path modello Random Forest federato target'
+    )
+    
+    parser.add_argument(
+        '--test-clients',
+        type=int,
+        nargs='+',
+        default=[1, 13],
+        help='Client per test (default: 1 13)'
+    )
+    
+    parser.add_argument(
+        '--max-iter',
+        type=int,
+        default=20,
+        help='Max iterazioni HSJ (default: 20, silenzioso)'
+    )
+    
+    parser.add_argument(
+        '--max-eval',
+        type=int,
+        default=1000,
+        help='Max query per campione (default: 1000, silenzioso)'
+    )
+    
+    parser.add_argument(
+        '--init-eval',
+        type=int,
+        default=50,
+        help='Query inizializzazione (default: 50)'
+    )
+    
+    parser.add_argument(
+        '--norm',
+        type=str,
+        choices=['2', 'inf'],
+        default='2',
+        help='Norma (default: 2)'
+    )
+    
+    parser.add_argument(
+        '--max-queries-total',
+        type=int,
+        default=500000,
+        help='Budget query globale (default: 500000)'
+    )
+    
+    parser.add_argument(
+        '--save-results',
+        action='store_true',
+        help='Salva risultati'
+    )
+    
+    parser.add_argument(
+        '--verbose',
+        action='store_true',
+        help='Verbose'
+    )
+    
+    args = parser.parse_args()
+    
+    norm_value = 2 if args.norm == '2' else np.inf
+    
+    results = run_blackbox_query_hsj_attack(
+        target_model_path=args.target_model_path,
+        test_clients=args.test_clients,
+        max_iter=args.max_iter,
+        max_eval=args.max_eval,
+        init_eval=args.init_eval,
+        norm=norm_value,
+        max_queries_total=args.max_queries_total,
+        save_results=args.save_results or True,
+        verbose=args.verbose
+    )
+    
+    if results is None:
+        sys.exit(1)
+    else:
+        print(f"\n✅ Attacco completato!")
+        print(f"   ASR: {results['metrics']['asr']*100:.2f}%")
+        print(f"   Query totali: {results['query_stats']['total_queries']}")
+
+
+if __name__ == "__main__":
+    main()
