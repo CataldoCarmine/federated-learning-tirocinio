@@ -255,21 +255,22 @@ def run_whitebox_hsj_attack(
     print(f"  Tempo stimato: ~{len(X_attacks_only) * 1.5:.0f} secondi per {len(X_attacks_only)} campioni")
     
     try:
-        # ✅ NOVITÀ: Genera con progress bar
-        # NOTA: HopSkipJump non supporta nativamente tqdm, ma possiamo mostrare
-        # una progress bar indeterminata durante la generazione
+        print(f"\n[White-Box HSJ] 📊 Inizio generazione con progress bar...\n")
         
-        print(f"\n[White-Box HSJ] 📊 Inizio generazione...")
+        # ✅ CORREZIONE: Genera campione per campione per progress bar funzionante
+        X_attacks_adv = []
         
-        # Usa tqdm per mostrare progresso (indeterminato poiché HSJ non espone hook)
-        with tqdm(total=len(X_attacks_only), desc="Generazione adversarial", 
-                  unit="campioni", ncols=100) as pbar:
+        for i in tqdm(range(len(X_attacks_only)), 
+                      desc="[HSJ White-Box] Generazione", 
+                      unit="campioni", 
+                      ncols=100):
             
-            # HopSkipJump genera tutto in un colpo, ma aggiorniamo la barra alla fine
-            X_attacks_adv = hsj_attack.generate(x=X_attacks_only)
-            
-            # Aggiorna barra dopo completamento
-            pbar.update(len(X_attacks_only))
+            # Genera adversarial per singolo campione
+            x_adv_i = hsj_attack.generate(x=X_attacks_only[i:i+1])
+            X_attacks_adv.append(x_adv_i[0])
+        
+        # Converti lista in array numpy
+        X_attacks_adv = np.array(X_attacks_adv)
         
         print(f"\n[White-Box HSJ] ✅ Generati {len(X_attacks_adv)} esempi adversarial")
         
