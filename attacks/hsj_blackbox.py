@@ -3,11 +3,12 @@ attacks/hsj_blackbox.py
 
 Attacco Black-Box query-based con HopSkipJump su modello federato Random Forest.
 
-MODIFICHE RISPETTO ALLA VERSIONE PRECEDENTE:
-1. ✅ Clip values feature-wise con percentili robusti (0.1-99.9)
-2. ✅ Verifica compatibilità esplicita con assert
-3. ✅ Logging query efficiency migliorato (query per evasione, efficienza)
-4. ✅ Gestione errori robusta
+CORREZIONE RISPETTO ALLA VERSIONE PRECEDENTE:
+✅ RIMOSSO parametro clip_values da HopSkipJump (non supportato in ART recenti)
+✅ Clipping gestito automaticamente da SklearnClassifier
+✅ Logging query efficiency migliorato (query per evasione, efficienza)
+✅ Verifica compatibilità esplicita con assert
+✅ Gestione errori robusta
 
 SCENARIO:
 Attaccante esterno con accesso solo a query API dell'IDS federato.
@@ -49,7 +50,7 @@ Configurazione "silenziosa":
 
 MOTIVAZIONE SCELTA QUERY BUDGET:
 
-Sistema IDS monitorare pattern di accesso:
+Sistema IDS monitora pattern di accesso:
 - Query normali: 1-10 per minuto
 - Query attacco silenzioso: 400-600 totali per campione
 - Distribuite nel tempo → NON rilevabile
@@ -61,14 +62,14 @@ vs Query aggressive (10000):
 
 UTILIZZO:
     python attacks/hsj_blackbox.py \
-        --target-model-path models/federated_rf_global_20251121_024044.pkl \
+        --target-model-path federated/SmartGrid/models/federated_rf_global_20251121_024044.pkl \
         --max-iter 20 \
         --max-eval 1000 \
         --test-clients 1 13 \
         --save-results
 
 AUTORE: Carmine Cataldo
-DATA: 2025-01-23 (Aggiornato)
+DATA: 2025-01-24 (Aggiornato - Rimosso clip_values)
 """
 
 import numpy as np
@@ -217,7 +218,7 @@ class QueryCountingWrapper:
                 - query_rate: Query al secondo
         """
         if not self.query_log:
-            return {'total_queries': 0, 'avg_batch_size': 0, 'query_rate': 0}
+            return {'total_queries': 0, 'avg_batch_size': 0, 'query_rate': 0, 'time_span_seconds': 0}
         
         total_queries = self.query_count
         avg_batch_size = np.mean([log['batch_size'] for log in self.query_log])
@@ -377,7 +378,7 @@ def run_blackbox_query_hsj_attack(
     print(f"\n[Black-Box] Applicazione preprocessing...")
     X_test, _ = apply_preprocessing_pipeline(X_test_raw, fit_on_data=X_test_raw)
     
-    # ✅ MODIFICA: Verifica compatibilità ESPLICITA con assert
+    # ✅ Verifica compatibilità ESPLICITA con assert
     print(f"\n[Black-Box] Verifica compatibilità dimensionale...")
     try:
         assert X_test.shape[1] == model.n_features_in_, \
@@ -459,22 +460,25 @@ def run_blackbox_query_hsj_attack(
     - Concentrate in 1-2 minuti
     - Rate: 1500-2500 query/minuto
     - Pattern: ALTAMENTE anomalo → Rilevamento garantito
+    
+    ✅ CORREZIONE: clip_values NON PIÙ USATO
+    - Versioni recenti ART gestiscono clipping automaticamente
+    - SklearnClassifier applica limiti ragionevoli internamente
     """
     
-    # ✅ MODIFICA: Clip values FEATURE-WISE con percentili robusti
-    print(f"\n[Black-Box] Calcolo clip values feature-wise con percentili robusti...")
+    # ✅ Calcola range per logging (NON più passati a HopSkipJump)
+    print(f"\n[Black-Box] Calcolo range feature-wise per logging...")
     feature_min = np.percentile(X_test, 0.1, axis=0)  # Percentile 0.1% (robusto)
     feature_max = np.percentile(X_test, 99.9, axis=0)  # Percentile 99.9% (robusto)
     
-    # Converti in range globale per compatibilità ART
     global_min = np.min(feature_min)
     global_max = np.max(feature_max)
-    clip_values = (global_min, global_max)
     
     print(f"[Black-Box] Range feature-wise: min={feature_min.min():.3f}, max={feature_max.max():.3f}")
-    print(f"[Black-Box] Range globale usato: [{global_min:.3f}, {global_max:.3f}]")
+    print(f"[Black-Box] Range globale: [{global_min:.3f}, {global_max:.3f}]")
+    print(f"[Black-Box] 💡 NOTA: Clipping gestito automaticamente da SklearnClassifier")
     
-    # Configura HopSkipJump BLACK-BOX "SILENZIOSO"
+    # ✅ CORREZIONE: Configura HopSkipJump BLACK-BOX SENZA clip_values
     hsj_blackbox = HopSkipJump(
         classifier=oracle,       # Usa oracle wrapper (simula API)
         targeted=False,          # Evasion non-targeted
@@ -483,7 +487,7 @@ def run_blackbox_query_hsj_attack(
         max_eval=max_eval,       # ⬇️ 1000 (budget "silenzioso")
         init_eval=init_eval,     # ⬇️ 50 (inizializzazione veloce)
         init_size=50,            # Batch size ridotto
-        clip_values=clip_values,
+        # ✅ clip_values RIMOSSO - gestito da SklearnClassifier
         verbose=verbose
     )
     
@@ -492,6 +496,7 @@ def run_blackbox_query_hsj_attack(
     print(f"  - Max eval: {max_eval} (vs 10000 aggressivo)")
     print(f"  - Init eval: {init_eval}")
     print(f"  - Query attese per campione: ~{max_eval * 0.5:.0f}")
+    print(f"  - Clipping: Automatico (gestito da ART)")
     print(f"  - Rilevabilità: BASSA")
     
     # ========== FASE 4: GENERAZIONE ADVERSARIAL QUERY-BASED ==========
@@ -593,7 +598,7 @@ def run_blackbox_query_hsj_attack(
         attack_name="BlackBox_Query_HSJ"
     )
     
-    # ✅ MODIFICA: Aggiungi metriche query efficiency
+    # ✅ Aggiungi metriche query efficiency
     metrics['total_queries'] = int(total_queries)
     metrics['queries_per_sample'] = float(queries_per_sample)
     
@@ -611,7 +616,7 @@ def run_blackbox_query_hsj_attack(
     metrics['query_rate'] = float(query_stats['query_rate'])
     metrics['time_seconds'] = float(query_stats['time_span_seconds'])
     
-    # ✅ MODIFICA: Logging query efficiency migliorato
+    # ✅ Logging query efficiency migliorato
     print(f"\n[Black-Box] 📊 EFFICIENZA QUERY:")
     print(f"  - Query per evasione riuscita: {queries_per_evasion:.1f}")
     print(f"  - Efficienza: {efficiency_rate:.4f}% evasioni/query")

@@ -3,11 +3,7 @@ attacks/hsj_graybox_transfer.py
 
 Attacco Gray-Box Transfer con HopSkipJump su modello surrogato Random Forest.
 
-MODIFICHE RISPETTO ALLA VERSIONE PRECEDENTE:
-1. ✅ Clip values feature-wise con percentili robusti
-2. ✅ Verifica compatibilità esplicita
-3. ✅ Metriche transferability migliorate
-4. ✅ Logging dettagliato per debugging
+CORREZIONE: Rimosso parametro clip_values (non supportato in ART recenti).
 
 SCENARIO:
 Attaccante con conoscenza parziale: non ha accesso al modello federato globale,
@@ -36,14 +32,14 @@ TRANSFERABILITY:
 
 UTILIZZO:
     python attacks/hsj_graybox_transfer.py \
-        --target-model-path models/federated_rf_global_20251121_024044.pkl \
+        --target-model-path federated/SmartGrid/models/federated_rf_global_20251121_024044.pkl \
         --surrogate-clients 7 11 \
         --max-iter 50 \
         --max-eval 5000 \
         --save-results
 
 AUTORE: Carmine Cataldo
-DATA: 2025-01-23 (Aggiornato)
+DATA: 2025-01-23 (Aggiornato: 2025-01-24 - Rimosso clip_values)
 """
 
 import numpy as np
@@ -246,7 +242,7 @@ def run_graybox_transfer_hsj_attack(
     print(f"\n[Gray-Box] Applicazione preprocessing...")
     X_test, _ = apply_preprocessing_pipeline(X_test_raw, fit_on_data=X_test_raw)
     
-    # ✅ MODIFICA: Verifica compatibilità ESPLICITA
+    # ✅ Verifica compatibilità ESPLICITA
     print(f"\n[Gray-Box] Verifica compatibilità dimensionale...")
     try:
         assert X_test.shape[1] == rf_target.n_features_in_, \
@@ -278,16 +274,16 @@ def run_graybox_transfer_hsj_attack(
     print(f"\n[Gray-Box] Wrap surrogato per ART...")
     art_surrogate = SklearnClassifier(model=rf_surrogate)
     
-    # ✅ MODIFICA: Clip values FEATURE-WISE con percentili robusti
-    print(f"\n[Gray-Box] Calcolo clip values feature-wise con percentili robusti...")
+    # ✅ Calcola percentili per logging (NON più usati da HopSkipJump)
+    print(f"\n[Gray-Box] Calcolo range feature-wise con percentili robusti...")
     feature_min = np.percentile(X_test, 0.1, axis=0)
     feature_max = np.percentile(X_test, 99.9, axis=0)
     global_min = np.min(feature_min)
     global_max = np.max(feature_max)
-    clip_values = (global_min, global_max)
     
     print(f"[Gray-Box] Range feature-wise: min={feature_min.min():.3f}, max={feature_max.max():.3f}")
-    print(f"[Gray-Box] Range globale usato: [{global_min:.3f}, {global_max:.3f}]")
+    print(f"[Gray-Box] Range globale: [{global_min:.3f}, {global_max:.3f}]")
+    print(f"[Gray-Box] 💡 NOTA: Clipping gestito automaticamente da SklearnClassifier")
     
     # Configura HSJ sul surrogato
     """
@@ -299,6 +295,8 @@ def run_graybox_transfer_hsj_attack(
     Il surrogato ha 50 alberi (vs 100 target) quindi:
     - Boundary decisionale più semplice
     - HSJ converge più velocemente
+    
+    ✅ clip_values RIMOSSO - gestito automaticamente
     """
     
     hsj_surrogate = HopSkipJump(
@@ -308,13 +306,14 @@ def run_graybox_transfer_hsj_attack(
         max_iter=max_iter,
         max_eval=max_eval,
         init_eval=init_eval,
-        clip_values=clip_values,
+        # ✅ clip_values RIMOSSO
         verbose=verbose
     )
     
     print(f"[Gray-Box] ✅ HSJ configurato su surrogato:")
     print(f"  - Max iter: {max_iter}")
     print(f"  - Max eval: {max_eval}")
+    print(f"  - Clipping: Automatico")
     
     print(f"\n[Gray-Box] Generazione adversarial su SURROGATO...")
     print(f"  Tempo stimato: ~{len(X_attacks_test) * 1:.0f} secondi")

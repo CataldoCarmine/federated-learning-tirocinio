@@ -3,11 +3,8 @@ attacks/hsj_whitebox.py
 
 Attacco White-Box con HopSkipJump sul Random Forest federato globale.
 
-MODIFICHE RISPETTO ALLA VERSIONE PRECEDENTE:
-1. ✅ Clip values feature-wise con percentili robusti (0.1-99.9)
-2. ✅ Verifica compatibilità esplicita con assert
-3. ✅ Logging migliorato con statistiche dettagliate
-4. ✅ Gestione errori robusta con fallback
+CORREZIONE: Rimosso parametro clip_values (non supportato in ART recenti).
+Il clipping è gestito automaticamente da SklearnClassifier.
 
 SCENARIO:
 Attaccante interno (o scenario worst-case) con accesso completo al modello
@@ -35,13 +32,13 @@ PARAMETRI WHITE-BOX:
 
 UTILIZZO:
     python attacks/hsj_whitebox.py \
-        --model-path models/federated_rf_global_20251121_024044.pkl \
+        --model-path federated/SmartGrid/models/federated_rf_global_20251121_024044.pkl \
         --max-iter 100 \
         --max-eval 10000 \
         --save-results
 
 AUTORE: Carmine Cataldo
-DATA: 2025-01-23 (Aggiornato)
+DATA: 2025-01-23 (Aggiornato: 2025-01-24 - Rimosso clip_values)
 """
 
 import numpy as np
@@ -153,7 +150,7 @@ def run_whitebox_hsj_attack(
     print(f"\n[White-Box HSJ] Applicazione preprocessing...")
     X_test, _ = apply_preprocessing_pipeline(X_test_raw, fit_on_data=X_test_raw)
     
-    # ✅ MODIFICA 1: Verifica compatibilità ESPLICITA con assert
+    # ✅ Verifica compatibilità ESPLICITA con assert
     print(f"\n[White-Box HSJ] Verifica compatibilità dimensionale...")
     try:
         assert X_test.shape[1] == model.n_features_in_, \
@@ -184,20 +181,19 @@ def run_whitebox_hsj_attack(
     print(f"\n[White-Box HSJ] Wrap modello Random Forest per ART...")
     art_classifier = SklearnClassifier(model=model)
     
-    # ✅ MODIFICA 2: Clip values FEATURE-WISE con percentili robusti
-    print(f"\n[White-Box HSJ] Calcolo clip values feature-wise con percentili robusti...")
+    # ✅ Calcola percentili robusti per logging (NON più usati da HopSkipJump)
+    print(f"\n[White-Box HSJ] Calcolo range feature-wise con percentili robusti...")
     feature_min = np.percentile(X_test, 0.1, axis=0)  # Percentile 0.1% (robusto)
     feature_max = np.percentile(X_test, 99.9, axis=0)  # Percentile 99.9% (robusto)
     
-    # Converti in range globale per compatibilità ART
-    # (ART accetta sia (scalar, scalar) che (array, array))
+    # Converti in range globale per logging
     global_min = np.min(feature_min)
     global_max = np.max(feature_max)
-    clip_values = (global_min, global_max)
     
     print(f"[White-Box HSJ] ✅ Modello wrapped per ART")
     print(f"[White-Box HSJ] Range feature-wise: min={feature_min.min():.3f}, max={feature_max.max():.3f}")
-    print(f"[White-Box HSJ] Range globale usato: [{global_min:.3f}, {global_max:.3f}]")
+    print(f"[White-Box HSJ] Range globale: [{global_min:.3f}, {global_max:.3f}]")
+    print(f"[White-Box HSJ] 💡 NOTA: Clipping gestito automaticamente da SklearnClassifier")
     
     # Configura HopSkipJump
     """
@@ -217,6 +213,11 @@ def run_whitebox_hsj_attack(
     
     targeted: False
     - Evasion attack non-targeted (Attack → Natural)
+    
+    ✅ NOTA IMPORTANTE: clip_values NON PIÙ NECESSARIO
+    - Versioni recenti di ART gestiscono clipping automaticamente
+    - Il wrapper SklearnClassifier applica limiti ragionevoli
+    - Vincoli fisici SmartGrid applicati DOPO con apply_physical_constraints()
     """
     
     hsj_attack = HopSkipJump(
@@ -227,7 +228,7 @@ def run_whitebox_hsj_attack(
         max_eval=max_eval,        # Budget query generoso
         init_eval=init_eval,      # Query inizializzazione
         init_size=100,            # Batch size iniziale
-        clip_values=clip_values,  # Vincoli globali
+        # ✅ clip_values RIMOSSO - gestito da SklearnClassifier
         verbose=verbose
     )
     
@@ -235,7 +236,7 @@ def run_whitebox_hsj_attack(
     print(f"  - Max iterations: {max_iter} (convergenza accurata)")
     print(f"  - Max evaluations: {max_eval} (budget generoso white-box)")
     print(f"  - Norm: L{norm} (minimizza distanza euclidea)")
-    print(f"  - Clip values: [{clip_values[0]:.3f}, {clip_values[1]:.3f}]")
+    print(f"  - Clipping: Automatico (gestito da ART)")
     
     # ========== FASE 3: GENERAZIONE ADVERSARIAL EXAMPLES ==========
     print("\n" + "="*80)
@@ -363,7 +364,7 @@ def main():
 ESEMPI:
 
   # Esecuzione base
-  %(prog)s --model-path models/federated_rf_global_20251121_024044.pkl
+  %(prog)s --model-path federated/SmartGrid/models/federated_rf_global_20251121_024044.pkl
 
   # Configurazione custom
   %(prog)s --model-path models/model.pkl --max-iter 200 --max-eval 20000
