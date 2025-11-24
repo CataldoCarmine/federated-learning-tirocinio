@@ -300,7 +300,7 @@ def run_blackbox_query_hsj_attack(
     max_eval=1000,
     init_eval=50,
     norm=2,
-    max_queries_total=500000,
+    max_queries_total=5000000,
     save_results=True,
     verbose=False
 ):
@@ -438,27 +438,34 @@ def run_blackbox_query_hsj_attack(
         X_test, y_test, target_class=1
     )
 
-    # ✅ NUOVO: Limita numero campioni per rispettare budget
-    max_samples_for_budget = max_queries_total // max_eval  # es. 500,000 / 1,000 = 500
-    if len(X_attacks_test) > max_samples_for_budget:
-        print(f"\n[Black-Box] ⚠️ LIMITE BUDGET QUERY:")
-        print(f"  - Campioni Attack totali: {len(X_attacks_test)}")
-        print(f"  - Budget query: {max_queries_total}")
-        print(f"  - Max campioni supportati: {max_samples_for_budget}")
-        print(f"  - RIDUZIONE a {max_samples_for_budget} campioni per rispettare budget")
-        
-        # Campionamento stratificato per mantenere rappresentatività
-        import random
-        random.seed(42)
-        selected_indices = random.sample(range(len(X_attacks_test)), max_samples_for_budget)
-        selected_indices.sort()
-        
-        X_attacks_test = X_attacks_test[selected_indices]
-        y_attacks_test = y_attacks_test[selected_indices]
-        attack_indices = attack_indices[selected_indices]
-    
+    # ✅ VERIFICA BUDGET (NO LIMITAZIONE AUTOMATICA)
+    max_samples_for_budget_safe = max_queries_total // max_eval
+    query_estimate_realistic = len(X_attacks_test) * (max_eval // 2)  # Stima realistica (50% di max_eval)
+    query_estimate_worst_case = len(X_attacks_test) * max_eval        # Worst-case (100% di max_eval)
+
+    print(f"\n[Black-Box] 📊 VERIFICA BUDGET QUERY:")
+    print(f"  - Campioni Attack totali: {len(X_attacks_test)}")
+    print(f"  - Budget query disponibile: {max_queries_total:,}")
+    print(f"  - Query per campione (budget max): {max_eval}")
+    print(f"  - Query per campione (attese medie): ~{max_eval // 2}")
+    print(f"  - Query totali stimate (realistiche): {query_estimate_realistic:,}")
+    print(f"  - Query totali worst-case: {query_estimate_worst_case:,}")
+    print(f"  - Budget utilizzato stimato: {(query_estimate_realistic/max_queries_total)*100:.1f}%")
+
+    if query_estimate_worst_case > max_queries_total:
+        print(f"\n  ⚠️ ATTENZIONE: Worst-case ({query_estimate_worst_case:,}) > Budget ({max_queries_total:,})")
+        print(f"  Configurazione 'silenziosa' usa ~50% max_eval → stima realistica: {query_estimate_realistic:,}")
+        if query_estimate_realistic > max_queries_total:
+            print(f"  ⚠️ Anche stima realistica supera budget!")
+            print(f"  L'attacco potrebbe terminare prematuramente.")
+        else:
+            print(f"  ✅ Stima realistica SOTTO budget → attacco dovrebbe completare")
+    else:
+        print(f"\n  ✅ Budget ampiamente sufficiente per tutti i {len(X_attacks_test)} campioni")
+
+    print(f"\n[Black-Box] Procedo con TUTTI i {len(X_attacks_test)} campioni Attack")
     print(f"  - Campioni totali test: {len(X_test)}")
-    print(f"  - Campioni Attack: {len(X_attacks_test)}")
+    print(f"  - Campioni Attack selezionati: {len(X_attacks_test)}")
     print(f"  - Campioni Natural: {(y_test == 0).sum()}")
     
     # ========== FASE 3: CONFIGURAZIONE HOPSKIPJUMP ==========
