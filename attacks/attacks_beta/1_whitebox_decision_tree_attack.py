@@ -58,7 +58,7 @@ from attacks.evaluation import (
     print_attack_report,
     save_attack_results
 )
-from attacks.data_analysis import (
+from attacks.attacks_beta.data_analysis import (
     analyze_feature_importance,
     analyze_class_distributions,
     find_critical_features_for_evasion,

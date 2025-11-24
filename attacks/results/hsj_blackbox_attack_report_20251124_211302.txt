@@ -1,23 +1,23 @@
 ================================================================================
-REPORT ATTACCO WHITE-BOX: HOPSKIPJUMP ATTACK
+REPORT ATTACCO BLACK-BOX: HOPSKIPJUMP ATTACK
 ================================================================================
 
-Data: 2025-11-24 17:30:52
+Data: 2025-11-24 21:13:02
 N. campioni testati: 10237
-Epsilon testati: ['WhiteBox_HSJ_L2']
+Epsilon testati: ['BlackBox_Query_HSJ']
 
 ================================================================================
 RISULTATI PER EPSILON
 ================================================================================
 
-EPSILON: Global
+EPSILON: HSJ
 ----------------------------------------
-ASR: 2.64%
-Evasioni riuscite: 211/7984
-Accuracy drop: 1.61%
-L0 medio: 88.59
-L2 medio: 0.165923
-L-inf medio: 0.123808
+ASR: 1.45%
+Evasioni riuscite: 116/7984
+Accuracy drop: 0.68%
+L0 medio: 88.65
+L2 medio: 0.229188
+L-inf medio: 0.134857
 
 ================================================================================
 CONFRONTO EPSILON
@@ -25,4 +25,4 @@ CONFRONTO EPSILON
 
 Epsilon      ASR (%)    L2 medio     L0 medio  
 --------------------------------------------------
-Global       2.64       0.165923     88.59     
+HSJ          1.45       0.229188     88.65     

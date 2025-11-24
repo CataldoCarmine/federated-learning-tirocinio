@@ -53,6 +53,13 @@ RF_CRITERION = 'entropy'  # Criterio di splitting (dal paper: entropy migliore d
 ENSEMBLE_METHOD = 'weighted_voting'  # 'simple_voting' o 'weighted_voting'
 TREE_SELECTION_METHOD = 'accuracy_based'  # Come selezionare i migliori alberi per l'aggregazione
 
+# ============== CONFIGURAZIONE DIFESA ADVERSARIAL TRAINING ==============
+ENABLE_ADVERSARIAL_TRAINING = True  # Flag globale per abilitare/disabilitare difesa
+ADV_TRAINING_EPSILON = 0.01          # Budget perturbazione per esempi adversarial
+ADV_TRAINING_MAX_SAMPLES = 500       # Max campioni Attack da usare per adversarial training
+ADV_TRAINING_HSJ_MAX_ITER = 10       # Iterazioni HSJ (ridotte per velocità)
+ADV_TRAINING_HSJ_MAX_EVAL = 500      # Query HSJ per campione (ridotte per velocità)
+
 def set_reproducibility_seeds():
     """
     Imposta tutti i semi per garantire riproducibilità.
@@ -349,6 +356,185 @@ def create_random_forest_model():
     
     return model
 
+# ============== 🆕 FUNZIONE ADVERSARIAL TRAINING LOCALE ==============
+
+def local_adversarial_training(model_instance, X_train, y_train, X_val, y_val, client_id):
+    """
+    Esegue adversarial training LOCALE sul client.
+    
+    WORKFLOW:
+    1. Seleziona campioni Attack dal training set
+    2. Genera esempi adversarial usando HopSkipJump VELOCE
+    3. Combina dati puliti + adversarial (data augmentation)
+    4. Riaddestra Random Forest su dataset esteso
+    5. Valuta performance sul validation set
+    
+    Args:
+        model_instance: Random Forest già addestrato su dati puliti
+        X_train: Training set pulito
+        y_train: Etichette training
+        X_val: Validation set
+        y_val: Etichette validation
+        client_id: ID del client
+        
+    Returns:
+        model_robust: Random Forest addestrato su dati puliti + adversarial
+        success: True se completato con successo, False altrimenti
+    """
+    print(f"\n[Client {client_id}] {'='*60}")
+    print(f"[Client {client_id}] 🛡️ ADVERSARIAL TRAINING LOCALE")
+    print(f"[Client {client_id}] {'='*60}")
+    
+    try:
+        # STEP 1: Seleziona campioni Attack
+        attack_mask = (y_train == 1)  # Classe Attack
+        X_attack = X_train[attack_mask]
+        y_attack = y_train[attack_mask]
+        
+        if len(X_attack) == 0:
+            print(f"[Client {client_id}] ⚠️ Nessun campione Attack nel training set, skip adversarial training")
+            return model_instance, False
+        
+        print(f"[Client {client_id}] Campioni Attack disponibili: {len(X_attack)}")
+        
+        # STEP 2: Sottocampionamento ADATTIVO
+        max_adv_samples = min(ADV_TRAINING_MAX_SAMPLES, len(X_attack) // 2)
+        
+        if len(X_attack) > max_adv_samples:
+            import random
+            random.seed(RANDOM_SEED)
+            indices = random.sample(range(len(X_attack)), max_adv_samples)
+            X_attack_sub = X_attack[indices]
+            y_attack_sub = y_attack[indices]
+            print(f"[Client {client_id}] Sottocampionamento: {max_adv_samples} su {len(X_attack)}")
+        else:
+            X_attack_sub = X_attack
+            y_attack_sub = y_attack
+            print(f"[Client {client_id}] Uso tutti i {len(X_attack)} campioni Attack")
+        
+        # STEP 3: Wrap modello per ART
+        from art.estimators.classification import SklearnClassifier
+        from art.attacks.evasion import HopSkipJump
+        
+        art_classifier = SklearnClassifier(model=model_instance)
+        print(f"[Client {client_id}] ✅ Modello wrapped per ART")
+        
+        # STEP 4: Configura HopSkipJump VELOCE
+        print(f"[Client {client_id}] Configurazione HopSkipJump VELOCE per federated learning...")
+        
+        hsj_local = HopSkipJump(
+            classifier=art_classifier,
+            targeted=False,
+            norm=2,  # L2
+            max_iter=ADV_TRAINING_HSJ_MAX_ITER,    # Iterazioni ridotte
+            max_eval=ADV_TRAINING_HSJ_MAX_EVAL,    # Query ridotte
+            init_eval=20,
+            verbose=False  # Silenzioso per non intasare log
+        )
+        
+        print(f"[Client {client_id}]   Max iter: {ADV_TRAINING_HSJ_MAX_ITER}")
+        print(f"[Client {client_id}]   Max eval: {ADV_TRAINING_HSJ_MAX_EVAL}")
+        print(f"[Client {client_id}]   Epsilon target: {ADV_TRAINING_EPSILON}")
+        
+        # STEP 5: Genera esempi adversarial
+        import time
+        start_time = time.time()
+        
+        print(f"[Client {client_id}] 🔄 Generazione {len(X_attack_sub)} esempi adversarial...")
+        
+        X_adv = hsj_local.generate(x=X_attack_sub)
+        
+        elapsed = time.time() - start_time
+        print(f"[Client {client_id}] ✅ Generazione completata in {elapsed:.1f}s ({len(X_adv)/elapsed:.2f} campioni/sec)")
+        
+        # STEP 6: Verifica output valido
+        if X_adv is None or len(X_adv) == 0:
+            print(f"[Client {client_id}] ⚠️ Generazione fallita")
+            return model_instance, False
+        
+        if X_adv.shape != X_attack_sub.shape:
+            print(f"[Client {client_id}] ⚠️ Shape mismatch: {X_adv.shape} vs {X_attack_sub.shape}")
+            return model_instance, False
+        
+        # STEP 7: Applica vincoli fisici
+        print(f"[Client {client_id}] Applicazione vincoli fisici SmartGrid...")
+        
+        # Calcola percentili per vincoli
+        feature_min = np.percentile(X_train, 0.1, axis=0)
+        feature_max = np.percentile(X_train, 99.9, axis=0)
+        
+        constraints = {
+            'feature_min': feature_min,
+            'feature_max': feature_max
+        }
+        
+        # Applica vincoli
+        X_adv_clipped = np.clip(X_adv, feature_min, feature_max)
+        
+        # Limita perturbazione L-inf
+        perturbation = X_adv_clipped - X_attack_sub
+        perturbation_clipped = np.clip(perturbation, -ADV_TRAINING_EPSILON, ADV_TRAINING_EPSILON)
+        X_adv_constrained = X_attack_sub + perturbation_clipped
+        
+        # Ri-applica vincoli fisici
+        X_adv_constrained = np.clip(X_adv_constrained, feature_min, feature_max)
+        
+        # Etichette rimangono "Attack"
+        y_adv = y_attack_sub
+        
+        # STEP 8: Data Augmentation
+        print(f"[Client {client_id}] Data augmentation: combinazione dati puliti + adversarial...")
+        
+        X_aug = np.concatenate([X_train, X_adv_constrained], axis=0)
+        y_aug = np.concatenate([y_train, y_adv], axis=0)
+        
+        # Shuffle
+        indices_shuffle = np.random.permutation(len(X_aug))
+        X_aug = X_aug[indices_shuffle]
+        y_aug = y_aug[indices_shuffle]
+        
+        print(f"[Client {client_id}] Dataset esteso: {len(X_train)} → {len(X_aug)} (+{len(X_adv_constrained)} adversarial)")
+        
+        # STEP 9: Riaddestra Random Forest
+        print(f"[Client {client_id}] Riaddestramento Random Forest su dataset esteso...")
+        
+        model_robust = RandomForestClassifier(
+            n_estimators=RF_N_ESTIMATORS,
+            criterion=RF_CRITERION,
+            max_features=RF_MAX_FEATURES,
+            class_weight=RF_CLASS_WEIGHT,
+            random_state=RANDOM_SEED + client_id,
+            n_jobs=-1
+        )
+        
+        model_robust.fit(X_aug, y_aug)
+        
+        print(f"[Client {client_id}] ✅ Riaddestramento completato")
+        
+        # STEP 10: Valuta performance
+        if X_val is not None and len(X_val) > 0:
+            val_acc_clean = model_instance.score(X_val, y_val)
+            val_acc_robust = model_robust.score(X_val, y_val)
+            
+            print(f"[Client {client_id}] 📊 Validation Accuracy:")
+            print(f"[Client {client_id}]   Modello pulito:   {val_acc_clean:.4f}")
+            print(f"[Client {client_id}]   Modello robusto:  {val_acc_robust:.4f}")
+            print(f"[Client {client_id}]   Δ Accuracy:       {val_acc_robust - val_acc_clean:+.4f}")
+        
+        print(f"[Client {client_id}] {'='*60}")
+        print(f"[Client {client_id}] ✅ ADVERSARIAL TRAINING COMPLETATO")
+        print(f"[Client {client_id}] {'='*60}\n")
+        
+        return model_robust, True
+        
+    except Exception as e:
+        print(f"[Client {client_id}] ❌ ERRORE adversarial training: {e}")
+        import traceback
+        traceback.print_exc()
+        return model_instance, False
+
+# ============== FINE FUNZIONE ADVERSARIAL TRAINING ==============
+
 def extract_trees_from_forest(model, X_val, y_val):
     """
     Estrae gli alberi dal Random Forest e calcola le loro performance individuali REALI.
@@ -574,9 +760,9 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
 
     def fit(self, parameters, config):
         """
-        Addestra il modello Random Forest locale.
+        Addestra il modello Random Forest locale CON ADVERSARIAL TRAINING (se abilitato).
         """
-        global model, X_train, y_train, dataset_info
+        global model, X_train, y_train, X_val, y_val, dataset_info
     
         print(f"[Client {client_id}] Round di addestramento Random Forest...")
     
@@ -596,7 +782,7 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             else:
                 X_train_clean = X_train
         
-            # Addestra il Random Forest locale
+            # ============== STEP 1: TRAINING SU DATI PULITI ==============
             print(f"[Client {client_id}] Addestramento Random Forest su {len(X_train_clean)} campioni...")
             model.fit(X_train_clean, y_train)
         
@@ -614,6 +800,29 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
                 print(f"  - n_estimators: {len(model.estimators_)}")
                 print(f"  - first tree type: {type(model.estimators_[0]) if len(model.estimators_) > 0 else 'N/A'}")
         
+            # ============== STEP 2: ADVERSARIAL TRAINING (SE ABILITATO) ==============
+            if ENABLE_ADVERSARIAL_TRAINING:
+                print(f"[Client {client_id}] 🛡️ Adversarial Training ABILITATO")
+                
+                model_robust, success = local_adversarial_training(
+                    model,  # Modello addestrato su dati puliti
+                    X_train_clean,
+                    y_train,
+                    X_val,
+                    y_val,
+                    client_id
+                )
+                
+                if success:
+                    # Usa modello robusto
+                    model = model_robust
+                    print(f"[Client {client_id}] ✅ Modello ROBUSTO attivo")
+                else:
+                    print(f"[Client {client_id}] ⚠️ Adversarial training fallito, uso modello pulito")
+            else:
+                print(f"[Client {client_id}] Adversarial Training DISABILITATO")
+        
+            # ============== STEP 3: CALCOLA METRICHE ==============
             # Calcola metriche di training
             train_predictions = model.predict(X_train_clean)
             train_prob = model.predict_proba(X_train_clean)[:, 1]  # Probabilità classe positiva
@@ -661,6 +870,9 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             # Dataset info
             'client_id': int(dataset_info['client_id']),
             'train_samples': int(dataset_info['train_samples']),
+            
+            # Adversarial training info
+            'adversarial_training_enabled': bool(ENABLE_ADVERSARIAL_TRAINING)
         }
     
         # Restituisce gli alberi del modello addestrato
@@ -798,6 +1010,11 @@ def main():
         sys.exit(1)
     
     print(f"=== AVVIO CLIENT RANDOM FOREST {client_id} ===")
+    print(f"🛡️ Adversarial Training: {'ABILITATO' if ENABLE_ADVERSARIAL_TRAINING else 'DISABILITATO'}")
+    if ENABLE_ADVERSARIAL_TRAINING:
+        print(f"   Epsilon: {ADV_TRAINING_EPSILON}")
+        print(f"   Max samples: {ADV_TRAINING_MAX_SAMPLES}")
+        print(f"   HSJ config: max_iter={ADV_TRAINING_HSJ_MAX_ITER}, max_eval={ADV_TRAINING_HSJ_MAX_EVAL}")
     
     try:
         # Carica i dati con preprocessing minimale per Random Forest

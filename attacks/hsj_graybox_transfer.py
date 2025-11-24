@@ -39,6 +39,9 @@ UTILIZZO:
         --save-results
 
     opppure:
+
+        Esegui dalla root del progetto:
+
         python attacks/hsj_graybox_transfer.py \
         --target-model-path federated/SmartGrid/models/federated_rf_global_20251121_024044.pkl \
         --verbose \

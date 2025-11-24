@@ -60,6 +60,9 @@ vs Query aggressive (10000):
 - Investigazione manuale
 
 UTILIZZO:
+
+    Esegui dalla root del progetto:
+
     python attacks/hsj_blackbox.py \
         --target-model-path federated/SmartGrid/models/federated_rf_global_20251121_024044.pkl \
         --save-results
