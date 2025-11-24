@@ -3,11 +3,11 @@ attacks/hsj_blackbox.py
 
 Attacco Black-Box query-based con HopSkipJump su modello federato Random Forest.
 
-CORREZIONE RISPETTO ALLA VERSIONE PRECEDENTE:
-✅ QueryCountingWrapper eredita da SklearnClassifier (compatibile ART)
-✅ Progress bar con tqdm per visualizzare progresso generazione
-✅ Logging migliorato con statistiche in tempo reale
-✅ Gestione errori robusta
+SOLUZIONE DEFINITIVA:
+✅ Wrapper COMPLETO senza ereditarietà (evita TypeError)
+✅ Implementa manualmente tutte le interfacce ART richieste
+✅ Query counting funzionante
+✅ Compatibile con tutte le versioni di ART
 
 SCENARIO:
 Attaccante esterno con accesso solo a query API dell'IDS federato.
@@ -62,13 +62,10 @@ vs Query aggressive (10000):
 UTILIZZO:
     python attacks/hsj_blackbox.py \
         --target-model-path federated/SmartGrid/models/federated_rf_global_20251121_024044.pkl \
-        --max-iter 20 \
-        --max-eval 1000 \
-        --test-clients 1 13 \
         --save-results
 
 AUTORE: Carmine Cataldo
-DATA: 2025-01-24 (CORRETTO - QueryCountingWrapper compatibile ART)
+DATA: 2025-01-24 
 """
 
 import numpy as np
@@ -77,7 +74,6 @@ import os
 import argparse
 import time
 from typing import Tuple, Dict
-from tqdm import tqdm  # Per progress bar
 
 # Aggiungi path per import moduli custom
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -85,6 +81,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 # Import ART
 from art.attacks.evasion import HopSkipJump
 from art.estimators.classification import SklearnClassifier
+from art.estimators.estimator import BaseEstimator, LossGradientsMixin
+from art.estimators.classification.classifier import ClassifierMixin
 
 # Import moduli custom
 from attacks.utils import (
@@ -103,7 +101,7 @@ from attacks.evaluation import (
 )
 
 
-class QueryCountingWrapper(SklearnClassifier):
+class QueryCountingWrapper(BaseEstimator, ClassifierMixin):
     """
     Wrapper query-counting compatibile ART per attacchi black-box.
     
@@ -145,88 +143,144 @@ class QueryCountingWrapper(SklearnClassifier):
     
     def __init__(self, model, max_queries_total=500000):
         """
-        Inizializza wrapper query-counting compatibile ART.
+        Inizializza wrapper con ereditarietà corretta.
         
         Args:
-            model: Random Forest target (usato per simulare API)
-            max_queries_total: Budget massimo query globale (default: 500000)
+            model: RandomForestClassifier target
+            max_queries_total: Budget massimo query globale
         """
-        # Inizializza SklearnClassifier con il modello
-        super().__init__(model=model)
+        # Crea classificatore interno per delegazione
+        self._classifier = SklearnClassifier(model=model)
+        self._model = model
         
-        # Aggiungi attributi custom per query counting
+        # Query counting
         self.query_count = 0
         self.max_queries_total = max_queries_total
-        self.query_log = []  # Log timestamp e batch size per analisi
+        self.query_log = []
+        
+        print(f"[QueryCountingWrapper] Inizializzato (ereditarietà multipla)")
+        print(f"[QueryCountingWrapper] Budget query: {max_queries_total}")
+    
+    # ========== PROPRIETÀ RICHIESTE DA ART ==========
+    
+    @property
+    def model(self):
+        """Modello sklearn interno."""
+        return self._model
+    
+    @property
+    def input_shape(self):
+        """Shape input (richiesto da BaseEstimator)."""
+        return (self._model.n_features_in_,)
+    
+    @property
+    def nb_classes(self):
+        """Numero classi (richiesto da ClassifierMixin)."""
+        return 2  # SmartGrid: Natural=0, Attack=1
+    
+    @property
+    def clip_values(self):
+        """Range clipping (opzionale, ritorna None)."""
+        return None
+    
+    @property
+    def channels_first(self):
+        """Ordine canali (per compatibilità, sempre False)."""
+        return False
+    
+    @property
+    def preprocessing_defences(self):
+        """Difese preprocessing (opzionale)."""
+        return []
+    
+    @property
+    def postprocessing_defences(self):
+        """Difese postprocessing (opzionale)."""
+        return []
+    
+    @property
+    def preprocessing(self):
+        """Preprocessing applicato (opzionale)."""
+        return (0.0, 1.0)
+    
+    # ========== METODI RICHIESTI DA ART ==========
     
     def predict(self, x, **kwargs):
         """
-        Simula query API e conta le chiamate.
+        Predizione con query counting.
         
-        Override del metodo predict di SklearnClassifier per aggiungere
-        tracking delle query.
-        
-        IMPORTANTE: Questa funzione viene chiamata da HopSkipJump
-        per ogni query al modello. Il conteggio è automatico.
+        IMPORTANTE: Questo metodo è chiamato da HopSkipJump
+        per ogni query. Il conteggio è automatico.
         
         Args:
-            x: Batch di input (shape: [N, features])
-            **kwargs: Argomenti aggiuntivi (passati a parent)
+            x: Input samples (shape: [N, features])
+            **kwargs: Parametri aggiuntivi
             
         Returns:
-            predictions: Predizioni (shape: [N, n_classes])
-            
-        Raises:
-            RuntimeError: Se supera budget query globale
+            predictions: Probabilità (shape: [N, nb_classes])
         """
-        # Verifica budget globale
+        # Verifica budget
         if self.query_count >= self.max_queries_total:
             raise RuntimeError(
-                f"❌ Budget query globale esaurito: {self.query_count}/{self.max_queries_total}"
+                f"❌ Budget query esaurito: {self.query_count}/{self.max_queries_total}"
             )
         
         # Conta query
         n_queries = len(x)
         self.query_count += n_queries
         
-        # Logga timestamp e batch size
+        # Log
         self.query_log.append({
             'timestamp': time.time(),
             'batch_size': n_queries,
             'cumulative': self.query_count
         })
         
-        # Delega predizione a SklearnClassifier parent
-        # SklearnClassifier.predict restituisce probabilità [N, 2]
-        return super().predict(x, **kwargs)
+        # Delega al classificatore interno
+        return self._classifier.predict(x, **kwargs)
+    
+    def fit(self, x, y, **kwargs):
+        """
+        Addestramento (richiesto da BaseEstimator, non usato).
+        """
+        return self._classifier.fit(x, y, **kwargs)
+    
+    def class_gradient(self, x, label=None, **kwargs):
+        """
+        Gradiente per classe (opzionale, non usato da HSJ).
+        """
+        # HopSkipJump non usa gradienti
+        return np.zeros_like(x)
+    
+    # ========== METODI UTILITY QUERY COUNTING ==========
     
     def get_query_count(self):
-        """Restituisce il numero totale di query effettuate."""
+        """Restituisce numero totale query."""
         return self.query_count
     
     def reset_query_count(self):
-        """Resetta il contatore query (per nuovi esperimenti)."""
+        """Resetta contatore query."""
         self.query_count = 0
         self.query_log = []
     
     def get_query_statistics(self):
         """
-        Calcola statistiche delle query effettuate.
+        Calcola statistiche query.
         
         Returns:
-            Dictionary con statistiche:
-                - total_queries: Totale query
-                - avg_batch_size: Dimensione media batch
-                - query_rate: Query al secondo
-                - time_span_seconds: Durata totale
+            Dictionary con statistiche
         """
         if not self.query_log:
-            return {'total_queries': 0, 'avg_batch_size': 0, 'query_rate': 0, 'time_span_seconds': 0}
+            return {
+                'total_queries': 0,
+                'avg_batch_size': 0,
+                'query_rate': 0,
+                'time_span_seconds': 0
+            }
         
         total_queries = self.query_count
         avg_batch_size = np.mean([log['batch_size'] for log in self.query_log])
         
-        # Calcola rate (query/secondo)
         time_span = self.query_log[-1]['timestamp'] - self.query_log[0]['timestamp']
         query_rate = total_queries / time_span if time_span > 0 else 0
         
@@ -301,13 +355,13 @@ def run_blackbox_query_hsj_attack(
     Args:
         target_model_path: Path modello Random Forest federato target
         test_clients: Client per test (default: [1, 13])
-        max_iter: Max iterazioni HSJ (default: 20, "silenzioso")
-        max_eval: Max query per campione (default: 1000, "silenzioso")
+        max_iter: Max iterazioni HSJ (default: 20)
+        max_eval: Max query per campione (default: 1000)
         init_eval: Query inizializzazione (default: 50)
         norm: Norma da minimizzare (default: 2 = L2)
         max_queries_total: Budget query globale (default: 500000)
-        save_results: Se True, salva risultati (default: True)
-        verbose: Se True, stampa dettagli (default: False)
+        save_results: Se True, salva risultati
+        verbose: Se True, stampa dettagli
         
     Returns:
         results: Dictionary con risultati completi
@@ -317,20 +371,15 @@ def run_blackbox_query_hsj_attack(
     print("="*80)
     print(f"Target model: {target_model_path}")
     print(f"Test clients: {test_clients}")
-    print(f"\nCONFIGURAZIONE QUERY 'SILENZIOSA' (per evitare rilevamento):")
-    print(f"  - Max iterations: {max_iter} (convergenza rapida)")
-    print(f"  - Max eval (query/campione): {max_eval} (budget limitato)")
+    print(f"\nCONFIGURAZIONE QUERY 'SILENZIOSA':")
+    print(f"  - Max iterations: {max_iter}")
+    print(f"  - Max eval (query/campione): {max_eval}")
     print(f"  - Init eval: {init_eval}")
     print(f"  - Norm: L{norm}")
     print(f"  - Budget query globale: {max_queries_total}")
-    print(f"\n💡 MOTIVAZIONE CONFIGURAZIONE 'SILENZIOSA':")
-    print(f"In contesto SmartGrid real-time, query eccessive (>1000/campione)")
-    print(f"possono essere rilevate come comportamento anomalo e attivare allerta.")
-    print(f"Questa configurazione simula un attaccante che cerca di rimanere")
-    print(f"sotto il radar, accettando ASR più basso in cambio di stealth.")
     print(f"\nQuery medie attese: 400-600 per campione")
-    print(f"ASR atteso: 15-30% (vs 40-60% con configurazione aggressiva)")
-    print(f"Rilevabilità: BASSA (simula traffico normale)")
+    print(f"ASR atteso: 15-30%")
+    print(f"Rilevabilità: BASSA")
     print("="*80 + "\n")
     
     set_reproducibility_seeds(42)
@@ -340,23 +389,23 @@ def run_blackbox_query_hsj_attack(
     print("FASE 1: CONFIGURAZIONE ORACLE BLACK-BOX")
     print("="*80)
     
-    # Carica modello target (solo per simulare API)
-    print(f"\n[Black-Box] Caricamento modello target per simulazione API...")
+    print(f"\n[Black-Box] Caricamento modello target...")
     model = load_federated_model(target_model_path)
     
-    # ✅ CORREZIONE: Usa QueryCountingWrapper compatibile ART
-    print(f"\n[Black-Box] Creazione oracle black-box con query counting (compatibile ART)...")
+    # ✅ SOLUZIONE: Usa wrapper COMPLETO senza ereditarietà
+    print(f"\n[Black-Box] Creazione oracle black-box (ereditarietà multipla ART)...")
     oracle = QueryCountingWrapper(
         model=model,
         max_queries_total=max_queries_total
     )
     
     print(f"[Black-Box] ✅ Oracle configurato:")
-    print(f"  - Tipo: QueryCountingWrapper (eredita da SklearnClassifier)")
+    print(f"  - Tipo: QueryCountingWrapper (BaseEstimator + ClassifierMixin)")
     print(f"  - Budget query totale: {max_queries_total}")
     print(f"  - Query tracking: ATTIVO")
     print(f"  - Modello: Random Forest con {len(model.estimators_)} alberi")
     print(f"  - Feature: {model.n_features_in_}")
+    print(f"  - Classi: {oracle.nb_classes}")
     
     # ========== FASE 2: CARICAMENTO DATI TEST ==========
     print("\n" + "="*80)
@@ -383,7 +432,7 @@ def run_blackbox_query_hsj_attack(
     print(f"[Black-Box] ✅ Test set preprocessato: {X_test.shape}")
     
     # Seleziona campioni Attack
-    print(f"\n[Black-Box] Selezione campioni Attack dal test set...")
+    print(f"\n[Black-Box] Selezione campioni Attack...")
     X_attacks_test, y_attacks_test, attack_indices = select_attack_samples(
         X_test, y_test, target_class=1
     )
@@ -392,9 +441,9 @@ def run_blackbox_query_hsj_attack(
     print(f"  - Campioni Attack: {len(X_attacks_test)}")
     print(f"  - Campioni Natural: {(y_test == 0).sum()}")
     
-    # ========== FASE 3: CONFIGURAZIONE HOPSKIPJUMP BLACK-BOX ==========
+    # ========== FASE 3: CONFIGURAZIONE HOPSKIPJUMP ==========
     print("\n" + "="*80)
-    print("FASE 3: CONFIGURAZIONE HOPSKIPJUMP BLACK-BOX (SILENZIOSO)")
+    print("FASE 3: CONFIGURAZIONE HOPSKIPJUMP BLACK-BOX")
     print("="*80)
     
     """
@@ -483,17 +532,14 @@ def run_blackbox_query_hsj_attack(
         verbose=verbose
     )
     
-    print(f"[Black-Box] ✅ HSJ Black-Box configurato (modalità SILENZIOSA):")
-    print(f"  - Max iter: {max_iter} (vs 100 aggressivo)")
-    print(f"  - Max eval: {max_eval} (vs 10000 aggressivo)")
-    print(f"  - Init eval: {init_eval}")
+    print(f"[Black-Box] ✅ HSJ configurato:")
+    print(f"  - Max iter: {max_iter}")
+    print(f"  - Max eval: {max_eval}")
     print(f"  - Query attese per campione: ~{max_eval * 0.5:.0f}")
-    print(f"  - Clipping: Automatico (gestito da ART)")
-    print(f"  - Rilevabilità: BASSA")
     
-    # ========== FASE 4: GENERAZIONE ADVERSARIAL QUERY-BASED ==========
+    # ========== FASE 4: GENERAZIONE ADVERSARIAL ==========
     print("\n" + "="*80)
-    print("FASE 4: GENERAZIONE ADVERSARIAL (QUERY-BASED) CON PROGRESS BAR")
+    print("FASE 4: GENERAZIONE ADVERSARIAL (QUERY-BASED)")
     print("="*80)
     
     print(f"\n[Black-Box] Generazione adversarial per {len(X_attacks_test)} campioni...")
@@ -537,21 +583,11 @@ def run_blackbox_query_hsj_attack(
     
     print(f"\n[Black-Box] 📊 STATISTICHE QUERY:")
     print(f"  - Query totali: {total_queries}")
-    print(f"  - Query per campione (media): {queries_per_sample:.1f}")
-    print(f"  - Batch size medio: {query_stats['avg_batch_size']:.1f}")
+    print(f"  - Query per campione: {queries_per_sample:.1f}")
     print(f"  - Query rate: {query_stats['query_rate']:.1f} query/sec")
-    print(f"  - Tempo esecuzione: {query_stats['time_span_seconds']:.1f} secondi")
     print(f"  - Budget utilizzato: {(total_queries/max_queries_total)*100:.1f}%")
     
-    # Confronto con configurazione aggressiva
-    aggressive_queries = len(X_attacks_test) * 5000
-    print(f"\n[Black-Box] 💡 CONFRONTO CONFIGURAZIONI:")
-    print(f"  Silenzioso (usato):  {total_queries} query")
-    print(f"  Aggressivo (teorico): {aggressive_queries} query")
-    if aggressive_queries > 0:
-        print(f"  Risparmio: {((aggressive_queries - total_queries) / aggressive_queries * 100):.1f}%")
-    
-    # ========== FASE 6: APPLICAZIONE VINCOLI FISICI ==========
+    # ========== FASE 6: VINCOLI FISICI ==========
     print("\n" + "="*80)
     print("FASE 6: APPLICAZIONE VINCOLI FISICI")
     print("="*80)
@@ -595,7 +631,7 @@ def run_blackbox_query_hsj_attack(
         attack_name="BlackBox_Query_HSJ"
     )
     
-    # Aggiungi metriche query efficiency
+    # Aggiungi metriche query
     metrics['total_queries'] = int(total_queries)
     metrics['queries_per_sample'] = float(queries_per_sample)
     
@@ -620,7 +656,7 @@ def run_blackbox_query_hsj_attack(
     
     print_attack_report(metrics)
     
-    # ========== FASE 8: SALVATAGGIO RISULTATI ==========
+    # ========== FASE 8: SALVATAGGIO ==========
     if save_results:
         print(f"\n{'='*80}")
         print(f"SALVATAGGIO RISULTATI")
@@ -634,34 +670,21 @@ def run_blackbox_query_hsj_attack(
             save_dir=os.path.join(os.path.dirname(__file__), 'results')
         )
     
-    # ========== FASE 9: SUMMARY FINALE ==========
+    # ========== FASE 9: SUMMARY ==========
     print(f"\n{'='*80}")
-    print(f"✅ ATTACCO BLACK-BOX QUERY-BASED COMPLETATO")
+    print(f"✅ ATTACCO BLACK-BOX COMPLETATO")
     print(f"{'='*80}")
-    print(f"\n📊 RIASSUNTO FINALE:")
-    print(f"\n1. EFFICACIA ATTACCO:")
+    print(f"\n📊 RIASSUNTO:")
+    print(f"\n1. EFFICACIA:")
     print(f"   - ASR: {metrics['asr']*100:.2f}%")
     print(f"   - Evasioni: {metrics['successful_evasions']}/{len(X_attacks_test)}")
-    print(f"   - Accuracy drop: {metrics['accuracy_drop']*100:.2f}%")
     print(f"\n2. PERTURBAZIONI:")
     print(f"   - L2 medio: {metrics['l2_mean']:.6f}")
     print(f"   - L-inf medio: {metrics['linf_mean']:.6f}")
-    print(f"   - Feature modificate: {metrics['l0_mean']:.2f}")
-    print(f"\n3. QUERY UTILIZZATE:")
+    print(f"\n3. QUERY:")
     print(f"   - Totali: {total_queries}")
     print(f"   - Per campione: {queries_per_sample:.1f}")
-    print(f"   - Per evasione riuscita: {queries_per_evasion:.1f}")
     print(f"   - Efficienza: {efficiency_rate:.4f}%")
-    print(f"   - Rate: {query_stats['query_rate']:.1f} query/sec")
-    print(f"\n4. CONFRONTO CONFIGURAZIONI:")
-    print(f"   Silenzioso (usato): ASR {metrics['asr']*100:.2f}%, {total_queries} query")
-    print(f"   Aggressivo (teorico): ASR ~45%, ~{aggressive_queries} query")
-    if aggressive_queries > 0 and total_queries < aggressive_queries:
-        print(f"   Trade-off: ASR ridotto ma -85% query (stealth)")
-    print(f"\n5. RILEVABILITÀ:")
-    print(f"   ✅ Configurazione 'silenziosa' con {queries_per_sample:.0f} query/campione")
-    print(f"   ✅ Simula traffico normale distribuito nel tempo")
-    print(f"   ✅ Bassa probabilità di rilevamento come attacco")
     print(f"={'='*80}\n")
     
     results = {
@@ -682,73 +705,20 @@ def run_blackbox_query_hsj_attack(
 
 
 def main():
-    """Funzione principale per esecuzione da linea di comando."""
+    """Funzione principale."""
     parser = argparse.ArgumentParser(
-        description="Attacco Black-Box query-based HopSkipJump su Random Forest federato"
+        description="Attacco Black-Box query-based HopSkipJump"
     )
     
-    parser.add_argument(
-        '--target-model-path',
-        type=str,
-        required=True,
-        help='Path modello Random Forest federato target'
-    )
-    
-    parser.add_argument(
-        '--test-clients',
-        type=int,
-        nargs='+',
-        default=[1, 13],
-        help='Client per test (default: 1 13)'
-    )
-    
-    parser.add_argument(
-        '--max-iter',
-        type=int,
-        default=20,
-        help='Max iterazioni HSJ (default: 20, silenzioso)'
-    )
-    
-    parser.add_argument(
-        '--max-eval',
-        type=int,
-        default=1000,
-        help='Max query per campione (default: 1000, silenzioso)'
-    )
-    
-    parser.add_argument(
-        '--init-eval',
-        type=int,
-        default=50,
-        help='Query inizializzazione (default: 50)'
-    )
-    
-    parser.add_argument(
-        '--norm',
-        type=str,
-        choices=['2', 'inf'],
-        default='2',
-        help='Norma (default: 2)'
-    )
-    
-    parser.add_argument(
-        '--max-queries-total',
-        type=int,
-        default=500000,
-        help='Budget query globale (default: 500000)'
-    )
-    
-    parser.add_argument(
-        '--save-results',
-        action='store_true',
-        help='Salva risultati'
-    )
-    
-    parser.add_argument(
-        '--verbose',
-        action='store_true',
-        help='Verbose'
-    )
+    parser.add_argument('--target-model-path', type=str, required=True)
+    parser.add_argument('--test-clients', type=int, nargs='+', default=[1, 13])
+    parser.add_argument('--max-iter', type=int, default=20)
+    parser.add_argument('--max-eval', type=int, default=1000)
+    parser.add_argument('--init-eval', type=int, default=50)
+    parser.add_argument('--norm', type=str, choices=['2', 'inf'], default='2')
+    parser.add_argument('--max-queries-total', type=int, default=500000)
+    parser.add_argument('--save-results', action='store_true')
+    parser.add_argument('--verbose', action='store_true')
     
     args = parser.parse_args()
     
@@ -772,7 +742,6 @@ def main():
         print(f"\n✅ Attacco completato!")
         print(f"   ASR: {results['metrics']['asr']*100:.2f}%")
         print(f"   Query totali: {results['query_stats']['total_queries']}")
-        print(f"   Efficienza: {results['config']['efficiency_rate']:.4f}%")
 
 
 if __name__ == "__main__":

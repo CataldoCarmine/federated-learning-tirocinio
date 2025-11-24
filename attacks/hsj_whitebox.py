@@ -91,8 +91,6 @@ def run_whitebox_hsj_attack(
     """
     Esegue attacco White-Box con HopSkipJump sul Random Forest federato globale.
     
-    NOVITÀ: Progress bar con tqdm per visualizzare progresso generazione.
-    
     WORKFLOW COMPLETO:
     
     FASE 1: CARICAMENTO MODELLO E DATI
