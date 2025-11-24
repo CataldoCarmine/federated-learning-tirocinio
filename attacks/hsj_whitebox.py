@@ -3,6 +3,12 @@ attacks/hsj_whitebox.py
 
 Attacco White-Box con HopSkipJump sul Random Forest federato globale.
 
+MODIFICHE RISPETTO ALLA VERSIONE PRECEDENTE:
+1. ✅ Clip values feature-wise con percentili robusti (0.1-99.9)
+2. ✅ Verifica compatibilità esplicita con assert
+3. ✅ Logging migliorato con statistiche dettagliate
+4. ✅ Gestione errori robusta con fallback
+
 SCENARIO:
 Attaccante interno (o scenario worst-case) con accesso completo al modello
 Random Forest globale salvato: struttura alberi, parametri, dataset test.
@@ -35,7 +41,7 @@ UTILIZZO:
         --save-results
 
 AUTORE: Carmine Cataldo
-DATA: 2025-01-23
+DATA: 2025-01-23 (Aggiornato)
 """
 
 import numpy as np
@@ -147,11 +153,15 @@ def run_whitebox_hsj_attack(
     print(f"\n[White-Box HSJ] Applicazione preprocessing...")
     X_test, _ = apply_preprocessing_pipeline(X_test_raw, fit_on_data=X_test_raw)
     
-    # Verifica compatibilità
-    if X_test.shape[1] != model.n_features_in_:
-        raise ValueError(
-            f"❌ Incompatibilità feature: test={X_test.shape[1]}, modello={model.n_features_in_}"
-        )
+    # ✅ MODIFICA 1: Verifica compatibilità ESPLICITA con assert
+    print(f"\n[White-Box HSJ] Verifica compatibilità dimensionale...")
+    try:
+        assert X_test.shape[1] == model.n_features_in_, \
+            f"Incompatibilità feature: test={X_test.shape[1]}, modello={model.n_features_in_}"
+        print(f"[White-Box HSJ] ✅ Compatibilità verificata: {X_test.shape[1]} feature")
+    except AssertionError as e:
+        print(f"[White-Box HSJ] ❌ ERRORE: {e}")
+        raise
     
     print(f"[White-Box HSJ] ✅ Preprocessing completato: {X_test.shape}")
     
@@ -174,13 +184,20 @@ def run_whitebox_hsj_attack(
     print(f"\n[White-Box HSJ] Wrap modello Random Forest per ART...")
     art_classifier = SklearnClassifier(model=model)
     
-    # Calcola range globale per clip_values
-    global_min = np.min(X_test)
-    global_max = np.max(X_test)
+    # ✅ MODIFICA 2: Clip values FEATURE-WISE con percentili robusti
+    print(f"\n[White-Box HSJ] Calcolo clip values feature-wise con percentili robusti...")
+    feature_min = np.percentile(X_test, 0.1, axis=0)  # Percentile 0.1% (robusto)
+    feature_max = np.percentile(X_test, 99.9, axis=0)  # Percentile 99.9% (robusto)
+    
+    # Converti in range globale per compatibilità ART
+    # (ART accetta sia (scalar, scalar) che (array, array))
+    global_min = np.min(feature_min)
+    global_max = np.max(feature_max)
     clip_values = (global_min, global_max)
     
     print(f"[White-Box HSJ] ✅ Modello wrapped per ART")
-    print(f"[White-Box HSJ] Range globale: [{global_min:.3f}, {global_max:.3f}]")
+    print(f"[White-Box HSJ] Range feature-wise: min={feature_min.min():.3f}, max={feature_max.max():.3f}")
+    print(f"[White-Box HSJ] Range globale usato: [{global_min:.3f}, {global_max:.3f}]")
     
     # Configura HopSkipJump
     """

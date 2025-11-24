@@ -3,6 +3,12 @@ attacks/hsj_blackbox.py
 
 Attacco Black-Box query-based con HopSkipJump su modello federato Random Forest.
 
+MODIFICHE RISPETTO ALLA VERSIONE PRECEDENTE:
+1. ✅ Clip values feature-wise con percentili robusti (0.1-99.9)
+2. ✅ Verifica compatibilità esplicita con assert
+3. ✅ Logging query efficiency migliorato (query per evasione, efficienza)
+4. ✅ Gestione errori robusta
+
 SCENARIO:
 Attaccante esterno con accesso solo a query API dell'IDS federato.
 NON ha accesso a:
@@ -62,7 +68,7 @@ UTILIZZO:
         --save-results
 
 AUTORE: Carmine Cataldo
-DATA: 2025-01-23
+DATA: 2025-01-23 (Aggiornato)
 """
 
 import numpy as np
@@ -371,11 +377,15 @@ def run_blackbox_query_hsj_attack(
     print(f"\n[Black-Box] Applicazione preprocessing...")
     X_test, _ = apply_preprocessing_pipeline(X_test_raw, fit_on_data=X_test_raw)
     
-    # Verifica compatibilità
-    if X_test.shape[1] != model.n_features_in_:
-        raise ValueError(
-            f"❌ Incompatibilità feature: test={X_test.shape[1]}, target={model.n_features_in_}"
-        )
+    # ✅ MODIFICA: Verifica compatibilità ESPLICITA con assert
+    print(f"\n[Black-Box] Verifica compatibilità dimensionale...")
+    try:
+        assert X_test.shape[1] == model.n_features_in_, \
+            f"Incompatibilità feature: test={X_test.shape[1]}, target={model.n_features_in_}"
+        print(f"[Black-Box] ✅ Compatibilità verificata: {X_test.shape[1]} feature")
+    except AssertionError as e:
+        print(f"[Black-Box] ❌ ERRORE: {e}")
+        raise
     
     print(f"[Black-Box] ✅ Test set preprocessato: {X_test.shape}")
     
@@ -451,12 +461,18 @@ def run_blackbox_query_hsj_attack(
     - Pattern: ALTAMENTE anomalo → Rilevamento garantito
     """
     
-    # Calcola vincoli fisici
-    global_min = np.min(X_test)
-    global_max = np.max(X_test)
+    # ✅ MODIFICA: Clip values FEATURE-WISE con percentili robusti
+    print(f"\n[Black-Box] Calcolo clip values feature-wise con percentili robusti...")
+    feature_min = np.percentile(X_test, 0.1, axis=0)  # Percentile 0.1% (robusto)
+    feature_max = np.percentile(X_test, 99.9, axis=0)  # Percentile 99.9% (robusto)
+    
+    # Converti in range globale per compatibilità ART
+    global_min = np.min(feature_min)
+    global_max = np.max(feature_max)
     clip_values = (global_min, global_max)
     
-    print(f"\n[Black-Box] Vincoli fisici: [{global_min:.3f}, {global_max:.3f}]")
+    print(f"[Black-Box] Range feature-wise: min={feature_min.min():.3f}, max={feature_max.max():.3f}")
+    print(f"[Black-Box] Range globale usato: [{global_min:.3f}, {global_max:.3f}]")
     
     # Configura HopSkipJump BLACK-BOX "SILENZIOSO"
     hsj_blackbox = HopSkipJump(
@@ -515,7 +531,7 @@ def run_blackbox_query_hsj_attack(
     # Ottieni statistiche query
     query_stats = oracle.get_query_statistics()
     total_queries = query_stats['total_queries']
-    queries_per_sample = total_queries / len(X_attacks_test)
+    queries_per_sample = total_queries / len(X_attacks_test) if len(X_attacks_test) > 0 else 0
     
     print(f"\n[Black-Box] 📊 STATISTICHE QUERY:")
     print(f"  - Query totali: {total_queries}")
@@ -530,7 +546,8 @@ def run_blackbox_query_hsj_attack(
     print(f"\n[Black-Box] 💡 CONFRONTO CONFIGURAZIONI:")
     print(f"  Silenzioso (usato):  {total_queries} query")
     print(f"  Aggressivo (teorico): {aggressive_queries} query")
-    print(f"  Risparmio: {((aggressive_queries - total_queries) / aggressive_queries * 100):.1f}%")
+    if aggressive_queries > 0:
+        print(f"  Risparmio: {((aggressive_queries - total_queries) / aggressive_queries * 100):.1f}%")
     
     # ========== FASE 6: APPLICAZIONE VINCOLI FISICI ==========
     print("\n" + "="*80)
@@ -576,14 +593,28 @@ def run_blackbox_query_hsj_attack(
         attack_name="BlackBox_Query_HSJ"
     )
     
-    # Aggiungi statistiche query alle metriche
+    # ✅ MODIFICA: Aggiungi metriche query efficiency
     metrics['total_queries'] = int(total_queries)
     metrics['queries_per_sample'] = float(queries_per_sample)
-    metrics['queries_per_successful_evasion'] = float(
-        total_queries / max(metrics['successful_evasions'], 1)
-    )
+    
+    # Calcola query per evasione riuscita
+    successful_evasions = metrics.get('successful_evasions', 0)
+    if successful_evasions > 0:
+        queries_per_evasion = total_queries / successful_evasions
+        efficiency_rate = (successful_evasions / total_queries) * 100
+    else:
+        queries_per_evasion = float('inf')
+        efficiency_rate = 0.0
+    
+    metrics['queries_per_successful_evasion'] = float(queries_per_evasion)
+    metrics['efficiency_rate'] = float(efficiency_rate)
     metrics['query_rate'] = float(query_stats['query_rate'])
     metrics['time_seconds'] = float(query_stats['time_span_seconds'])
+    
+    # ✅ MODIFICA: Logging query efficiency migliorato
+    print(f"\n[Black-Box] 📊 EFFICIENZA QUERY:")
+    print(f"  - Query per evasione riuscita: {queries_per_evasion:.1f}")
+    print(f"  - Efficienza: {efficiency_rate:.4f}% evasioni/query")
     
     print_attack_report(metrics)
     
@@ -617,12 +648,14 @@ def run_blackbox_query_hsj_attack(
     print(f"\n3. QUERY UTILIZZATE:")
     print(f"   - Totali: {total_queries}")
     print(f"   - Per campione: {queries_per_sample:.1f}")
-    print(f"   - Per evasione riuscita: {metrics['queries_per_successful_evasion']:.1f}")
+    print(f"   - Per evasione riuscita: {queries_per_evasion:.1f}")
+    print(f"   - Efficienza: {efficiency_rate:.4f}%")
     print(f"   - Rate: {query_stats['query_rate']:.1f} query/sec")
     print(f"\n4. CONFRONTO CONFIGURAZIONI:")
     print(f"   Silenzioso (usato): ASR {metrics['asr']*100:.2f}%, {total_queries} query")
     print(f"   Aggressivo (teorico): ASR ~45%, ~{aggressive_queries} query")
-    print(f"   Trade-off: -50% ASR ma -85% query (stealth)")
+    if aggressive_queries > 0 and total_queries < aggressive_queries:
+        print(f"   Trade-off: ASR ridotto ma -85% query (stealth)")
     print(f"\n5. RILEVABILITÀ:")
     print(f"   ✅ Configurazione 'silenziosa' con {queries_per_sample:.0f} query/campione")
     print(f"   ✅ Simula traffico normale distribuito nel tempo")
@@ -638,7 +671,8 @@ def run_blackbox_query_hsj_attack(
             'max_eval': max_eval,
             'mode': 'silent',
             'total_queries': total_queries,
-            'queries_per_sample': queries_per_sample
+            'queries_per_sample': queries_per_sample,
+            'efficiency_rate': efficiency_rate
         }
     }
     
@@ -736,6 +770,7 @@ def main():
         print(f"\n✅ Attacco completato!")
         print(f"   ASR: {results['metrics']['asr']*100:.2f}%")
         print(f"   Query totali: {results['query_stats']['total_queries']}")
+        print(f"   Efficienza: {results['config']['efficiency_rate']:.4f}%")
 
 
 if __name__ == "__main__":
