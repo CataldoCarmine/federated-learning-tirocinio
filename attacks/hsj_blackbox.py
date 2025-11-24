@@ -74,6 +74,7 @@ import os
 import argparse
 import time
 from typing import Tuple, Dict
+from tqdm import tqdm  # ✅ AGGIUNTO: Progress bar
 
 # Aggiungi path per import moduli custom
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -552,12 +553,22 @@ def run_blackbox_query_hsj_attack(
     start_time = time.time()
     
     try:
-        # ✅ NOVITÀ: Genera con progress bar usando tqdm
-        print(f"\n[Black-Box] Inizio generazione con progress bar...")
+        print(f"\n[Black-Box] 📊 Inizio generazione con progress bar...\n")
         
-        # Genera adversarial examples
-        # NOTA: HopSkipJump non supporta nativamente tqdm, quindi usiamo un wrapper
-        X_adv_test = hsj_blackbox.generate(x=X_attacks_test)
+        # ✅ GENERAZIONE CON PROGRESS BAR CAMPIONE PER CAMPIONE
+        X_adv_test = []
+        
+        for i in tqdm(range(len(X_attacks_test)), 
+                      desc="[HSJ Black-Box] Generazione", 
+                      unit="campioni", 
+                      ncols=100):
+            
+            # Genera adversarial per singolo campione
+            x_adv_i = hsj_blackbox.generate(x=X_attacks_test[i:i+1])
+            X_adv_test.append(x_adv_i[0])
+        
+        # Converti lista in array numpy
+        X_adv_test = np.array(X_adv_test)
         
         elapsed_time = time.time() - start_time
         
@@ -566,7 +577,7 @@ def run_blackbox_query_hsj_attack(
         print(f"  ⚡ Velocità media: {len(X_attacks_test)/elapsed_time:.2f} campioni/sec")
         
     except Exception as e:
-        print(f"\n[Black-Box] ❌ Errore generazione: {e}")
+        print(f"\n[Black-Box] ❌ Errore: {e}")
         import traceback
         traceback.print_exc()
         return None
