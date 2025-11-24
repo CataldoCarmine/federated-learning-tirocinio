@@ -142,7 +142,7 @@ class QueryCountingWrapper(BaseEstimator, ClassifierMixin):
     Ma per testing, usiamo modello locale per evitare setup server.
     """
     
-    def __init__(self, model, max_queries_total=500000):
+    def __init__(self, model, max_queries_total=5000000):
         """
         Inizializza wrapper con ereditarietà corretta.
         
@@ -437,6 +437,25 @@ def run_blackbox_query_hsj_attack(
     X_attacks_test, y_attacks_test, attack_indices = select_attack_samples(
         X_test, y_test, target_class=1
     )
+
+    # ✅ NUOVO: Limita numero campioni per rispettare budget
+    max_samples_for_budget = max_queries_total // max_eval  # es. 500,000 / 1,000 = 500
+    if len(X_attacks_test) > max_samples_for_budget:
+        print(f"\n[Black-Box] ⚠️ LIMITE BUDGET QUERY:")
+        print(f"  - Campioni Attack totali: {len(X_attacks_test)}")
+        print(f"  - Budget query: {max_queries_total}")
+        print(f"  - Max campioni supportati: {max_samples_for_budget}")
+        print(f"  - RIDUZIONE a {max_samples_for_budget} campioni per rispettare budget")
+        
+        # Campionamento stratificato per mantenere rappresentatività
+        import random
+        random.seed(42)
+        selected_indices = random.sample(range(len(X_attacks_test)), max_samples_for_budget)
+        selected_indices.sort()
+        
+        X_attacks_test = X_attacks_test[selected_indices]
+        y_attacks_test = y_attacks_test[selected_indices]
+        attack_indices = attack_indices[selected_indices]
     
     print(f"  - Campioni totali test: {len(X_test)}")
     print(f"  - Campioni Attack: {len(X_attacks_test)}")
@@ -552,21 +571,44 @@ def run_blackbox_query_hsj_attack(
     oracle.reset_query_count()
     start_time = time.time()
     
+    # ✅ GESTIONE GRACEFUL BUDGET ESAURITO
+    X_adv_test = []
+    successful_generations = 0
+    budget_exhausted_at = None
+
     try:
         print(f"\n[Black-Box] 📊 Inizio generazione con progress bar...\n")
         
         # ✅ GENERAZIONE CON PROGRESS BAR CAMPIONE PER CAMPIONE
-        X_adv_test = []
         
         for i in tqdm(range(len(X_attacks_test)), 
                       desc="[HSJ Black-Box] Generazione", 
                       unit="campioni", 
                       ncols=100):
             
-            # Genera adversarial per singolo campione
-            x_adv_i = hsj_blackbox.generate(x=X_attacks_test[i:i+1])
-            X_adv_test.append(x_adv_i[0])
+            try:
+                # Genera adversarial per singolo campione
+                x_adv_i = hsj_blackbox.generate(x=X_attacks_test[i:i+1])
+                X_adv_test.append(x_adv_i[0])
+                successful_generations += 1
         
+            except RuntimeError as e:
+                # Budget query esaurito
+                if "Budget query esaurito" in str(e):
+                    budget_exhausted_at = i
+                    print(f"\n[Black-Box] ⚠️ Budget query esaurito al campione {i+1}/{len(X_attacks_test)}")
+                    print(f"[Black-Box] Campioni generati con successo: {successful_generations}")
+                    print(f"[Black-Box] Proseguo con campioni già generati per valutazione parziale...")
+                    
+                    # Riempi i campioni rimanenti con originali (no perturbazione)
+                    for j in range(i, len(X_attacks_test)):
+                        X_adv_test.append(X_attacks_test[j])
+                    
+                    break  # Esce dal loop
+                else:
+                    # Altro errore, ri-lancia
+                    raise
+
         # Converti lista in array numpy
         X_adv_test = np.array(X_adv_test)
         
@@ -575,12 +617,24 @@ def run_blackbox_query_hsj_attack(
         print(f"\n[Black-Box] ✅ Generazione completata!")
         print(f"  ⏱️ Tempo totale: {elapsed_time:.1f} secondi")
         print(f"  ⚡ Velocità media: {len(X_attacks_test)/elapsed_time:.2f} campioni/sec")
+
+        if budget_exhausted_at is not None:
+            print(f"\n[Black-Box] ⚠️ NOTA: Budget esaurito dopo {successful_generations} campioni")
+            print(f"  - Campioni perturbati: {successful_generations}")
+            print(f"  - Campioni NON perturbati (originali): {len(X_attacks_test) - successful_generations}")
+            print(f"  - ASR sarà calcolato solo sui campioni perturbati")
         
     except Exception as e:
         print(f"\n[Black-Box] ❌ Errore: {e}")
         import traceback
         traceback.print_exc()
-        return None
+    
+        # Se abbiamo almeno alcuni campioni, prosegui con valutazione parziale
+        if len(X_adv_test) > 0:
+            print(f"\n[Black-Box] Proseguo con {len(X_adv_test)} campioni generati...")
+            X_adv_test = np.array(X_adv_test)
+        else:
+            return None
     
     # ========== FASE 5: STATISTICHE QUERY ==========
     print("\n" + "="*80)
@@ -727,7 +781,7 @@ def main():
     parser.add_argument('--max-eval', type=int, default=1000)
     parser.add_argument('--init-eval', type=int, default=50)
     parser.add_argument('--norm', type=str, choices=['2', 'inf'], default='2')
-    parser.add_argument('--max-queries-total', type=int, default=500000)
+    parser.add_argument('--max-queries-total', type=int, default=5000000)
     parser.add_argument('--save-results', action='store_true')
     parser.add_argument('--verbose', action='store_true')
     

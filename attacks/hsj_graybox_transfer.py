@@ -326,14 +326,8 @@ def run_graybox_transfer_hsj_attack(
     print(f"  Tempo stimato: ~{len(X_attacks_test) * 1:.0f} secondi")
     
     try:
-        # ✅ NOVITÀ: Genera con progress bar
-        print(f"\n[Gray-Box] 📊 Inizio generazione su surrogato...")
-        
-        with tqdm(total=len(X_attacks_test), desc="Generazione su surrogato", 
-                  unit="campioni", ncols=100) as pbar:
             
-            X_adv_test = hsj_surrogate.generate(x=X_attacks_test)
-            pbar.update(len(X_attacks_test))
+        X_adv_test = hsj_surrogate.generate(x=X_attacks_test)
         
         print(f"\n[Gray-Box] ✅ Generati {len(X_adv_test)} esempi adversarial")
         
