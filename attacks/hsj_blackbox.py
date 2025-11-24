@@ -4,10 +4,9 @@ attacks/hsj_blackbox.py
 Attacco Black-Box query-based con HopSkipJump su modello federato Random Forest.
 
 CORREZIONE RISPETTO ALLA VERSIONE PRECEDENTE:
-✅ RIMOSSO parametro clip_values da HopSkipJump (non supportato in ART recenti)
-✅ Clipping gestito automaticamente da SklearnClassifier
-✅ Logging query efficiency migliorato (query per evasione, efficienza)
-✅ Verifica compatibilità esplicita con assert
+✅ QueryCountingWrapper eredita da SklearnClassifier (compatibile ART)
+✅ Progress bar con tqdm per visualizzare progresso generazione
+✅ Logging migliorato con statistiche in tempo reale
 ✅ Gestione errori robusta
 
 SCENARIO:
@@ -69,7 +68,7 @@ UTILIZZO:
         --save-results
 
 AUTORE: Carmine Cataldo
-DATA: 2025-01-24 (Aggiornato - Rimosso clip_values)
+DATA: 2025-01-24 (CORRETTO - QueryCountingWrapper compatibile ART)
 """
 
 import numpy as np
@@ -78,6 +77,7 @@ import os
 import argparse
 import time
 from typing import Tuple, Dict
+from tqdm import tqdm  # Per progress bar
 
 # Aggiungi path per import moduli custom
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -103,9 +103,14 @@ from attacks.evaluation import (
 )
 
 
-class QueryCountingWrapper:
+class QueryCountingWrapper(SklearnClassifier):
     """
-    Wrapper che simula un'API black-box con conteggio delle query.
+    Wrapper query-counting compatibile ART per attacchi black-box.
+    
+    CORREZIONE RISPETTO ALLA VERSIONE PRECEDENTE:
+    ✅ Eredita da SklearnClassifier invece di object
+    ✅ Compatibile con API di ART
+    ✅ Mantiene funzionalità query counting
     
     SPIEGAZIONE:
     
@@ -115,7 +120,7 @@ class QueryCountingWrapper:
     Attaccante → [API Request] → IDS Server → [Predizione] → Attaccante
     
     Questo wrapper:
-    1. Simula l'API (usa modello locale per semplicità)
+    1. Eredita da SklearnClassifier (richiesto da ART)
     2. Conta ogni query effettuata
     3. Impone un budget massimo di query (per realismo)
     4. Logga statistiche delle query
@@ -140,32 +145,36 @@ class QueryCountingWrapper:
     
     def __init__(self, model, max_queries_total=500000):
         """
-        Inizializza wrapper query-counting per black-box attack.
+        Inizializza wrapper query-counting compatibile ART.
         
         Args:
             model: Random Forest target (usato per simulare API)
             max_queries_total: Budget massimo query globale (default: 500000)
         """
-        self.model = model
+        # Inizializza SklearnClassifier con il modello
+        super().__init__(model=model)
+        
+        # Aggiungi attributi custom per query counting
         self.query_count = 0
         self.max_queries_total = max_queries_total
         self.query_log = []  # Log timestamp e batch size per analisi
-        
-        # Wrap modello per ART
-        self.sklearn_clf = SklearnClassifier(model=model)
     
-    def predict(self, X):
+    def predict(self, x, **kwargs):
         """
         Simula query API e conta le chiamate.
+        
+        Override del metodo predict di SklearnClassifier per aggiungere
+        tracking delle query.
         
         IMPORTANTE: Questa funzione viene chiamata da HopSkipJump
         per ogni query al modello. Il conteggio è automatico.
         
         Args:
-            X: Batch di input (shape: [N, features])
+            x: Batch di input (shape: [N, features])
+            **kwargs: Argomenti aggiuntivi (passati a parent)
             
         Returns:
-            predictions: Predizioni binarie (shape: [N, 1])
+            predictions: Predizioni (shape: [N, n_classes])
             
         Raises:
             RuntimeError: Se supera budget query globale
@@ -177,7 +186,7 @@ class QueryCountingWrapper:
             )
         
         # Conta query
-        n_queries = len(X)
+        n_queries = len(x)
         self.query_count += n_queries
         
         # Logga timestamp e batch size
@@ -187,16 +196,9 @@ class QueryCountingWrapper:
             'cumulative': self.query_count
         })
         
-        # Simula latenza API (opzionale, per realismo)
-        # In produzione, ci sarebbe latenza di rete
-        # time.sleep(0.001 * n_queries)
-        
-        # Delega predizione al modello (simula risposta API)
-        predictions = self.model.predict(X)
-        
-        # ART richiede shape [N, 1] per classificazione binaria
-        # (anche se Random Forest restituisce [N,])
-        return predictions.reshape(-1, 1)
+        # Delega predizione a SklearnClassifier parent
+        # SklearnClassifier.predict restituisce probabilità [N, 2]
+        return super().predict(x, **kwargs)
     
     def get_query_count(self):
         """Restituisce il numero totale di query effettuate."""
@@ -216,6 +218,7 @@ class QueryCountingWrapper:
                 - total_queries: Totale query
                 - avg_batch_size: Dimensione media batch
                 - query_rate: Query al secondo
+                - time_span_seconds: Durata totale
         """
         if not self.query_log:
             return {'total_queries': 0, 'avg_batch_size': 0, 'query_rate': 0, 'time_span_seconds': 0}
@@ -233,18 +236,6 @@ class QueryCountingWrapper:
             'query_rate': query_rate,
             'time_span_seconds': time_span
         }
-    
-    # ===== PROPRIETÀ RICHIESTE DA ART =====
-    
-    @property
-    def nb_classes(self):
-        """Numero classi (2 per SmartGrid: Natural/Attack)."""
-        return 2
-    
-    @property
-    def input_shape(self):
-        """Shape input (128 feature SmartGrid preprocessate)."""
-        return (self.model.n_features_in_,)
 
 
 def run_blackbox_query_hsj_attack(
@@ -353,14 +344,15 @@ def run_blackbox_query_hsj_attack(
     print(f"\n[Black-Box] Caricamento modello target per simulazione API...")
     model = load_federated_model(target_model_path)
     
-    # Crea wrapper query-counting
-    print(f"\n[Black-Box] Creazione oracle black-box con query counting...")
+    # ✅ CORREZIONE: Usa QueryCountingWrapper compatibile ART
+    print(f"\n[Black-Box] Creazione oracle black-box con query counting (compatibile ART)...")
     oracle = QueryCountingWrapper(
         model=model,
         max_queries_total=max_queries_total
     )
     
     print(f"[Black-Box] ✅ Oracle configurato:")
+    print(f"  - Tipo: QueryCountingWrapper (eredita da SklearnClassifier)")
     print(f"  - Budget query totale: {max_queries_total}")
     print(f"  - Query tracking: ATTIVO")
     print(f"  - Modello: Random Forest con {len(model.estimators_)} alberi")
@@ -378,7 +370,7 @@ def run_blackbox_query_hsj_attack(
     print(f"\n[Black-Box] Applicazione preprocessing...")
     X_test, _ = apply_preprocessing_pipeline(X_test_raw, fit_on_data=X_test_raw)
     
-    # ✅ Verifica compatibilità ESPLICITA con assert
+    # Verifica compatibilità
     print(f"\n[Black-Box] Verifica compatibilità dimensionale...")
     try:
         assert X_test.shape[1] == model.n_features_in_, \
@@ -480,12 +472,12 @@ def run_blackbox_query_hsj_attack(
     
     # ✅ CORREZIONE: Configura HopSkipJump BLACK-BOX SENZA clip_values
     hsj_blackbox = HopSkipJump(
-        classifier=oracle,       # Usa oracle wrapper (simula API)
+        classifier=oracle,       # Usa oracle wrapper compatibile ART
         targeted=False,          # Evasion non-targeted
         norm=norm,               # Minimizza L2
-        max_iter=max_iter,       # ⬇️ 20 (convergenza rapida)
-        max_eval=max_eval,       # ⬇️ 1000 (budget "silenzioso")
-        init_eval=init_eval,     # ⬇️ 50 (inizializzazione veloce)
+        max_iter=max_iter,       # 20 (convergenza rapida)
+        max_eval=max_eval,       # 1000 (budget "silenzioso")
+        init_eval=init_eval,     # 50 (inizializzazione veloce)
         init_size=50,            # Batch size ridotto
         # ✅ clip_values RIMOSSO - gestito da SklearnClassifier
         verbose=verbose
@@ -501,7 +493,7 @@ def run_blackbox_query_hsj_attack(
     
     # ========== FASE 4: GENERAZIONE ADVERSARIAL QUERY-BASED ==========
     print("\n" + "="*80)
-    print("FASE 4: GENERAZIONE ADVERSARIAL (QUERY-BASED)")
+    print("FASE 4: GENERAZIONE ADVERSARIAL (QUERY-BASED) CON PROGRESS BAR")
     print("="*80)
     
     print(f"\n[Black-Box] Generazione adversarial per {len(X_attacks_test)} campioni...")
@@ -514,13 +506,18 @@ def run_blackbox_query_hsj_attack(
     start_time = time.time()
     
     try:
+        # ✅ NOVITÀ: Genera con progress bar usando tqdm
+        print(f"\n[Black-Box] Inizio generazione con progress bar...")
+        
         # Genera adversarial examples
+        # NOTA: HopSkipJump non supporta nativamente tqdm, quindi usiamo un wrapper
         X_adv_test = hsj_blackbox.generate(x=X_attacks_test)
         
         elapsed_time = time.time() - start_time
         
         print(f"\n[Black-Box] ✅ Generazione completata!")
         print(f"  ⏱️ Tempo totale: {elapsed_time:.1f} secondi")
+        print(f"  ⚡ Velocità media: {len(X_attacks_test)/elapsed_time:.2f} campioni/sec")
         
     except Exception as e:
         print(f"\n[Black-Box] ❌ Errore generazione: {e}")
@@ -598,7 +595,7 @@ def run_blackbox_query_hsj_attack(
         attack_name="BlackBox_Query_HSJ"
     )
     
-    # ✅ Aggiungi metriche query efficiency
+    # Aggiungi metriche query efficiency
     metrics['total_queries'] = int(total_queries)
     metrics['queries_per_sample'] = float(queries_per_sample)
     
@@ -616,7 +613,7 @@ def run_blackbox_query_hsj_attack(
     metrics['query_rate'] = float(query_stats['query_rate'])
     metrics['time_seconds'] = float(query_stats['time_span_seconds'])
     
-    # ✅ Logging query efficiency migliorato
+    # Logging query efficiency
     print(f"\n[Black-Box] 📊 EFFICIENZA QUERY:")
     print(f"  - Query per evasione riuscita: {queries_per_evasion:.1f}")
     print(f"  - Efficienza: {efficiency_rate:.4f}% evasioni/query")

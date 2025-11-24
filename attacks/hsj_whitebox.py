@@ -37,8 +37,14 @@ UTILIZZO:
         --max-eval 10000 \
         --save-results
 
+    oppure:
+        python attacks/hsj_whitebox.py \
+        --model-path federated/SmartGrid/models/federated_rf_global_20251121_024044.pkl \
+        --save-results
+
+
 AUTORE: Carmine Cataldo
-DATA: 2025-01-23 (Aggiornato: 2025-01-24 - Rimosso clip_values)
+DATA: 2025-01-24 (Aggiornato - Aggiunta progress bar)
 """
 
 import numpy as np
@@ -46,6 +52,7 @@ import sys
 import os
 import argparse
 from typing import Tuple, Dict
+from tqdm import tqdm  # ✅ AGGIUNTO: Progress bar
 
 # Aggiungi path per import moduli custom
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -83,6 +90,8 @@ def run_whitebox_hsj_attack(
 ):
     """
     Esegue attacco White-Box con HopSkipJump sul Random Forest federato globale.
+    
+    NOVITÀ: Progress bar con tqdm per visualizzare progresso generazione.
     
     WORKFLOW COMPLETO:
     
@@ -248,8 +257,24 @@ def run_whitebox_hsj_attack(
     print(f"  Tempo stimato: ~{len(X_attacks_only) * 1.5:.0f} secondi per {len(X_attacks_only)} campioni")
     
     try:
-        X_attacks_adv = hsj_attack.generate(x=X_attacks_only)
-        print(f"[White-Box HSJ] ✅ Generati {len(X_attacks_adv)} esempi adversarial")
+        # ✅ NOVITÀ: Genera con progress bar
+        # NOTA: HopSkipJump non supporta nativamente tqdm, ma possiamo mostrare
+        # una progress bar indeterminata durante la generazione
+        
+        print(f"\n[White-Box HSJ] 📊 Inizio generazione...")
+        
+        # Usa tqdm per mostrare progresso (indeterminato poiché HSJ non espone hook)
+        with tqdm(total=len(X_attacks_only), desc="Generazione adversarial", 
+                  unit="campioni", ncols=100) as pbar:
+            
+            # HopSkipJump genera tutto in un colpo, ma aggiorniamo la barra alla fine
+            X_attacks_adv = hsj_attack.generate(x=X_attacks_only)
+            
+            # Aggiorna barra dopo completamento
+            pbar.update(len(X_attacks_only))
+        
+        print(f"\n[White-Box HSJ] ✅ Generati {len(X_attacks_adv)} esempi adversarial")
+        
     except Exception as e:
         print(f"[White-Box HSJ] ❌ Errore generazione: {e}")
         import traceback

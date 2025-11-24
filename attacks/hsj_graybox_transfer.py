@@ -38,6 +38,12 @@ UTILIZZO:
         --max-eval 5000 \
         --save-results
 
+    opppure:
+        python attacks/hsj_graybox_transfer.py \
+        --target-model-path federated/SmartGrid/models/federated_rf_global_20251121_024044.pkl \
+        --verbose \
+        --save-results
+
 AUTORE: Carmine Cataldo
 DATA: 2025-01-23 (Aggiornato: 2025-01-24 - Rimosso clip_values)
 """
@@ -49,6 +55,7 @@ import argparse
 from typing import Tuple, Dict
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
+from tqdm import tqdm  # ✅ AGGIUNTO: Progress bar al top degli import
 
 # Aggiungi path per import moduli custom
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -319,10 +326,19 @@ def run_graybox_transfer_hsj_attack(
     print(f"  Tempo stimato: ~{len(X_attacks_test) * 1:.0f} secondi")
     
     try:
-        X_adv_test = hsj_surrogate.generate(x=X_attacks_test)
-        print(f"[Gray-Box] ✅ Generati {len(X_adv_test)} esempi adversarial")
+        # ✅ NOVITÀ: Genera con progress bar
+        print(f"\n[Gray-Box] 📊 Inizio generazione su surrogato...")
+        
+        with tqdm(total=len(X_attacks_test), desc="Generazione su surrogato", 
+                  unit="campioni", ncols=100) as pbar:
+            
+            X_adv_test = hsj_surrogate.generate(x=X_attacks_test)
+            pbar.update(len(X_attacks_test))
+        
+        print(f"\n[Gray-Box] ✅ Generati {len(X_adv_test)} esempi adversarial")
+        
     except Exception as e:
-        print(f"[Gray-Box] ❌ Errore generazione: {e}")
+        print(f"\n[Gray-Box] ❌ Errore generazione: {e}")
         import traceback
         traceback.print_exc()
         return None
