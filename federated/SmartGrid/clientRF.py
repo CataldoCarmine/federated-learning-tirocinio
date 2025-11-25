@@ -488,47 +488,27 @@ def local_adversarial_training(model_instance, X_train, y_train, X_val, y_val, c
     """
     Adversarial training locale CON CACHE INTELLIGENTE.
     
-    MIGLIORAMENTI RISPETTO ALLA VERSIONE BASE:
-    1. ✅ Cache adversarial examples tra round
-    2. ✅ Rigenerazione intelligente basata su cambio modello
-    3. ✅ Fallback schedulato ogni N round
-    4. ✅ Logging dettagliato decisioni cache
-    5. ✅ Gestione graceful errori
+    ✅ CORREZIONE APPLICATA: Reset indici Pandas per evitare KeyError
     
-    WORKFLOW CON CACHE:
+    PROBLEMA RISOLTO:
+    y_train dopo train_test_split() mantiene gli indici originali del DataFrame.
+    Quando facciamo y_train[attack_mask], otteniamo una Series con indici NON sequenziali.
+    random.sample() genera indici numerici [0, 1, 2, ...] che NON corrispondono
+    agli indici Pandas della Series filtrata.
     
-    Round 1:
-      - Verifica cache: VUOTA
-      - Genera adversarial (HSJ)
-      - Salva in cache + hash modello
-      - Riaddestra su puliti + adversarial
-    
-    Round 2:
-      - Verifica cache: PRESENTE
-      - Calcola hash modello: CAMBIATO (aggregazione)
-      - Rigenera adversarial (modello diverso)
-      - Aggiorna cache
-      - Riaddestra
-    
-    Round 3-6:
-      - Verifica cache: PRESENTE
-      - Hash modello: INVARIATO
-      - USA CACHE (risparmio ~40s)
-      - Riaddestra solo su dati puliti + cache
-    
-    Round 7:
-      - Frequenza schedulata (5 round)
-      - Rigenera adversarial (freshness)
-      - Aggiorna cache
+    SOLUZIONE:
+    Convertiamo le Series Pandas in numpy array PRIMA del sottocampionamento.
+    Gli array numpy usano solo posizioni (senza indici label), quindi
+    indices = [0, 1, 2, ...] funziona correttamente.
     
     Args:
         model_instance: Random Forest addestrato su dati puliti
-        X_train: Training set pulito
-        y_train: Etichette training
+        X_train: Training set pulito (numpy array)
+        y_train: Etichette training (può essere Series Pandas o numpy array)
         X_val: Validation set
         y_val: Etichette validation
         client_id: ID del client
-        current_round: Round corrente (NUOVO)
+        current_round: Round corrente
         
     Returns:
         model_robust: Random Forest addestrato su puliti + adversarial
@@ -541,10 +521,17 @@ def local_adversarial_training(model_instance, X_train, y_train, X_val, y_val, c
     print(f"[Client {client_id}] {'='*60}")
     
     try:
+        # ✅ CORREZIONE: Converti y_train in numpy array se è Pandas Series
+        if isinstance(y_train, pd.Series):
+            print(f"[Client {client_id}] 🔧 Conversione y_train da Pandas Series a numpy array...")
+            y_train_np = y_train.values  # Estrai numpy array SENZA indici Pandas
+        else:
+            y_train_np = y_train
+        
         # STEP 1: Seleziona campioni Attack
-        attack_mask = (y_train == 1)
+        attack_mask = (y_train_np == 1)
         X_attack = X_train[attack_mask]
-        y_attack = y_train[attack_mask]
+        y_attack = y_train_np[attack_mask]  # ✅ Usa y_train_np (numpy array)
         
         if len(X_attack) == 0:
             print(f"[Client {client_id}] ⚠️ Nessun campione Attack")
@@ -559,8 +546,10 @@ def local_adversarial_training(model_instance, X_train, y_train, X_val, y_val, c
             import random
             random.seed(RANDOM_SEED)
             indices = random.sample(range(len(X_attack)), max_adv_samples)
+            
+            # ✅ ORA FUNZIONA: y_attack è numpy array, indices sono posizioni
             X_attack_sub = X_attack[indices]
-            y_attack_sub = y_attack[indices]
+            y_attack_sub = y_attack[indices]  # ✅ Nessun KeyError
         else:
             X_attack_sub = X_attack
             y_attack_sub = y_attack
@@ -655,11 +644,11 @@ def local_adversarial_training(model_instance, X_train, y_train, X_val, y_val, c
                 
                 # Invalida cache e rigenera
                 adversarial_cache['X_adv'] = None
-                return local_adversarial_training(model_instance, X_train, y_train, X_val, y_val, client_id, current_round)
+                return local_adversarial_training(model_instance, X_train, y_train_np, X_val, y_val, client_id, current_round)
         
         # STEP 4: Data Augmentation
         X_aug = np.concatenate([X_train, X_adv_constrained], axis=0)
-        y_aug = np.concatenate([y_train, y_adv], axis=0)
+        y_aug = np.concatenate([y_train_np, y_adv], axis=0)
         
         # Shuffle
         indices_shuffle = np.random.permutation(len(X_aug))
@@ -722,12 +711,18 @@ def extract_trees_from_forest(model, X_val, y_val):
     print(f"[Client {client_id}] 🔍 DEBUG extract_trees_from_forest: INIZIO")
     print(f"[Client {client_id}] 🔍 DEBUG: model type = {type(model)}")
     print(f"[Client {client_id}] 🔍 DEBUG: X_val shape = {X_val.shape}")
-    print(f"[Client {client_id}] 🔍 DEBUG: y_val shape = {y_val.shape}")
+    print(f"[Client {client_id}] 🔍 DEBUG: y_val shape = {y_val.shape if hasattr(y_val, 'shape') else len(y_val)}")
 
     # CONTROLLO: Verifica se il modello è addestrato
     if not hasattr(model, 'estimators_') or len(model.estimators_) == 0:
         print(f"[Client {client_id}] ⚠️ Modello non ancora addestrato, nessun albero disponibile")
         return []  # Restituisce lista vuota
+    
+    # ✅ Converti y_val in numpy array se è Pandas Series
+    if isinstance(y_val, pd.Series):
+        y_val_np = y_val.values
+    else:
+        y_val_np = y_val
     
     print(f"[Client {client_id}] 🔍 DEBUG: Modello ha {len(model.estimators_)} alberi")
     print(f"[Client {client_id}] === CALCOLO ACCURACY REALI PER {len(model.estimators_)} ALBERI ===")
@@ -735,26 +730,24 @@ def extract_trees_from_forest(model, X_val, y_val):
     trees_performance = []
     
     for i, tree in enumerate(model.estimators_):
-        print(f"[Client {client_id}] 🔍 DEBUG: Calcolo accuracy reale per albero {i+1}/{len(model.estimators_)}")
-
         # Predizioni dell'albero singolo
         tree_predictions = tree.predict(X_val)
         
         # Calcola accuracy standard REALE
-        accuracy_real = accuracy_score(y_val, tree_predictions)
+        accuracy_real = accuracy_score(y_val_np, tree_predictions)
         
         # Calcola weighted accuracy REALE
         # Weighted accuracy considera la distribuzione delle classi
-        class_counts = np.bincount(y_val)
+        class_counts = np.bincount(y_val_np)
         weights = 1.0 / class_counts  # Peso inversamente proporzionale alla frequenza
         class_weights_norm = weights / weights.sum()  # Normalizza i pesi
         
         # Calcola accuracy pesata per classe REALE
         weighted_acc_real = 0.0
-        for class_label in np.unique(y_val):
-            class_mask = (y_val == class_label)
+        for class_label in np.unique(y_val_np):
+            class_mask = (y_val_np == class_label)
             if np.sum(class_mask) > 0:
-                class_accuracy = accuracy_score(y_val[class_mask], tree_predictions[class_mask])
+                class_accuracy = accuracy_score(y_val_np[class_mask], tree_predictions[class_mask])
                 weighted_acc_real += class_accuracy * class_weights_norm[class_label]
         
         trees_performance.append((tree, accuracy_real, weighted_acc_real))
@@ -988,17 +981,23 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
                 print(f"[Client {client_id}] Adversarial Training DISABILITATO")
             
             # ============== STEP 3: CALCOLA METRICHE ==============
+            # ✅ Converti y_train in numpy array se è Series Pandas
+            if isinstance(y_train, pd.Series):
+                y_train_np = y_train.values
+            else:
+                y_train_np = y_train
+            
             train_predictions = model.predict(X_train_clean)
             train_prob = model.predict_proba(X_train_clean)[:, 1]
             
-            train_accuracy = accuracy_score(y_train, train_predictions)
-            train_precision = precision_score(y_train, train_predictions, zero_division=0)
-            train_recall = recall_score(y_train, train_predictions, zero_division=0)
-            train_f1 = f1_score(y_train, train_predictions, zero_division=0)
-            train_balanced_acc = balanced_accuracy_score(y_train, train_predictions)
+            train_accuracy = accuracy_score(y_train_np, train_predictions)
+            train_precision = precision_score(y_train_np, train_predictions, zero_division=0)
+            train_recall = recall_score(y_train_np, train_predictions, zero_division=0)
+            train_f1 = f1_score(y_train_np, train_predictions, zero_division=0)
+            train_balanced_acc = balanced_accuracy_score(y_train_np, train_predictions)
             
             try:
-                train_auc = roc_auc_score(y_train, train_prob)
+                train_auc = roc_auc_score(y_train_np, train_prob)
             except:
                 train_auc = 0.0
             
@@ -1058,9 +1057,6 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
         """
         global model, X_val, y_val
 
-        # Imposta semi per riproducibilità della valutazione
-        # set_reproducibility_seeds()
-        
         # Imposta parametri se ricevuti dal server
         if parameters:
             self.set_parameters(parameters)
@@ -1085,31 +1081,37 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             else:
                 X_val_clean = X_val
             
+            # ✅ Converti y_val in numpy array se è Series Pandas
+            if isinstance(y_val, pd.Series):
+                y_val_np = y_val.values
+            else:
+                y_val_np = y_val
+            
             # Valutazione Random Forest
             val_predictions = model.predict(X_val_clean)
             val_prob = model.predict_proba(X_val_clean)[:, 1]  # Probabilità classe positiva
             
             # Calcola metriche
-            accuracy = accuracy_score(y_val, val_predictions)
-            precision = precision_score(y_val, val_predictions, zero_division=0)
-            recall = recall_score(y_val, val_predictions, zero_division=0)
-            f1_score_val = f1_score(y_val, val_predictions, zero_division=0)
-            balanced_acc = balanced_accuracy_score(y_val, val_predictions)
+            accuracy = accuracy_score(y_val_np, val_predictions)
+            precision = precision_score(y_val_np, val_predictions, zero_division=0)
+            recall = recall_score(y_val_np, val_predictions, zero_division=0)
+            f1_score_val = f1_score(y_val_np, val_predictions, zero_division=0)
+            balanced_acc = balanced_accuracy_score(y_val_np, val_predictions)
             
             # AUC
             try:
-                auc = roc_auc_score(y_val, val_prob)
+                auc = roc_auc_score(y_val_np, val_prob)
             except:
                 auc = 0.0
             
             # Metriche per classe
-            report = classification_report(y_val, val_predictions, target_names=["natural", "attack"], output_dict=True, zero_division=0)
-            conf_matrix = confusion_matrix(y_val, val_predictions)
+            report = classification_report(y_val_np, val_predictions, target_names=["natural", "attack"], output_dict=True, zero_division=0)
+            conf_matrix = confusion_matrix(y_val_np, val_predictions)
 
             print(f"[Client {client_id}] Val Accuracy: {accuracy:.4f}, Val F1: {f1_score_val:.4f}")
             print(f"[Client {client_id}] Val Balanced Acc: {balanced_acc:.4f}, Val AUC: {auc:.4f}")
             print(f"[Client {client_id}] Classification report (per classe):")
-            print(classification_report(y_val, val_predictions, target_names=["natural", "attack"], zero_division=0))
+            print(classification_report(y_val_np, val_predictions, target_names=["natural", "attack"], zero_division=0))
             print(f"[Client {client_id}] Confusion matrix:")
             print(f"tn: {conf_matrix[0, 0]}, fp: {conf_matrix[0, 1]}, fn: {conf_matrix[1, 0]}, tp: {conf_matrix[1, 1]}")
             
@@ -1179,6 +1181,9 @@ def main():
         print(f"   Epsilon: {ADV_TRAINING_EPSILON}")
         print(f"   Max samples: {ADV_TRAINING_MAX_SAMPLES}")
         print(f"   HSJ config: max_iter={ADV_TRAINING_HSJ_MAX_ITER}, max_eval={ADV_TRAINING_HSJ_MAX_EVAL}")
+        print(f"   Cache intelligente: {'ABILITATA' if ADV_TRAINING_CACHE_ENABLED else 'DISABILITATA'}")
+        if ADV_TRAINING_CACHE_ENABLED:
+            print(f"   Frequenza rigenerazione: ogni {ADV_TRAINING_REGEN_FREQUENCY} round")
     
     try:
         # Carica i dati con preprocessing minimale per Random Forest
