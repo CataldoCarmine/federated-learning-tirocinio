@@ -53,7 +53,7 @@ DEFENSE_CONFIG = {
     'CONSTRAINT_EPSILON_MULTIPLIER': 1.5,  # Permette epsilon * 1.5 per vincoli
 
     # Vincoli adattivi
-    'USE_ADAPTIVE_CONSTRAINTS': False,  # True = epsilon diverso per feature importante vs non importante
+    'USE_ADAPTIVE_CONSTRAINTS': True,  # True = epsilon diverso per feature importante vs non importante
     
     # ========== STRATEGIA ADVERSARIAL TRAINING ==========
     

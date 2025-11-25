@@ -12,7 +12,7 @@ WORKFLOW:
 UTILIZZO:
 
     Eseguire dalla root del progetto:
-    
+
     # Test con difesa abilitata
     python attacks/test_adversarial_defense.py --client-id 1
 
@@ -53,7 +53,8 @@ from attacks.defense_config import (
 )
 from attacks.defense_utils import (
     get_smartgrid_physical_constraints_advanced,
-    apply_adaptive_constraints
+    apply_adaptive_constraints,
+    calculate_feature_importance_for_defense
 )
 
 
@@ -114,10 +115,12 @@ def load_client_data_for_test(client_id):
     return X_train, y_train, X_val, y_val
 
 
+# attacks/test_adversarial_defense.py
+
 def local_adversarial_training_test(model_instance, X_train, y_train, X_val, y_val, client_id):
     """
     Versione TEST di adversarial training locale.
-    Identica alla versione in clientRF.py ma standalone.
+    ✅ ALLINEATA COMPLETAMENTE a clientRF. py
     
     Args:
         model_instance: Random Forest già addestrato su dati puliti
@@ -194,12 +197,43 @@ def local_adversarial_training_test(model_instance, X_train, y_train, X_val, y_v
             print(f"[Test Client {client_id}] ⚠️ Generazione fallita")
             return model_instance, False
         
-        # STEP 7: Vincoli fisici
-        constraints = get_smartgrid_physical_constraints_advanced(X_train)
+        # Vincoli fisici con percentili ESPLICITI da DEFENSE_CONFIG
+        print(f"[Test Client {client_id}] Applicazione vincoli fisici SmartGrid...")
         
-        X_adv_constrained = apply_adaptive_constraints(
-            X_adv, X_attack_sub, constraints, DEFENSE_CONFIG['EPSILON']
+        # Calcola vincoli con percentili configurabili (COME clientRF)
+        constraints = get_smartgrid_physical_constraints_advanced(
+            X_train,
+            percentile_low=DEFENSE_CONFIG['CONSTRAINT_PERCENTILE_LOW'],   
+            percentile_high=DEFENSE_CONFIG['CONSTRAINT_PERCENTILE_HIGH']   
         )
+        
+        print(f"[Test Client {client_id}] Vincoli calcolati:")
+        print(f"  - Range globale: [{constraints['feature_min']. min():.3f}, {constraints['feature_max'].max():. 3f}]")
+        print(f"  - Percentili: {DEFENSE_CONFIG['CONSTRAINT_PERCENTILE_LOW']}-{DEFENSE_CONFIG['CONSTRAINT_PERCENTILE_HIGH']}")
+        
+        # ✅ CORREZIONE 2: Feature importance condizionale (COME clientRF)
+        if DEFENSE_CONFIG.get('USE_ADAPTIVE_CONSTRAINTS', False):
+            print(f"[Test Client {client_id}] Calcolo feature importance per vincoli adattivi...")
+            feature_importance = calculate_feature_importance_for_defense(
+                model_instance, X_train, method='gini'
+            )
+        else:
+            feature_importance = None
+        
+        # Applica vincoli (con o senza feature importance)
+        X_adv_constrained = apply_adaptive_constraints(
+            X_adv,
+            X_attack_sub,
+            constraints,
+            DEFENSE_CONFIG['EPSILON'],
+            feature_importance=feature_importance  # ✅ CONDIZIONALE
+        )
+        
+        print(f"[Test Client {client_id}] ✅ Vincoli fisici applicati")
+        if feature_importance is not None:
+            print(f"  - Vincoli adattivi: ABILITATI (feature importance)")
+        else:
+            print(f"  - Vincoli uniformi: epsilon={DEFENSE_CONFIG['EPSILON']}")
         
         y_adv = y_attack_sub
         
