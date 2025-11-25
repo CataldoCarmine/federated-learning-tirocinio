@@ -15,6 +15,7 @@ from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import f1_score, roc_auc_score, balanced_accuracy_score, classification_report, confusion_matrix, accuracy_score, precision_score, recall_score
 warnings.filterwarnings('ignore')
+from tqdm import tqdm  # Progress bar per adversarial training
 
 # CONFIGURAZIONE SEMI PER RIPRODUCIBILITÀ
 RANDOM_SEED = 42
@@ -585,8 +586,37 @@ def local_adversarial_training(model_instance, X_train, y_train, X_val, y_val, c
             # Genera adversarial
             import time
             start_time = time.time()
-            
-            X_adv = hsj_local.generate(x=X_attack_sub)
+
+            print(f"[Client {client_id}] 🔄 Generazione adversarial per {len(X_attack_sub)} campioni...")
+            print(f"[Client {client_id}] HSJ: max_iter={ADV_TRAINING_HSJ_MAX_ITER}, max_eval={ADV_TRAINING_HSJ_MAX_EVAL}")
+
+            # ✅ GENERAZIONE CON PROGRESS BAR CAMPIONE PER CAMPIONE
+            X_adv_list = []
+
+            with tqdm(total=len(X_attack_sub), 
+                    desc=f"[Client {client_id}] HSJ Generation", 
+                    unit="campioni", 
+                    ncols=100,
+                    colour='green') as pbar:
+                
+                for i in range(len(X_attack_sub)):
+                    try:
+                        # Genera adversarial per singolo campione
+                        x_adv_i = hsj_local.generate(x=X_attack_sub[i:i+1])
+                        X_adv_list.append(x_adv_i[0])
+                        
+                        # Aggiorna progress bar
+                        pbar.update(1)
+                        
+                    except Exception as e:
+                        print(f"\n[Client {client_id}] ⚠️ Errore campione {i+1}: {e}")
+                        # Usa campione originale in caso di errore
+                        X_adv_list.append(X_attack_sub[i])
+                        pbar.update(1)
+                        continue
+
+            # Converti lista in array numpy
+            X_adv = np.array(X_adv_list)
             
             elapsed = time.time() - start_time
             print(f"[Client {client_id}] ✅ Generazione in {elapsed:.1f}s ({len(X_adv)/elapsed:.2f} campioni/sec)")
