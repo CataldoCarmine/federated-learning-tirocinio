@@ -10,6 +10,9 @@ WORKFLOW:
 4. Confronta robustezza
 
 UTILIZZO:
+
+    Eseguire dalla root del progetto:
+    
     # Test con difesa abilitata
     python attacks/test_adversarial_defense.py --client-id 1
 

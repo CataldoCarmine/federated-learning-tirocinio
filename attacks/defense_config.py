@@ -26,7 +26,7 @@ DEFENSE_CONFIG = {
     # ========== PARAMETRI ADVERSARIAL TRAINING ==========
     
     # Budget perturbazione (epsilon)
-    'EPSILON': 0.01,  # Perturbazione massima consentita
+    'EPSILON': 0.05,  # Perturbazione massima consentita
     
     # Numero massimo campioni Attack da usare per adversarial training
     'MAX_ADVERSARIAL_SAMPLES': 500,  # Limita per velocità
@@ -51,6 +51,9 @@ DEFENSE_CONFIG = {
     
     # Epsilon aggiuntivo per vincoli (moltiplicatore)
     'CONSTRAINT_EPSILON_MULTIPLIER': 1.5,  # Permette epsilon * 1.5 per vincoli
+
+    # Vincoli adattivi
+    'USE_ADAPTIVE_CONSTRAINTS': False,  # True = epsilon diverso per feature importante vs non importante
     
     # ========== STRATEGIA ADVERSARIAL TRAINING ==========
     

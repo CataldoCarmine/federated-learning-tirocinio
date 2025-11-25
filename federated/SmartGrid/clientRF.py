@@ -54,18 +54,34 @@ RF_CRITERION = 'entropy'  # Criterio di splitting (dal paper: entropy migliore d
 ENSEMBLE_METHOD = 'weighted_voting'  # 'simple_voting' o 'weighted_voting'
 TREE_SELECTION_METHOD = 'accuracy_based'  # Come selezionare i migliori alberi per l'aggregazione
 
-# ============== 🆕 CONFIGURAZIONE DIFESA ADVERSARIAL TRAINING CON CACHE INTELLIGENTE ==============
-ENABLE_ADVERSARIAL_TRAINING = True  # Flag globale per abilitare/disabilitare difesa
-ADV_TRAINING_EPSILON = 0.01          # Budget perturbazione per esempi adversarial
-ADV_TRAINING_MAX_SAMPLES = 500       # Max campioni Attack da usare per adversarial training
-ADV_TRAINING_HSJ_MAX_ITER = 10       # Iterazioni HSJ (ridotte per velocità)
-ADV_TRAINING_HSJ_MAX_EVAL = 500      # Query HSJ per campione (ridotte per velocità)
+# ============== 🆕 IMPORT CONFIGURAZIONE DIFESA ADVERSARIAL TRAINING CON CACHE INTELLIGENTE DA ==============
+script_dir = os.path.dirname(os.path.abspath(__file__))  # federated/SmartGrid/
+project_root = os.path.join(script_dir, '..', '..')       # Root del progetto
+sys.path.insert(0, project_root)
 
-# 🆕 CONFIGURAZIONE CACHE INTELLIGENTE
+from attacks.defense_config import (
+    DEFENSE_CONFIG,
+    get_hsj_config_for_training
+)
+from attacks.defense_utils import (
+    get_smartgrid_physical_constraints_advanced,
+    apply_adaptive_constraints,
+    calculate_feature_importance_for_defense
+)
+
+# USA CONFIGURAZIONE DA defense_config.py
+ENABLE_ADVERSARIAL_TRAINING = DEFENSE_CONFIG['ENABLE_ADVERSARIAL_TRAINING']
+ADV_TRAINING_EPSILON = DEFENSE_CONFIG['EPSILON']
+ADV_TRAINING_MAX_SAMPLES = DEFENSE_CONFIG['MAX_ADVERSARIAL_SAMPLES']
+ADV_TRAINING_HSJ_MAX_ITER = DEFENSE_CONFIG['HSJ_MAX_ITER']
+ADV_TRAINING_HSJ_MAX_EVAL = DEFENSE_CONFIG['HSJ_MAX_EVAL']
+ADV_TRAINING_HSJ_INIT_EVAL = DEFENSE_CONFIG['HSJ_INIT_EVAL']
+
+# CONFIGURAZIONE CACHE INTELLIGENTE
 ADV_TRAINING_CACHE_ENABLED = True    # Abilita cache adversarial examples
 ADV_TRAINING_REGEN_FREQUENCY = 5     # Rigenera ogni N round (se modello NON cambia)
 
-# 🆕 Cache globale adversarial examples (condivisa tra round)
+# Cache globale adversarial examples (condivisa tra round)
 adversarial_cache = {
     'X_adv': None,                    # Esempi adversarial cached
     'y_adv': None,                    # Etichette adversarial cached
@@ -569,19 +585,25 @@ def local_adversarial_training(model_instance, X_train, y_train, X_val, y_val, c
             from art.attacks.evasion import HopSkipJump
             
             art_classifier = SklearnClassifier(model=model_instance)
+
+            # CONFIGURA HSJ DA defense_config. py (USA get_hsj_config_for_training)
+            hsj_config = get_hsj_config_for_training()
             
-            # Configura HSJ veloce
             hsj_local = HopSkipJump(
                 classifier=art_classifier,
                 targeted=False,
-                norm=2,
+                norm=hsj_config['norm'],
                 max_iter=ADV_TRAINING_HSJ_MAX_ITER,
                 max_eval=ADV_TRAINING_HSJ_MAX_EVAL,
-                init_eval=20,
-                verbose=False
+                init_eval=ADV_TRAINING_HSJ_INIT_EVAL,
+                verbose=hsj_config['verbose']
             )
             
-            print(f"[Client {client_id}] HSJ config: max_iter={ADV_TRAINING_HSJ_MAX_ITER}, max_eval={ADV_TRAINING_HSJ_MAX_EVAL}")
+            print(f"[Client {client_id}] ✅ HSJ configurato da defense_config.py:")
+            print(f"  - max_iter: {hsj_config['max_iter']}")
+            print(f"  - max_eval: {hsj_config['max_eval']}")
+            print(f"  - init_eval: {hsj_config['init_eval']}")
+            print(f"  - norm: L{hsj_config['norm']}")
             
             # Genera adversarial
             import time
@@ -626,17 +648,44 @@ def local_adversarial_training(model_instance, X_train, y_train, X_val, y_val, c
                 print(f"[Client {client_id}] ⚠️ Generazione fallita")
                 return model_instance, False
             
-            # Applica vincoli fisici
-            feature_min = np.percentile(X_train, 0.1, axis=0)
-            feature_max = np.percentile(X_train, 99.9, axis=0)
+            # APPLICA VINCOLI FISICI DA defense_utils. py
+            print(f"[Client {client_id}] Applicazione vincoli fisici SmartGrid...")
             
-            X_adv_clipped = np.clip(X_adv, feature_min, feature_max)
-            
-            # Limita perturbazione L-inf
-            perturbation = X_adv_clipped - X_attack_sub
-            perturbation_clipped = np.clip(perturbation, -ADV_TRAINING_EPSILON, ADV_TRAINING_EPSILON)
-            X_adv_constrained = X_attack_sub + perturbation_clipped
-            X_adv_constrained = np.clip(X_adv_constrained, feature_min, feature_max)
+            # Calcola vincoli fisici con percentili configurabili
+            constraints = get_smartgrid_physical_constraints_advanced(
+                X_train,
+                percentile_low=DEFENSE_CONFIG['CONSTRAINT_PERCENTILE_LOW'],
+                percentile_high=DEFENSE_CONFIG['CONSTRAINT_PERCENTILE_HIGH']
+            )
+
+            print(f"[Client {client_id}] Vincoli fisici SmartGrid:")
+            print(f"  - Range globale: [{constraints['feature_min']. min():.3f}, {constraints['feature_max'].max():.3f}]")
+            print(f"  - Percentili: {DEFENSE_CONFIG['CONSTRAINT_PERCENTILE_LOW']}-{DEFENSE_CONFIG['CONSTRAINT_PERCENTILE_HIGH']}")
+
+            # Opzionale: Calcola feature importance per vincoli adattivi
+            if DEFENSE_CONFIG. get('USE_ADAPTIVE_CONSTRAINTS', False):
+                print(f"[Client {client_id}] Calcolo feature importance per vincoli adattivi...")
+                feature_importance = calculate_feature_importance_for_defense(
+                    model_instance, X_train, method='gini'
+                )
+            else:
+                feature_importance = None
+
+            # Applica vincoli adattivi (con o senza feature importance)
+            X_adv_constrained = apply_adaptive_constraints(
+                X_adv,
+                X_attack_sub,
+                constraints,
+                DEFENSE_CONFIG['EPSILON'],
+                feature_importance=feature_importance
+            )
+
+            print(f"[Client {client_id}] ✅ Vincoli fisici applicati")
+            print(f"  - Epsilon: {DEFENSE_CONFIG['EPSILON']}")
+            if feature_importance is not None:
+                print(f"  - Vincoli adattivi: ABILITATI (feature importance)")
+            else:
+                print(f"  - Vincoli adattivi: DISABILITATI (epsilon uniforme)")
             
             y_adv = y_attack_sub
             
