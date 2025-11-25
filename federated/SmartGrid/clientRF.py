@@ -53,12 +53,25 @@ RF_CRITERION = 'entropy'  # Criterio di splitting (dal paper: entropy migliore d
 ENSEMBLE_METHOD = 'weighted_voting'  # 'simple_voting' o 'weighted_voting'
 TREE_SELECTION_METHOD = 'accuracy_based'  # Come selezionare i migliori alberi per l'aggregazione
 
-# ============== CONFIGURAZIONE DIFESA ADVERSARIAL TRAINING ==============
+# ============== 🆕 CONFIGURAZIONE DIFESA ADVERSARIAL TRAINING CON CACHE INTELLIGENTE ==============
 ENABLE_ADVERSARIAL_TRAINING = True  # Flag globale per abilitare/disabilitare difesa
 ADV_TRAINING_EPSILON = 0.01          # Budget perturbazione per esempi adversarial
 ADV_TRAINING_MAX_SAMPLES = 500       # Max campioni Attack da usare per adversarial training
 ADV_TRAINING_HSJ_MAX_ITER = 10       # Iterazioni HSJ (ridotte per velocità)
 ADV_TRAINING_HSJ_MAX_EVAL = 500      # Query HSJ per campione (ridotte per velocità)
+
+# 🆕 CONFIGURAZIONE CACHE INTELLIGENTE
+ADV_TRAINING_CACHE_ENABLED = True    # Abilita cache adversarial examples
+ADV_TRAINING_REGEN_FREQUENCY = 5     # Rigenera ogni N round (se modello NON cambia)
+
+# 🆕 Cache globale adversarial examples (condivisa tra round)
+adversarial_cache = {
+    'X_adv': None,                    # Esempi adversarial cached
+    'y_adv': None,                    # Etichette adversarial cached
+    'generated_at_round': -1,         # Round di generazione
+    'model_hash': None,               # Hash del modello (per rilevare cambiamenti)
+    'n_samples': 0                    # Numero campioni cached
+}
 
 def set_reproducibility_seeds():
     """
@@ -356,46 +369,188 @@ def create_random_forest_model():
     
     return model
 
-# ============== 🆕 FUNZIONE ADVERSARIAL TRAINING LOCALE ==============
+# ============== 🆕 FUNZIONI CACHE INTELLIGENTE ==============
 
-def local_adversarial_training(model_instance, X_train, y_train, X_val, y_val, client_id):
+def compute_model_hash(model):
     """
-    Esegue adversarial training LOCALE sul client.
+    Calcola hash del modello per rilevare cambiamenti dopo aggregazione.
     
-    WORKFLOW:
-    1. Seleziona campioni Attack dal training set
-    2. Genera esempi adversarial usando HopSkipJump VELOCE
-    3. Combina dati puliti + adversarial (data augmentation)
-    4. Riaddestra Random Forest su dataset esteso
-    5. Valuta performance sul validation set
+    SPIEGAZIONE:
+    In Federated Learning, il server aggrega i modelli dei client e
+    invia il modello globale aggiornato. Vogliamo rigenerare adversarial
+    SOLO se il modello è cambiato.
+    
+    STRATEGIA:
+    - Serializza primi 5 alberi del Random Forest (rappresentativi)
+    - Calcola hash MD5
+    - Se hash diverso da cache → modello cambiato → rigenera
     
     Args:
-        model_instance: Random Forest già addestrato su dati puliti
+        model: RandomForestClassifier
+        
+    Returns:
+        hash_value: Stringa hash MD5
+    """
+    import hashlib
+    import pickle
+    
+    try:
+        # Serializza primi 5 alberi (rappresentativi ma leggeri)
+        trees_sample = model.estimators_[:min(5, len(model.estimators_))]
+        model_bytes = pickle.dumps(trees_sample, protocol=pickle.HIGHEST_PROTOCOL)
+        
+        # Hash MD5
+        hash_value = hashlib.md5(model_bytes).hexdigest()
+        
+        return hash_value
+        
+    except Exception as e:
+        print(f"[Client {client_id}] ⚠️ Errore calcolo hash: {e}")
+        # Fallback: usa timestamp come hash
+        import time
+        return str(int(time.time()))
+
+
+def should_regenerate_adversarial(current_round, model_instance):
+    """
+    Decide se rigenerare esempi adversarial (LOGICA CACHE INTELLIGENTE).
+    
+    DECISIONE BASATA SU 3 FATTORI:
+    
+    1. PRIMO ROUND: Genera sempre
+       - Non ci sono adversarial cached
+       - Necessario bootstrap iniziale
+    
+    2. MODELLO CAMBIATO: Genera sempre
+       - Hash modello diverso da cache
+       - Significa che server ha aggregato
+       - Adversarial vecchi potrebbero non essere efficaci
+    
+    3. FREQUENZA SCHEDULATA: Rigenera ogni N round
+       - Fallback per garantire freshness
+       - Anche se modello NON cambia
+       - Configurabile (default: 5 round)
+    
+    MOTIVAZIONE CACHE INTELLIGENTE:
+    
+    Se modello NON cambia (es. client non selezionato per aggregazione):
+    → RIUSA cache (NO spreco computazionale)
+    
+    Se modello CAMBIA (aggregazione server):
+    → RIGENERA (adversarial allineati al nuovo modello)
+    
+    Args:
+        current_round: Round corrente
+        model_instance: Random Forest corrente
+        
+    Returns:
+        should_regen: True se deve rigenerare, False se usa cache
+    """
+    global adversarial_cache
+    
+    # ========== CASO 1: PRIMO ROUND ==========
+    if current_round == 1 or adversarial_cache['X_adv'] is None:
+        print(f"[Client {client_id}] Round {current_round}: PRIMO ROUND → Genera adversarial")
+        return True
+    
+    # ========== CASO 2: MODELLO CAMBIATO ==========
+    # Calcola hash modello corrente
+    current_hash = compute_model_hash(model_instance)
+    cached_hash = adversarial_cache.get('model_hash', None)
+    
+    if current_hash != cached_hash:
+        print(f"[Client {client_id}] Round {current_round}: MODELLO CAMBIATO → Rigenera adversarial")
+        print(f"  Hash precedente: {cached_hash[:8] if cached_hash else 'N/A'}...")
+        print(f"  Hash corrente:   {current_hash[:8]}...")
+        return True
+    
+    # ========== CASO 3: FREQUENZA SCHEDULATA ==========
+    rounds_since_last_gen = current_round - adversarial_cache.get('generated_at_round', 0)
+    
+    if rounds_since_last_gen >= ADV_TRAINING_REGEN_FREQUENCY:
+        print(f"[Client {client_id}] Round {current_round}: RIGENERAZIONE SCHEDULATA → Genera adversarial")
+        print(f"  Ultimo generato al round: {adversarial_cache['generated_at_round']}")
+        print(f"  Round passati: {rounds_since_last_gen} >= {ADV_TRAINING_REGEN_FREQUENCY}")
+        return True
+    
+    # ========== CASO 4: USA CACHE ==========
+    print(f"[Client {client_id}] Round {current_round}: USA CACHE adversarial")
+    print(f"  Generati al round: {adversarial_cache['generated_at_round']}")
+    print(f"  Round passati: {rounds_since_last_gen}/{ADV_TRAINING_REGEN_FREQUENCY}")
+    print(f"  Modello: INVARIATO (hash identico)")
+    
+    return False
+
+
+# ============== 🆕 ADVERSARIAL TRAINING CON CACHE INTELLIGENTE ==============
+
+def local_adversarial_training(model_instance, X_train, y_train, X_val, y_val, client_id, current_round):
+    """
+    Adversarial training locale CON CACHE INTELLIGENTE.
+    
+    MIGLIORAMENTI RISPETTO ALLA VERSIONE BASE:
+    1. ✅ Cache adversarial examples tra round
+    2. ✅ Rigenerazione intelligente basata su cambio modello
+    3. ✅ Fallback schedulato ogni N round
+    4. ✅ Logging dettagliato decisioni cache
+    5. ✅ Gestione graceful errori
+    
+    WORKFLOW CON CACHE:
+    
+    Round 1:
+      - Verifica cache: VUOTA
+      - Genera adversarial (HSJ)
+      - Salva in cache + hash modello
+      - Riaddestra su puliti + adversarial
+    
+    Round 2:
+      - Verifica cache: PRESENTE
+      - Calcola hash modello: CAMBIATO (aggregazione)
+      - Rigenera adversarial (modello diverso)
+      - Aggiorna cache
+      - Riaddestra
+    
+    Round 3-6:
+      - Verifica cache: PRESENTE
+      - Hash modello: INVARIATO
+      - USA CACHE (risparmio ~40s)
+      - Riaddestra solo su dati puliti + cache
+    
+    Round 7:
+      - Frequenza schedulata (5 round)
+      - Rigenera adversarial (freshness)
+      - Aggiorna cache
+    
+    Args:
+        model_instance: Random Forest addestrato su dati puliti
         X_train: Training set pulito
         y_train: Etichette training
         X_val: Validation set
         y_val: Etichette validation
         client_id: ID del client
+        current_round: Round corrente (NUOVO)
         
     Returns:
-        model_robust: Random Forest addestrato su dati puliti + adversarial
-        success: True se completato con successo, False altrimenti
+        model_robust: Random Forest addestrato su puliti + adversarial
+        success: True se completato con successo
     """
+    global adversarial_cache
+    
     print(f"\n[Client {client_id}] {'='*60}")
-    print(f"[Client {client_id}] 🛡️ ADVERSARIAL TRAINING LOCALE")
+    print(f"[Client {client_id}] 🛡️ ADVERSARIAL TRAINING - ROUND {current_round}")
     print(f"[Client {client_id}] {'='*60}")
     
     try:
         # STEP 1: Seleziona campioni Attack
-        attack_mask = (y_train == 1)  # Classe Attack
+        attack_mask = (y_train == 1)
         X_attack = X_train[attack_mask]
         y_attack = y_train[attack_mask]
         
         if len(X_attack) == 0:
-            print(f"[Client {client_id}] ⚠️ Nessun campione Attack nel training set, skip adversarial training")
+            print(f"[Client {client_id}] ⚠️ Nessun campione Attack")
             return model_instance, False
         
-        print(f"[Client {client_id}] Campioni Attack disponibili: {len(X_attack)}")
+        print(f"[Client {client_id}] Campioni Attack: {len(X_attack)}")
         
         # STEP 2: Sottocampionamento ADATTIVO
         max_adv_samples = min(ADV_TRAINING_MAX_SAMPLES, len(X_attack) // 2)
@@ -406,85 +561,103 @@ def local_adversarial_training(model_instance, X_train, y_train, X_val, y_val, c
             indices = random.sample(range(len(X_attack)), max_adv_samples)
             X_attack_sub = X_attack[indices]
             y_attack_sub = y_attack[indices]
-            print(f"[Client {client_id}] Sottocampionamento: {max_adv_samples} su {len(X_attack)}")
         else:
             X_attack_sub = X_attack
             y_attack_sub = y_attack
-            print(f"[Client {client_id}] Uso tutti i {len(X_attack)} campioni Attack")
         
-        # STEP 3: Wrap modello per ART
-        from art.estimators.classification import SklearnClassifier
-        from art.attacks.evasion import HopSkipJump
+        print(f"[Client {client_id}] Sottocampionamento: {len(X_attack_sub)}")
         
-        art_classifier = SklearnClassifier(model=model_instance)
-        print(f"[Client {client_id}] ✅ Modello wrapped per ART")
+        # ========== 🆕 STEP 3: DECISIONE CACHE INTELLIGENTE ==========
+        should_regen = should_regenerate_adversarial(current_round, model_instance)
         
-        # STEP 4: Configura HopSkipJump VELOCE
-        print(f"[Client {client_id}] Configurazione HopSkipJump VELOCE per federated learning...")
+        if should_regen:
+            # ========== RIGENERA ADVERSARIAL ==========
+            print(f"[Client {client_id}] 🔄 GENERAZIONE NUOVI ADVERSARIAL")
+            
+            # Wrap modello per ART
+            from art.estimators.classification import SklearnClassifier
+            from art.attacks.evasion import HopSkipJump
+            
+            art_classifier = SklearnClassifier(model=model_instance)
+            
+            # Configura HSJ veloce
+            hsj_local = HopSkipJump(
+                classifier=art_classifier,
+                targeted=False,
+                norm=2,
+                max_iter=ADV_TRAINING_HSJ_MAX_ITER,
+                max_eval=ADV_TRAINING_HSJ_MAX_EVAL,
+                init_eval=20,
+                verbose=False
+            )
+            
+            print(f"[Client {client_id}] HSJ config: max_iter={ADV_TRAINING_HSJ_MAX_ITER}, max_eval={ADV_TRAINING_HSJ_MAX_EVAL}")
+            
+            # Genera adversarial
+            import time
+            start_time = time.time()
+            
+            X_adv = hsj_local.generate(x=X_attack_sub)
+            
+            elapsed = time.time() - start_time
+            print(f"[Client {client_id}] ✅ Generazione in {elapsed:.1f}s ({len(X_adv)/elapsed:.2f} campioni/sec)")
+            
+            # Verifica output
+            if X_adv is None or len(X_adv) == 0:
+                print(f"[Client {client_id}] ⚠️ Generazione fallita")
+                return model_instance, False
+            
+            # Applica vincoli fisici
+            feature_min = np.percentile(X_train, 0.1, axis=0)
+            feature_max = np.percentile(X_train, 99.9, axis=0)
+            
+            X_adv_clipped = np.clip(X_adv, feature_min, feature_max)
+            
+            # Limita perturbazione L-inf
+            perturbation = X_adv_clipped - X_attack_sub
+            perturbation_clipped = np.clip(perturbation, -ADV_TRAINING_EPSILON, ADV_TRAINING_EPSILON)
+            X_adv_constrained = X_attack_sub + perturbation_clipped
+            X_adv_constrained = np.clip(X_adv_constrained, feature_min, feature_max)
+            
+            y_adv = y_attack_sub
+            
+            # ========== 🆕 AGGIORNA CACHE ==========
+            model_hash = compute_model_hash(model_instance)
+            adversarial_cache = {
+                'X_adv': X_adv_constrained.copy(),
+                'y_adv': y_adv.copy(),
+                'generated_at_round': current_round,
+                'model_hash': model_hash,
+                'n_samples': len(X_adv_constrained)
+            }
+            
+            print(f"[Client {client_id}] 💾 Cache aggiornata:")
+            print(f"  Round: {current_round}")
+            print(f"  Campioni: {len(X_adv_constrained)}")
+            print(f"  Hash modello: {model_hash[:8]}...")
+            
+        else:
+            # ========== USA CACHE ==========
+            print(f"[Client {client_id}] 📦 USO CACHE ADVERSARIAL")
+            
+            X_adv_constrained = adversarial_cache['X_adv']
+            y_adv = adversarial_cache['y_adv']
+            
+            print(f"[Client {client_id}] Cache info:")
+            print(f"  Generati al round: {adversarial_cache['generated_at_round']}")
+            print(f"  Campioni cached: {adversarial_cache['n_samples']}")
+            print(f"  Hash modello: {adversarial_cache['model_hash'][:8] if adversarial_cache['model_hash'] else 'N/A'}...")
+            
+            # Verifica compatibilità dimensionale
+            if len(X_adv_constrained) != len(X_attack_sub):
+                print(f"[Client {client_id}] ⚠️ Cache size mismatch: {len(X_adv_constrained)} vs {len(X_attack_sub)}")
+                print(f"[Client {client_id}] Fallback: rigenero...")
+                
+                # Invalida cache e rigenera
+                adversarial_cache['X_adv'] = None
+                return local_adversarial_training(model_instance, X_train, y_train, X_val, y_val, client_id, current_round)
         
-        hsj_local = HopSkipJump(
-            classifier=art_classifier,
-            targeted=False,
-            norm=2,  # L2
-            max_iter=ADV_TRAINING_HSJ_MAX_ITER,    # Iterazioni ridotte
-            max_eval=ADV_TRAINING_HSJ_MAX_EVAL,    # Query ridotte
-            init_eval=20,
-            verbose=False  # Silenzioso per non intasare log
-        )
-        
-        print(f"[Client {client_id}]   Max iter: {ADV_TRAINING_HSJ_MAX_ITER}")
-        print(f"[Client {client_id}]   Max eval: {ADV_TRAINING_HSJ_MAX_EVAL}")
-        print(f"[Client {client_id}]   Epsilon target: {ADV_TRAINING_EPSILON}")
-        
-        # STEP 5: Genera esempi adversarial
-        import time
-        start_time = time.time()
-        
-        print(f"[Client {client_id}] 🔄 Generazione {len(X_attack_sub)} esempi adversarial...")
-        
-        X_adv = hsj_local.generate(x=X_attack_sub)
-        
-        elapsed = time.time() - start_time
-        print(f"[Client {client_id}] ✅ Generazione completata in {elapsed:.1f}s ({len(X_adv)/elapsed:.2f} campioni/sec)")
-        
-        # STEP 6: Verifica output valido
-        if X_adv is None or len(X_adv) == 0:
-            print(f"[Client {client_id}] ⚠️ Generazione fallita")
-            return model_instance, False
-        
-        if X_adv.shape != X_attack_sub.shape:
-            print(f"[Client {client_id}] ⚠️ Shape mismatch: {X_adv.shape} vs {X_attack_sub.shape}")
-            return model_instance, False
-        
-        # STEP 7: Applica vincoli fisici
-        print(f"[Client {client_id}] Applicazione vincoli fisici SmartGrid...")
-        
-        # Calcola percentili per vincoli
-        feature_min = np.percentile(X_train, 0.1, axis=0)
-        feature_max = np.percentile(X_train, 99.9, axis=0)
-        
-        constraints = {
-            'feature_min': feature_min,
-            'feature_max': feature_max
-        }
-        
-        # Applica vincoli
-        X_adv_clipped = np.clip(X_adv, feature_min, feature_max)
-        
-        # Limita perturbazione L-inf
-        perturbation = X_adv_clipped - X_attack_sub
-        perturbation_clipped = np.clip(perturbation, -ADV_TRAINING_EPSILON, ADV_TRAINING_EPSILON)
-        X_adv_constrained = X_attack_sub + perturbation_clipped
-        
-        # Ri-applica vincoli fisici
-        X_adv_constrained = np.clip(X_adv_constrained, feature_min, feature_max)
-        
-        # Etichette rimangono "Attack"
-        y_adv = y_attack_sub
-        
-        # STEP 8: Data Augmentation
-        print(f"[Client {client_id}] Data augmentation: combinazione dati puliti + adversarial...")
-        
+        # STEP 4: Data Augmentation
         X_aug = np.concatenate([X_train, X_adv_constrained], axis=0)
         y_aug = np.concatenate([y_train, y_adv], axis=0)
         
@@ -493,11 +666,9 @@ def local_adversarial_training(model_instance, X_train, y_train, X_val, y_val, c
         X_aug = X_aug[indices_shuffle]
         y_aug = y_aug[indices_shuffle]
         
-        print(f"[Client {client_id}] Dataset esteso: {len(X_train)} → {len(X_aug)} (+{len(X_adv_constrained)} adversarial)")
+        print(f"[Client {client_id}] Dataset: {len(X_train)} → {len(X_aug)} (+{len(X_adv_constrained)} adversarial)")
         
-        # STEP 9: Riaddestra Random Forest
-        print(f"[Client {client_id}] Riaddestramento Random Forest su dataset esteso...")
-        
+        # STEP 5: Riaddestra Random Forest
         model_robust = RandomForestClassifier(
             n_estimators=RF_N_ESTIMATORS,
             criterion=RF_CRITERION,
@@ -509,17 +680,15 @@ def local_adversarial_training(model_instance, X_train, y_train, X_val, y_val, c
         
         model_robust.fit(X_aug, y_aug)
         
-        print(f"[Client {client_id}] ✅ Riaddestramento completato")
-        
-        # STEP 10: Valuta performance
+        # STEP 6: Valuta
         if X_val is not None and len(X_val) > 0:
             val_acc_clean = model_instance.score(X_val, y_val)
             val_acc_robust = model_robust.score(X_val, y_val)
             
             print(f"[Client {client_id}] 📊 Validation Accuracy:")
-            print(f"[Client {client_id}]   Modello pulito:   {val_acc_clean:.4f}")
-            print(f"[Client {client_id}]   Modello robusto:  {val_acc_robust:.4f}")
-            print(f"[Client {client_id}]   Δ Accuracy:       {val_acc_robust - val_acc_clean:+.4f}")
+            print(f"  Pulito:  {val_acc_clean:.4f}")
+            print(f"  Robusto: {val_acc_robust:.4f}")
+            print(f"  Δ:       {val_acc_robust - val_acc_clean:+.4f}")
         
         print(f"[Client {client_id}] {'='*60}")
         print(f"[Client {client_id}] ✅ ADVERSARIAL TRAINING COMPLETATO")
@@ -528,12 +697,12 @@ def local_adversarial_training(model_instance, X_train, y_train, X_val, y_val, c
         return model_robust, True
         
     except Exception as e:
-        print(f"[Client {client_id}] ❌ ERRORE adversarial training: {e}")
+        print(f"[Client {client_id}] ❌ ERRORE: {e}")
         import traceback
         traceback.print_exc()
         return model_instance, False
 
-# ============== FINE FUNZIONE ADVERSARIAL TRAINING ==============
+# ============== FINE ADVERSARIAL TRAINING CON CACHE ==============
 
 def extract_trees_from_forest(model, X_val, y_val):
     """
@@ -760,20 +929,23 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
 
     def fit(self, parameters, config):
         """
-        Addestra il modello Random Forest locale CON ADVERSARIAL TRAINING (se abilitato).
+        Addestra il modello Random Forest locale CON ADVERSARIAL TRAINING (cache intelligente).
         """
         global model, X_train, y_train, X_val, y_val, dataset_info
-    
-        print(f"[Client {client_id}] Round di addestramento Random Forest...")
-    
+        
+        # 🆕 Estrai round corrente da config (Flower passa automaticamente)
+        current_round = config.get("server_round", 1)
+        
+        print(f"[Client {client_id}] === ROUND {current_round} - TRAINING ===")
+        
         # Imposta parametri se ricevuti dal server
         if parameters:
             self.set_parameters(parameters)
-    
+        
         if len(X_train) == 0:
             print(f"[Client {client_id}] Nessun dato di training!")
             return [], 0, {}
-    
+        
         try:
             # Verifica che i dati siano puliti
             if np.any(np.isinf(X_train)) or np.any(np.isnan(X_train)):
@@ -781,77 +953,67 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
                 X_train_clean = np.nan_to_num(X_train, nan=0.0, posinf=1e10, neginf=-1e10)
             else:
                 X_train_clean = X_train
-        
+            
             # ============== STEP 1: TRAINING SU DATI PULITI ==============
             print(f"[Client {client_id}] Addestramento Random Forest su {len(X_train_clean)} campioni...")
             model.fit(X_train_clean, y_train)
-        
+            
             # Verifica che il modello sia stato addestrato
             if not hasattr(model, 'estimators_') or len(model.estimators_) == 0:
                 raise RuntimeError("Random Forest non addestrato correttamente - nessun albero trovato")
-        
+            
             print(f"[Client {client_id}] ✅ Random Forest addestrato con {len(model.estimators_)} alberi")
-
-            # DOPO l'addestramento, aggiungi:
-            print(f"[Client {client_id}] 🔍 DEBUG POST-FIT:")
-            print(f"  - model type: {type(model)}")
-            print(f"  - has estimators_: {hasattr(model, 'estimators_')}")
-            if hasattr(model, 'estimators_'):
-                print(f"  - n_estimators: {len(model.estimators_)}")
-                print(f"  - first tree type: {type(model.estimators_[0]) if len(model.estimators_) > 0 else 'N/A'}")
-        
-            # ============== STEP 2: ADVERSARIAL TRAINING (SE ABILITATO) ==============
+            
+            # ============== STEP 2: ADVERSARIAL TRAINING CON CACHE ==============
             if ENABLE_ADVERSARIAL_TRAINING:
                 print(f"[Client {client_id}] 🛡️ Adversarial Training ABILITATO")
                 
+                # 🆕 Passa round a local_adversarial_training
                 model_robust, success = local_adversarial_training(
-                    model,  # Modello addestrato su dati puliti
+                    model,
                     X_train_clean,
                     y_train,
                     X_val,
                     y_val,
-                    client_id
+                    client_id,
+                    current_round  # 🆕 Passa round corrente
                 )
                 
                 if success:
-                    # Usa modello robusto
                     model = model_robust
                     print(f"[Client {client_id}] ✅ Modello ROBUSTO attivo")
                 else:
                     print(f"[Client {client_id}] ⚠️ Adversarial training fallito, uso modello pulito")
             else:
                 print(f"[Client {client_id}] Adversarial Training DISABILITATO")
-        
+            
             # ============== STEP 3: CALCOLA METRICHE ==============
-            # Calcola metriche di training
             train_predictions = model.predict(X_train_clean)
-            train_prob = model.predict_proba(X_train_clean)[:, 1]  # Probabilità classe positiva
-        
+            train_prob = model.predict_proba(X_train_clean)[:, 1]
+            
             train_accuracy = accuracy_score(y_train, train_predictions)
             train_precision = precision_score(y_train, train_predictions, zero_division=0)
             train_recall = recall_score(y_train, train_predictions, zero_division=0)
             train_f1 = f1_score(y_train, train_predictions, zero_division=0)
             train_balanced_acc = balanced_accuracy_score(y_train, train_predictions)
-        
-            # AUC se abbiamo probabilità
+            
             try:
                 train_auc = roc_auc_score(y_train, train_prob)
             except:
                 train_auc = 0.0
-        
-            # Out-of-bag score se disponibile
+            
             oob_score = model.oob_score_ if hasattr(model, 'oob_score_') else 0.0
-        
+            
             print(f"[Client {client_id}] Training completato!")
             print(f"[Client {client_id}] Accuracy: {train_accuracy:.4f}, F1: {train_f1:.4f}")
             print(f"[Client {client_id}] Balanced Acc: {train_balanced_acc:.4f}, OOB Score: {oob_score:.4f}")
-        
+            
         except Exception as e:
             print(f"[Client {client_id}] Errore durante addestramento: {e}")
             import traceback
             traceback.print_exc()
             return [], 0, {'error': f'training_failed: {str(e)}'}
-    
+        
         # Metriche da inviare al server
         metrics = {
             # Metriche base
@@ -862,22 +1024,23 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             'train_balanced_accuracy': float(train_balanced_acc),
             'train_auc': float(train_auc),
             'oob_score': float(oob_score),
-        
+            
             # Info modello
             'n_estimators': int(len(model.estimators_)),
             'n_features': int(model.n_features_in_),
-        
+            
             # Dataset info
             'client_id': int(dataset_info['client_id']),
             'train_samples': int(dataset_info['train_samples']),
             
-            # Adversarial training info
-            'adversarial_training_enabled': bool(ENABLE_ADVERSARIAL_TRAINING)
+            # 🆕 Adversarial training info con cache
+            'adversarial_training_enabled': bool(ENABLE_ADVERSARIAL_TRAINING),
+            'adversarial_cache_used': bool(not should_regenerate_adversarial(current_round, model) if ENABLE_ADVERSARIAL_TRAINING else False),
+            'adversarial_cache_round': int(adversarial_cache.get('generated_at_round', -1))
         }
-    
+        
         # Restituisce gli alberi del modello addestrato
         try:
-            # Calcola accuracy reali per ogni albero usando validation set
             trees_perf_real = extract_trees_from_forest(model, X_val, y_val)
             serialized_trees = serialize_trees_for_aggregation(trees_perf_real)
             
@@ -985,6 +1148,7 @@ class SmartGridRandomForestClient(fl.client.NumPyClient):
             traceback.print_exc()
             return 1.0, len(X_val), {"accuracy": 0.0, "error": f"evaluation_failed: {str(e)}"}
 
+
 def main():
     """
     Funzione principale per avviare il client SmartGrid Random Forest.
@@ -1004,7 +1168,7 @@ def main():
     try:
         client_id = int(sys.argv[1])
         if client_id < 1 or client_id > 15:
-            raise ValueError("⚠️ Client ID deve essere tra 1 e 13")
+            raise ValueError("⚠️ Client ID deve essere tra 1 e 15")
     except ValueError as e:
         print(f"❌ Errore: Client ID non valido. {e}")
         sys.exit(1)
@@ -1043,6 +1207,7 @@ def main():
         import traceback
         traceback.print_exc()
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
