@@ -43,6 +43,7 @@ from art.estimators.classification import SklearnClassifier
 # Import sklearn
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
+from tqdm import tqdm  # Progress bar
 
 # Import moduli difesa
 from attacks.defense_config import (
@@ -183,14 +184,40 @@ def local_adversarial_training_test(model_instance, X_train, y_train, X_val, y_v
         
         print(f"[Test Client {client_id}] HSJ: max_iter={hsj_config['max_iter']}, max_eval={hsj_config['max_eval']}")
         
-        # STEP 5: Genera adversarial
+        # STEP 5: Genera adversarial con progress bar
         start_time = time.time()
-        print(f"[Test Client {client_id}] 🔄 Generazione adversarial...")
+        print(f"[Test Client {client_id}] 🔄 Generazione adversarial per {len(X_attack_sub)} campioni...")
         
-        X_adv = hsj_local.generate(x=X_attack_sub)
+        # ✅ GENERAZIONE CON PROGRESS BAR CAMPIONE PER CAMPIONE
+        X_adv_list = []
+        
+        with tqdm(total=len(X_attack_sub), 
+                  desc=f"[Test Client {client_id}] HSJ Generation", 
+                  unit="campioni", 
+                  ncols=100,
+                  colour='blue') as pbar:
+            
+            for i in range(len(X_attack_sub)):
+                try:
+                    # Genera adversarial per singolo campione
+                    x_adv_i = hsj_local.generate(x=X_attack_sub[i:i+1])
+                    X_adv_list.append(x_adv_i[0])
+                    
+                    # Aggiorna progress bar
+                    pbar.update(1)
+                    
+                except Exception as e:
+                    print(f"\n[Test Client {client_id}] ⚠️ Errore campione {i+1}: {e}")
+                    # Usa campione originale in caso di errore
+                    X_adv_list.append(X_attack_sub[i])
+                    pbar.update(1)
+                    continue
+        
+        # Converti lista in array numpy
+        X_adv = np.array(X_adv_list)
         
         elapsed = time.time() - start_time
-        print(f"[Test Client {client_id}] ✅ Generati in {elapsed:.1f}s")
+        print(f"[Test Client {client_id}] ✅ Generazione completata in {elapsed:.1f}s ({len(X_adv)/elapsed:.2f} campioni/sec)")
         
         # STEP 6: Verifica output
         if X_adv is None or len(X_adv) == 0:
