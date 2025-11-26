@@ -55,6 +55,7 @@ ENSEMBLE_METHOD = 'weighted_voting'  # 'simple_voting' o 'weighted_voting'
 TREE_SELECTION_METHOD = 'accuracy_based'  # Come selezionare i migliori alberi per l'aggregazione
 
 # ============== 🆕 IMPORT CONFIGURAZIONE DIFESA ADVERSARIAL TRAINING CON CACHE INTELLIGENTE DA ==============
+# Per disattivare difesa adversarial training, modificare in attacks/defense_config.py
 script_dir = os.path.dirname(os.path.abspath(__file__))  # federated/SmartGrid/
 project_root = os.path.join(script_dir, '..', '..')       # Root del progetto
 sys.path.insert(0, project_root)

@@ -247,7 +247,7 @@ def local_adversarial_training_test(model_instance, X_train, y_train, X_val, y_v
         )
         
         print(f"[Test Client {client_id}] Vincoli calcolati:")
-        print(f"  - Range globale: [{constraints['feature_min']. min():.3f}, {constraints['feature_max'].max():.3f}]")
+        print(f"  - Range globale: [{constraints['feature_min'].min():.3f}, {constraints['feature_max'].max():.3f}]")
         print(f"  - Percentili: {DEFENSE_CONFIG['CONSTRAINT_PERCENTILE_LOW']}-{DEFENSE_CONFIG['CONSTRAINT_PERCENTILE_HIGH']}")
         
         # Feature importance condizionale (COME clientRF)
@@ -404,7 +404,7 @@ def test_model_robustness(model, X_val, y_val, client_id, model_name="Model"):
                 X_val_adv_list.append(X_val_attacks[i])  # Usa originale
                 pbar.update(1)
     
-    X_val_adv = np. array(X_val_adv_list)
+    X_val_adv = np.array(X_val_adv_list)
     elapsed = time.time() - start_time
     
     print(f"\n[Test {model_name}] ✅ Generati {len(X_val_adv)} adversarial in {elapsed:.1f}s")
@@ -455,9 +455,9 @@ def test_model_robustness(model, X_val, y_val, client_id, model_name="Model"):
     print(f"[Test {model_name}] " + "="*60)
     print(f"[Test {model_name}] ASR (Attack Success Rate): {asr*100:.2f}%")
     print(f"[Test {model_name}]   Evasioni riuscite: {successful_evasions}/{len(X_val_attacks)}")
-    print(f"[Test {model_name}] Accuracy adversarial: {acc_adv:. 4f}")
+    print(f"[Test {model_name}] Accuracy adversarial: {acc_adv:.4f}")
     print(f"[Test {model_name}] Robustness score: {robustness_score:.4f}")
-    print(f"[Test {model_name}] Perturbazione L2 media: {l2_mean:. 6f}")
+    print(f"[Test {model_name}] Perturbazione L2 media: {l2_mean:.6f}")
     print(f"[Test {model_name}] " + "="*60 + "\n")
     
     return {
@@ -676,7 +676,7 @@ CONFIGURAZIONE:
         # Accuracy puliti
         acc_baseline = results_baseline['accuracy_clean']
         acc_robust = results_robust['accuracy_clean']
-        print(f"{'Accuracy (dati puliti)':<30} {acc_baseline:<15. 4f} {acc_robust:<15.4f} {acc_robust-acc_baseline:+.4f}")
+        print(f"{'Accuracy (dati puliti)':<30} {acc_baseline:<15.4f} {acc_robust:<15.4f} {acc_robust-acc_baseline:+.4f}")
         
         if not args.no_robustness_test:
             # Accuracy adversarial
@@ -741,7 +741,7 @@ CONFIGURAZIONE:
         print(f"Accuracy (dati puliti): {results['accuracy_clean']:.4f}")
         
         if not args.no_robustness_test:
-            print(f"Accuracy (dati adversarial): {results. get('accuracy_adversarial', 0.0):.4f}")
+            print(f"Accuracy (dati adversarial): {results.get('accuracy_adversarial', 0.0):.4f}")
             print(f"ASR: {results.get('asr', 0.0)*100:.2f}%")
             print(f"Robustness score: {results.get('robustness_score', 0.0):.4f}")
         
