@@ -31,7 +31,8 @@ DEFENSE_CONFIG = {
     # Numero massimo campioni Attack da usare per adversarial training
     'MAX_ADVERSARIAL_SAMPLES': 500,  # Limita per velocità
     
-    # Rapporto dati adversarial vs puliti
+    # PER MIGLIORAMENTI FUTURI: Rapporto dati adversarial vs puliti: controlla la proporzione di esempi adversarial 
+    # (es 90% adversarial: massima robustezza ma possibile overfitting su adversarial, 10% puliti: preserva accuracy pulita, robustezza minimale)
     'ADVERSARIAL_RATIO': 0.5,  # 50% adversarial, 50% puliti
     
     # ========== CONFIGURAZIONE HOPSKIPJUMP VELOCE ==========
@@ -49,7 +50,8 @@ DEFENSE_CONFIG = {
     'CONSTRAINT_PERCENTILE_LOW': 0.1,   # Percentile inferiore
     'CONSTRAINT_PERCENTILE_HIGH': 99.9,  # Percentile superiore
     
-    # Epsilon aggiuntivo per vincoli (moltiplicatore)
+    # PER MIGLIORAMENTI FUTURI: Permette di aumentare leggermente l'epsilon per i vincoli fisici rispetto all'epsilon base, Questo evita che i vincoli fisici "stringano troppo" le perturbazioni HSJ
+    # (Epsilon base (0.01): Controllo perturbazione HSJ, Epsilon vincoli (0.01 * 1.5 = 0.015): Permette piccolo margine per vincoli fisici)
     'CONSTRAINT_EPSILON_MULTIPLIER': 1.5,  # Permette epsilon * 1.5 per vincoli
 
     # Vincoli adattivi
@@ -57,43 +59,49 @@ DEFENSE_CONFIG = {
     
     # ========== STRATEGIA ADVERSARIAL TRAINING ==========
     
-    # Metodo aggregazione perturbazioni
+    # PER MIGLIORAMENTI FUTURI: Metodo di aggregazione delle perturbazioni, Se si generano multiple perturbazioni per lo stesso campione (es. con HSJ randomizzato), decidere come aggregarle
+    # (mean: media semplice e veloce, median: mediana per robustezza contro outlier e più stabile, weighted_mean: peso basato su difficoltà della perturbazione)
     'AGGREGATION_METHOD': 'median',  # 'mean', 'median', 'weighted_mean'
     
-    # Riaddestramento modello
-    'RETRAIN_STRATEGY': 'full',  # 'full': riaddestra da zero, 'incremental': aggiungi alberi
+    # PER MIGLIORAMENTI FUTURI: Riaddestramento modello
+    # (full: modello completamente adatto ai dati augmentati e robustezza massima, ma lento e perde conoscenza sui dati puliti; incremental: veloce e preserva conoscenza originale, ma meno robusto)
+    'RETRAIN_STRATEGY': 'full',  # 'full': riaddestra da zero su dataset puliti + adversarial, 'incremental': Mantieni alberi originali, aggiungi nuovi alberi addestrati solo su adversarial
     
-    # Numero alberi extra per adversarial training (se incremental)
+    # PER MIGLIORAMENTI FUTURI: fa parte del miglioramento sopra, Numero alberi extra per adversarial training (se incremental)
     'ADVERSARIAL_EXTRA_TREES': 20,
     
     # ========== OTTIMIZZAZIONI PERFORMANCE ==========
     
-    # Usa multiprocessing per generazione adversarial
+    # PER MIGLIORAMENTI FUTURI: Parallelizza la generazione adversarial su più core CPU per accelerare il processo
+    # (Generazione sequenziale (1 campione alla volta) → LENTO, Genera 50 campioni in parallelo su 4 worker → 4x PIÙ VELOCE)
     'USE_MULTIPROCESSING': False,  # Disabilitato per compatibilità Flower
     
-    # Numero worker per multiprocessing
+    # PER MIGLIORAMENTI FUTURI: fa parte del miglioramento sopra
     'N_WORKERS': 4,
     
-    # Batch size per generazione adversarial
+    # PER MIGLIORAMENTI FUTURI: fa parte del miglioramento sopra
     'BATCH_SIZE': 50,  # Genera 50 campioni alla volta
     
     # ========== LOGGING E DEBUG ==========
     
-    # Livello verbosità
+    # PER MIGLIORAMENTI FUTURI: Controlla la quantità di output stampato durante adversarial training
+    # (Livello 0 (silenzioso): Solo errori → Produzione, Livello 1 (normale): Metriche principali → Default, Livello 2 (debug): Tutto (HSJ verbose, statistiche batch, timing) → Sviluppo)
     'VERBOSE_LEVEL': 1,  # 0: silenzioso, 1: normale, 2: debug
     
-    # Salva esempi adversarial per analisi
+    # PER MIGLIORAMENTI FUTURI: Salva esempi adversarial per analisi
+    # (Analisi post-hoc: Studiare pattern nelle perturbazioni, Debugging: Verificare se gli adversarial sono realistici, Riuso: Evitare di rigenerare gli stessi adversarial in run successive)
     'SAVE_ADVERSARIAL_EXAMPLES': False,  # Può occupare molto spazio
     
-    # Directory per salvare esempi
+    # PER MIGLIORAMENTI FUTURI: fa parte del miglioramento sopra, Directory per salvare esempi
     'ADVERSARIAL_EXAMPLES_DIR': 'attacks/adversarial_examples',
     
     # ========== VALIDAZIONE E TESTING ==========
     
-    # Valida efficacia difesa su validation set
+    # PER MIGLIORAMENTI FUTURI: Testa automaticamente l'efficacia della difesa alla fine dell'adversarial training generando adversarial sul modello robusto e calcolando l'ASR.
+    # (feedback immediato sull'efficacia della difesa, identifica configurazioni non efficaci, invia ASR al server per confronto cross-client)
     'VALIDATE_DEFENSE': True,
     
-    # Usa subset per validazione rapida
+    # PER MIGLIORAMENTI FUTURI: fa parte del miglioramento sopra,Usa subset per validazione rapida
     'VALIDATION_SUBSET_SIZE': 200,
 }
 
