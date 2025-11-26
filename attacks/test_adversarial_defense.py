@@ -1,12 +1,12 @@
 """
 attacks/test_adversarial_defense.py
 
-Script di test per validare l'efficacia della difesa adversarial training. 
+Script di test per validare l'efficacia della difesa adversarial training.  
 
 WORKFLOW COMPLETO (AGGIORNATO):
-1.  Addestra modello SENZA difesa (baseline)
+1. Addestra modello SENZA difesa (baseline)
 2. Addestra modello CON difesa adversarial
-3. ✅ NUOVO: Testa entrambi contro attacchi adversarial su validation set
+3. Testa entrambi contro attacchi adversarial su validation set
 4. Confronta robustezza (ASR, accuracy adversarial)
 
 UTILIZZO:
@@ -15,18 +15,22 @@ UTILIZZO:
 
     # Test SENZA robustezza (solo accuracy): valuta l'accuracy del modello con adversarial training sui dati puliti
     (utilizzato come test preliminare, per Verificare che adversarial training non degradi accuracy prima di testare robustezza)
+
     python attacks/test_adversarial_defense.py --client-id 1 --no-robustness-test
 
     # Test con difesa abilitata + robustezza: valuta accuracy del modello con adversarial training sui dati adversarial
     (per verificare che la difesa funzioni davvero contro attacchi adversarial)
+
     python attacks/test_adversarial_defense.py --client-id 1
 
     # TEST Confronto automatico baseline vs robusto: valuta entrambi i modelli sui dari puliti e adversarial
     (Dimostrare l'efficacia della difesa con confronto side-by-side)
+
     python attacks/test_adversarial_defense.py --client-id 1 --compare
 
     # Test baseline (senza difesa) + robustezza: valuta accuracy del modello senza adversarial training sui dati adversarial
     (Misurare vulnerabilità del modello senza difesa (punto di riferimento))
+    
     python attacks/test_adversarial_defense.py --client-id 1 --disable-defense
 
 
@@ -42,8 +46,8 @@ import time
 
 # Aggiungi path per import moduli
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-sys.path.append(os. path.join(os.path.dirname(__file__), '..'))
-
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+    
 # Import ART
 from art.attacks.evasion import HopSkipJump
 from art.estimators.classification import SklearnClassifier
@@ -225,7 +229,7 @@ def local_adversarial_training_test(model_instance, X_train, y_train, X_val, y_v
         X_adv = np.array(X_adv_list)
         
         elapsed = time.time() - start_time
-        print(f"[Test Client {client_id}] ✅ Generazione completata in {elapsed:.1f}s ({len(X_adv)/elapsed:. 2f} campioni/sec)")
+        print(f"[Test Client {client_id}] ✅ Generazione completata in {elapsed:.1f}s ({len(X_adv)/elapsed:.2f} campioni/sec)")
         
         # STEP 6: Verifica output
         if X_adv is None or len(X_adv) == 0:
@@ -301,7 +305,7 @@ def local_adversarial_training_test(model_instance, X_train, y_train, X_val, y_v
             val_acc_robust = model_robust.score(X_val, y_val)
             
             print(f"[Test Client {client_id}] 📊 Validation:")
-            print(f"  Clean:  {val_acc_clean:. 4f}")
+            print(f"  Clean:  {val_acc_clean:.4f}")
             print(f"  Robust: {val_acc_robust:.4f}")
             print(f"  Δ:      {val_acc_robust - val_acc_clean:+.4f}")
         
@@ -318,7 +322,7 @@ def local_adversarial_training_test(model_instance, X_train, y_train, X_val, y_v
 
 def test_model_robustness(model, X_val, y_val, client_id, model_name="Model"):
     """
-    ✅ NUOVA FUNZIONE: Testa robustezza del modello generando adversarial sul validation set. 
+    NUOVA FUNZIONE: Testa robustezza del modello generando adversarial sul validation set. 
     
     WORKFLOW:
     1. Seleziona campioni Attack dal validation
@@ -340,9 +344,9 @@ def test_model_robustness(model, X_val, y_val, client_id, model_name="Model"):
             - robustness_score: Metrica combinata (1 - ASR)
             - successful_evasions: Numero evasioni riuscite
     """
-    print(f"\n[Test {model_name}] {'='*60}")
+    print(f"\n[Test {model_name}] " + "="*60)
     print(f"[Test {model_name}] 🔬 TEST ROBUSTEZZA SUL VALIDATION SET")
-    print(f"[Test {model_name}] {'='*60}")
+    print(f"[Test {model_name}] " + "="*60)
     
     # ========== STEP 1: SELEZIONA CAMPIONI ATTACK ==========
     attack_mask = (y_val == 1)
@@ -446,15 +450,15 @@ def test_model_robustness(model, X_val, y_val, client_id, model_name="Model"):
     l2_mean = np.mean(np.linalg.norm(perturbation, axis=1))
     
     # ========== STEP 6: STAMPA RISULTATI ==========
-    print(f"\n[Test {model_name}] {'='*60}")
+    print(f"\n[Test {model_name}] " + "="*60)
     print(f"[Test {model_name}] 📊 RISULTATI ROBUSTEZZA:")
-    print(f"[Test {model_name}] {'='*60}")
+    print(f"[Test {model_name}] " + "="*60)
     print(f"[Test {model_name}] ASR (Attack Success Rate): {asr*100:.2f}%")
     print(f"[Test {model_name}]   Evasioni riuscite: {successful_evasions}/{len(X_val_attacks)}")
     print(f"[Test {model_name}] Accuracy adversarial: {acc_adv:. 4f}")
     print(f"[Test {model_name}] Robustness score: {robustness_score:.4f}")
     print(f"[Test {model_name}] Perturbazione L2 media: {l2_mean:. 6f}")
-    print(f"[Test {model_name}] {'='*60}\n")
+    print(f"[Test {model_name}] " + "="*60 + "\n")
     
     return {
         'accuracy_adversarial': float(acc_adv),
@@ -536,9 +540,9 @@ def test_defense_single_client(client_id, enable_defense=True, test_robustness=T
     }
     
     if test_robustness:
-        print(f"\n{'='*80}")
-        print(f"STEP 3: TEST ROBUSTEZZA CONTRO ATTACCHI ADVERSARIAL")
-        print(f"{'='*80}")
+        print("\n" + "="*80)
+        print("STEP 3: TEST ROBUSTEZZA CONTRO ATTACCHI ADVERSARIAL")
+        print("="*80)
         
         # ✅ NUOVO: Genera adversarial examples sul VALIDATION SET
         results_robustness = test_model_robustness(
@@ -599,7 +603,7 @@ CONFIGURAZIONE:
         help='ID del client da testare (1-15)'
     )
     
-    parser. add_argument(
+    parser.add_argument(
         '--disable-defense',
         action='store_true',
         help='Disabilita difesa adversarial (test baseline)'
@@ -681,7 +685,7 @@ CONFIGURAZIONE:
             print(f"{'Accuracy (dati adversarial)':<30} {acc_adv_baseline:<15.4f} {acc_adv_robust:<15.4f} {acc_adv_robust-acc_adv_baseline:+.4f}")
             
             # ASR
-            asr_baseline = results_baseline. get('asr', 1.0)
+            asr_baseline = results_baseline.get('asr', 1.0)
             asr_robust = results_robust.get('asr', 1.0)
             print(f"{'ASR (Attack Success Rate)':<30} {asr_baseline*100:<15.2f}% {asr_robust*100:<15.2f}% {(asr_robust-asr_baseline)*100:+.2f}%")
             
