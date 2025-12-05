@@ -13,22 +13,22 @@ UTILIZZO:
 
     Eseguire dalla root del progetto:
 
-    # Test SENZA robustezza (solo accuracy): valuta l'accuracy del modello con adversarial training sui dati puliti
+    # Test 2 SENZA robustezza (solo accuracy): valuta l'accuracy del modello con adversarial training sui dati puliti
     (utilizzato come test preliminare, per Verificare che adversarial training non degradi accuracy prima di testare robustezza)
 
     python attacks/test_adversarial_defense.py --client-id 1 --no-robustness-test
 
-    # Test con difesa abilitata + robustezza: valuta accuracy del modello con adversarial training sui dati adversarial
+    # Test 3 con difesa abilitata + robustezza: valuta accuracy del modello con adversarial training sui dati adversarial
     (per verificare che la difesa funzioni davvero contro attacchi adversarial)
 
     python attacks/test_adversarial_defense.py --client-id 1
 
-    # TEST Confronto automatico baseline vs robusto: valuta entrambi i modelli sui dari puliti e adversarial
+    # Test 4 Confronto automatico baseline vs robusto: valuta entrambi i modelli sui dari puliti e adversarial
     (Dimostrare l'efficacia della difesa con confronto side-by-side)
 
     python attacks/test_adversarial_defense.py --client-id 1 --compare
 
-    # Test baseline (senza difesa) + robustezza: valuta accuracy del modello senza adversarial training sui dati adversarial
+    # Test 1 baseline (senza difesa) + robustezza: valuta accuracy del modello senza adversarial training sui dati adversarial
     (Misurare vulnerabilità del modello senza difesa (punto di riferimento))
     
     python attacks/test_adversarial_defense.py --client-id 1 --disable-defense

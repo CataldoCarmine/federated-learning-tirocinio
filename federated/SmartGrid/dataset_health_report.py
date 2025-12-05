@@ -7,6 +7,13 @@ Produce:
  - federated/results/plots/*.png         (grafici aggregati)
 Analizza i file data{client_id}.csv in data/SmartGrid/.
 Seleziona automaticamente le top-K feature (per varianza globale) e crea boxplot + altri grafici.
+
+Modifica: migliorata la funzione di heatmap delle feature quasi-costanti (plot_heatmap_near_constant).
+Ora ordina le feature per percentuale di client in cui risultano near-constant,
+limita il numero di feature mostrato per leggibilità e usa seaborn se disponibile.
+
+Ulteriore modifica richiesta: nei grafici l'etichetta "Client ID" è stata sostituita con "File ID",
+e i grafici non mostrano più il nome/titolo del grafico nelle immagini.
 """
 
 import os
@@ -17,6 +24,14 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 import argparse
 import math
+
+# seaborn è opzionale ma migliora l'estetica delle heatmap
+try:
+    import seaborn as sns
+    _HAS_SEABORN = True
+except Exception:
+    _HAS_SEABORN = False
+
 warnings_enabled = True
 
 # --- Configurazione ---
@@ -25,6 +40,7 @@ RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results_
 PLOTS_DIR = os.path.join(RESULTS_DIR, "plots")
 CLIENT_RANGE_DEFAULT = (1, 16)  # python range semantics: 1..15
 TOP_K_FEATURES = 8  # numero di feature principali da plottare (modificabile)
+HEATMAP_MAX_FEATURES = 40  # massimo feature da mostrare nella heatmap per leggibilità
 
 # --- Utilità ---
 def ensure_dirs():
@@ -52,8 +68,11 @@ def is_near_constant(col_values, threshold_ratio=0.999, var_threshold=1e-12):
     n = len(col_values)
     if n == 0:
         return True
-    vals, counts = np.unique(col_values[~pd.isna(col_values)], return_counts=True)
+    vals = col_values[~pd.isna(col_values)]
     if vals.size == 0:
+        return True
+    vals_u, counts = np.unique(vals, return_counts=True)
+    if vals_u.size == 0:
         return True
     max_count = counts.max()
     ratio = max_count / float(n)
@@ -187,6 +206,11 @@ def write_text_report(all_clients_info, report_path):
     print(f"✅ Report testuale salvato in: {report_path}")
 
 def plot_class_distribution(all_clients_info, out_path):
+    """
+    Plot a barre della distribuzione delle classi per file/client.
+    - Sostituita etichetta asse X: 'File ID' (invece di 'Client ID')
+    - Rimosso titolo del grafico
+    """
     client_ids = [info['client_id'] for info in all_clients_info]
     attack_perc = [info.get('attack_ratio',0)*100 for info in all_clients_info]
     natural_perc = [100 - a for a in attack_perc]
@@ -199,9 +223,10 @@ def plot_class_distribution(all_clients_info, out_path):
     ax.bar(x + width/2, natural_perc, width, label='Natural (%)')
     ax.set_xticks(x)
     ax.set_xticklabels([str(cid) for cid in client_ids])
-    ax.set_xlabel("Client ID")
+    # Etichetta richiesta: File ID
+    ax.set_xlabel("File ID")
     ax.set_ylabel("Percentage (%)")
-    ax.set_title("Class distribution per client")
+    # Rimosso il titolo del grafico come richiesto
     ax.legend()
     ax.grid(alpha=0.3)
     plt.tight_layout()
@@ -210,6 +235,12 @@ def plot_class_distribution(all_clients_info, out_path):
     print(f"✅ Grafico distribuzione classi salvato in: {out_path}")
 
 def plot_boxplots_top_features(all_clients_info, top_features, out_path):
+    """
+    Boxplot per le top features (una riga per feature, più box per file).
+    - L'etichetta dell'asse X è 'File ID'
+    - I titoli dei singoli subplot (nomi feature) sono rimossi per rispettare la richiesta
+      (le feature restano comunque selezionate dai top_features)
+    """
     if not top_features:
         print("⚠️ Nessuna feature per boxplot")
         return
@@ -234,12 +265,13 @@ def plot_boxplots_top_features(all_clients_info, top_features, out_path):
                 arr = np.array([])
             data_per_client.append(arr)
             labels.append(str(info['client_id']))
-        # draw boxplot grouped: combine into a single list with positions
-        # For readability we create one box per client for this feature
+        # draw boxplot grouped: one box per file for this feature
         ax.boxplot(data_per_client, notch=False, patch_artist=False)
-        ax.set_title(feat)
+        # Rimosso titolo del subplot (nome feature)
+        # ax.set_title(feat)  <-- intentionally removed
         ax.set_xticks(range(1, len(labels)+1))
         ax.set_xticklabels(labels, rotation=45, fontsize=8)
+        ax.set_xlabel("File ID")  # sostituisce "Client ID"
         ax.grid(alpha=0.2)
     # hide extra axes
     for j in range(n, len(axes)):
@@ -250,7 +282,11 @@ def plot_boxplots_top_features(all_clients_info, top_features, out_path):
     print(f"✅ Boxplots top features salvati in: {out_path}")
 
 def plot_value_ranges(all_clients_info, top_features, out_path):
-    # mostra min/median/max per client per feature (aggrega in un plot per feature)
+    """
+    Mostra min/median/max per file per feature in un plot per feature.
+    - Asse X etichettato 'File ID'
+    - Rimosso il titolo dei singoli plot contenente il nome della feature
+    """
     if not top_features:
         return
     fig, axes = plt.subplots(len(top_features), 1, figsize=(10, 3*len(top_features)))
@@ -271,8 +307,10 @@ def plot_value_ranges(all_clients_info, top_features, out_path):
         if not cid:
             continue
         ax.errorbar(cid, medians, yerr=[np.array(medians)-np.array(mins), np.array(maxs)-np.array(medians)], fmt='o', capsize=5)
-        ax.set_xlabel("Client ID"); ax.set_ylabel(feat)
-        ax.set_title(f"Range & median per client - {feat}")
+        # Rimosso titolo del grafico (il nome della feature)
+        # ax.set_title(f"Range & median per client - {feat}")  <-- intentionally removed
+        ax.set_xlabel("File ID")  # sostituisce "Client ID"
+        ax.set_ylabel(feat)
         ax.grid(alpha=0.3)
     plt.tight_layout()
     plt.savefig(out_path, dpi=200)
@@ -280,29 +318,86 @@ def plot_value_ranges(all_clients_info, top_features, out_path):
     print(f"✅ Value ranges salvati in: {out_path}")
 
 def plot_heatmap_near_constant(all_clients_info, out_path):
-    # crea matrice (client x feature) con 1 se near-constant, 0 altrimenti per le prime 40 feature comuni
-    # Trova union delle feature più comuni
+    """
+    Crea una heatmap (file x feature) con valori:
+      1 = feature near-constant per quel file
+      0 = feature non near-constant o assente
+
+    Miglioramenti rispetto alla versione precedente:
+    - Ordina le feature per percentuale di file in cui sono near-constant (descending)
+    - Limita il numero di feature mostrate a HEATMAP_MAX_FEATURES per leggibilità
+    - Usa seaborn se disponibile (migliore resa grafica)
+    - Stampa un sommario delle feature più frequentemente near-constant
+
+    Modifiche richieste:
+    - L'asse y è etichettato 'File ID' (invece di 'Client ID')
+    - Non viene mostrato il titolo del grafico nelle immagini
+    """
+    # Unione delle feature disponibili
     feature_set = set()
     for info in all_clients_info:
         feature_set.update(info.get('feature_names', []))
-    feature_list = sorted(list(feature_set))[:40]
-    if not feature_list:
+    if not feature_set:
         print("⚠️ Nessuna feature disponibile per heatmap")
         return
-    mat = np.zeros((len(all_clients_info), len(feature_list)), dtype=int)
+
+    # Costruisci una tabella feature -> count di file in cui è near-constant
+    feature_list_all = sorted(list(feature_set))
+    feature_counts = {feat: 0 for feat in feature_list_all}
+    client_id_list = [info['client_id'] for info in all_clients_info]
+
+    for info in all_clients_info:
+        nc = info.get('near_constant', {})
+        for feat in feature_list_all:
+            if nc.get(feat, False):
+                feature_counts[feat] += 1
+
+    # Calcola percentuale di file per feature
+    n_clients = len(all_clients_info)
+    feature_percent = {feat: (feature_counts[feat] / n_clients) * 100.0 for feat in feature_list_all}
+
+    # Ordina feature per percentuale descending (le più problematiche prime)
+    feature_list_sorted = sorted(feature_percent.keys(), key=lambda x: feature_percent[x], reverse=True)
+
+    # Limita a HEATMAP_MAX_FEATURES per leggibilità
+    feature_list = feature_list_sorted[:HEATMAP_MAX_FEATURES]
+
+    # Costruisci la matrice file x feature
+    mat = np.zeros((n_clients, len(feature_list)), dtype=int)
     for i, info in enumerate(all_clients_info):
         nc = info.get('near_constant', {})
         for j, feat in enumerate(feature_list):
             if nc.get(feat, False):
                 mat[i, j] = 1
-    fig, ax = plt.subplots(figsize=(max(8, len(feature_list)*0.3), max(4, len(all_clients_info)*0.3)))
-    cax = ax.imshow(mat, aspect='auto', cmap='Greys', interpolation='nearest')
-    ax.set_yticks(range(len(all_clients_info)))
-    ax.set_yticklabels([str(info['client_id']) for info in all_clients_info])
-    ax.set_xticks(range(len(feature_list)))
-    ax.set_xticklabels(feature_list, rotation=90, fontsize=6)
-    ax.set_title("Heatmap near-constant features (1 = near-constant)")
-    plt.colorbar(cax, ax=ax, fraction=0.03)
+
+    # Stampa sommario features top
+    percent_list = [feature_percent[feat] for feat in feature_list]
+    print("\nTop features più spesso near-constant (percentuale di file):")
+    for feat, pct in zip(feature_list, percent_list):
+        print(f"  - {feat}: {pct:.1f}%")
+
+    # Plot (nota: titolo rimosso)
+    figsize = (max(10, len(feature_list) * 0.35), max(6, n_clients * 0.35))
+    plt.figure(figsize=figsize)
+    if _HAS_SEABORN:
+        sns.set(style="whitegrid")
+        ax = sns.heatmap(mat, cmap="Greys", cbar=True,
+                         xticklabels=feature_list, yticklabels=client_id_list,
+                         linewidths=0.4, linecolor='lightgray', vmin=0, vmax=1)
+        ax.set_xticklabels(feature_list, rotation=90, fontsize=7)
+        ax.set_yticklabels([str(cid) for cid in client_id_list], fontsize=9)
+    else:
+        ax = plt.gca()
+        im = ax.imshow(mat, cmap="Greys", aspect='auto', vmin=0, vmax=1, interpolation='nearest')
+        plt.colorbar(im, ax=ax, fraction=0.03)
+        ax.set_xticks(np.arange(len(feature_list)))
+        ax.set_xticklabels(feature_list, rotation=90, fontsize=7)
+        ax.set_yticks(np.arange(n_clients))
+        ax.set_yticklabels([str(cid) for cid in client_id_list], fontsize=9)
+
+    # Etichette richieste: File ID al posto di Client ID; non impostiamo titolo
+    ax.set_xlabel("Feature")
+    ax.set_ylabel("File ID")
     plt.tight_layout()
     plt.savefig(out_path, dpi=200)
     plt.close()

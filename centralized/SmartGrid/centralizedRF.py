@@ -464,24 +464,19 @@ def save_centralized_random_forest_report(X_val, y_val, model, final_metrics, fe
     """
     Salva un report per Random Forest centralizzato.
     Diverso dalla versione DNN perché Random Forest non ha epoche di training.
-    
-    Args:
-        X_val: Dati di validation
-        y_val: Etichette di validation
-        model: Modello Random Forest addestrato
-        final_metrics: Metriche finali del modello
-        feature_importance_before: Feature importance prima del preprocessing
-        feature_importance_after: Feature importance dopo il preprocessing
+
+    Modifica minima: aggiunta della matrice di confusione sul TEST SET,
+    se il dizionario final_metrics contiene le chiavi 'tn','fp','fn','tp'.
     """
     results_dir = os.path.join("results")
     os.makedirs(results_dir, exist_ok=True)
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     report_path = os.path.join(results_dir, f"centralized_random_forest_report_{timestamp}.txt")
 
-    # Predizioni per matrice di confusione
+    # Predizioni per matrice di confusione (validation)
     y_pred_binary = model.predict(X_val)
     conf_matrix = confusion_matrix(y_val, y_pred_binary)
-    
+
     # Header del report
     title = "RESOCONTO ADDESTRAMENTO CENTRALIZZATO SMARTGRID - RANDOM FOREST"
     header_lines = []
@@ -505,7 +500,7 @@ def save_centralized_random_forest_report(X_val, y_val, model, final_metrics, fe
     metrics_lines.append(f"Recall: {final_metrics['recall']:.6f}")
     metrics_lines.append(f"AUC: {final_metrics['auc']:.6f}")
     metrics_lines.append("")
-    
+
     # Metriche per classe
     metrics_lines.append("METRICHE PER CLASSE:")
     metrics_lines.append("-" * 30)
@@ -522,7 +517,21 @@ def save_centralized_random_forest_report(X_val, y_val, model, final_metrics, fe
     metrics_lines.append(f"  Support: {final_metrics['support_attack']}")
     metrics_lines.append("")
 
-    # Matrice di confusione
+    # ====== NUOVA PICCOLA SEZIONE: Matrice di confusione su TEST SET (se disponibile) ======
+    test_conf_matrix_lines = []
+    if all(k in final_metrics for k in ('tn', 'fp', 'fn', 'tp')):
+        test_conf_matrix_lines.append("MATRICE DI CONFUSIONE SUL TEST SET:")
+        test_conf_matrix_lines.append("-" * 40)
+        test_conf_matrix_lines.append(f"True Positive (TP):  {final_metrics['tp']}")
+        test_conf_matrix_lines.append(f"False Positive (FP): {final_metrics['fp']}")
+        test_conf_matrix_lines.append(f"False Negative (FN): {final_metrics['fn']}")
+        test_conf_matrix_lines.append(f"True Negative (TN):  {final_metrics['tn']}")
+        test_conf_matrix_lines.append("")
+    else:
+        # Se le informazioni non sono presenti, non scriviamo la matrice di test
+        test_conf_matrix_lines.append("MATRICE DI CONFUSIONE SUL TEST SET: Non disponibile (final_metrics non contiene tn/fp/fn/tp)\n")
+
+    # Matrice di confusione (validation)
     conf_matrix_lines = []
     conf_matrix_lines.append("MATRICE DI CONFUSIONE SUL VALIDATION SET:")
     conf_matrix_lines.append("-" * 40)
@@ -573,12 +582,16 @@ def save_centralized_random_forest_report(X_val, y_val, model, final_metrics, fe
     fi_lines.append("")
 
     # Scrivi il file
-    with open(report_path, "w") as f:
-        # Scrivi tutte le sezioni
+    with open(report_path, "w", encoding='utf-8') as f:
+        # Scrivi tutte le sezioni in ordine leggibile:
         for line in header_lines:
             f.write(line + "\n")
         for line in metrics_lines:
             f.write(line + "\n")
+        # Matrice confusione test (se presente)
+        for line in test_conf_matrix_lines:
+            f.write(line + "\n")
+        # Matrice confusione validation
         for line in conf_matrix_lines:
             f.write(line + "\n")
         for line in model_fi_lines:

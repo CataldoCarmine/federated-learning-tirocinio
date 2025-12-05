@@ -389,15 +389,56 @@ def train_smartgrid_dnn_model(model, X_train, y_train, X_val, y_val, class_weigh
     return history
 
 def evaluate_smartgrid_model(model, X_test, y_test, set_name="Test", threshold=0.5):
+    """
+    VALUTAZIONE FINALE DEL MODELLO DNN SUL SET SPECIFICATO.
+
+    Restituisce:
+        loss, accuracy, metrics_dict
+
+    Nota:
+    - model.evaluate restituisce la loss e le metriche compilate in model.compile.
+    - Qui calcoliamo F1, balanced accuracy e confusion matrix usando model.predict.
+    - Modifica minima: il dizionario delle metriche ora include anche 'loss' per poter essere salvato nel report.
+    """
     print(f"=== VALUTAZIONE FINALE DNN SMARTGRID - {set_name.upper()} SET ===")
+    # Esegui la valutazione Keras (ritorna loss + metrics definiti in compile)
     results = model.evaluate(X_test, y_test, verbose=0)
-    loss, accuracy, precision, recall, auc = results
-    f1_score_val = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-    y_pred_prob = model.predict(X_test, verbose=0)
-    y_pred_binary = (y_pred_prob > threshold).astype(int).flatten()
-    balanced_acc = balanced_accuracy_score(y_test, y_pred_binary)
-    report = classification_report(y_test, y_pred_binary, target_names=["natural", "attack"], output_dict=True, zero_division=0)
-    conf_matrix = confusion_matrix(y_test, y_pred_binary)
+    # Scompone i risultati (assumiamo ordine: loss, accuracy, precision, recall, auc)
+    try:
+        loss, accuracy, precision, recall, auc = results
+    except Exception:
+        # Fallback robusto se l'ordine/numero metriche è diverso
+        # Assumiamo almeno loss e accuracy
+        loss = results[0] if len(results) > 0 else 0.0
+        accuracy = results[1] if len(results) > 1 else 0.0
+        precision = results[2] if len(results) > 2 else 0.0
+        recall = results[3] if len(results) > 3 else 0.0
+        auc = results[4] if len(results) > 4 else 0.0
+
+    # Calcolo F1 e altre metriche non fornite direttamente da Keras
+    f1_score_val = 0.0
+    balanced_acc = 0.0
+    try:
+        y_pred_prob = model.predict(X_test, verbose=0)
+        # gestisci output probabilità o vettore
+        if y_pred_prob.ndim > 1 and y_pred_prob.shape[1] > 1:
+            y_prob_pos = y_pred_prob[:, 1]
+        else:
+            y_prob_pos = y_pred_prob.flatten()
+        y_pred_binary = (y_prob_pos > threshold).astype(int).flatten()
+        # metriche
+        from sklearn.metrics import f1_score, balanced_accuracy_score, classification_report, confusion_matrix
+        f1_score_val = f1_score(y_test, y_pred_binary, zero_division=0)
+        balanced_acc = balanced_accuracy_score(y_test, y_pred_binary)
+        report = classification_report(y_test, y_pred_binary, target_names=["natural", "attack"], output_dict=True, zero_division=0)
+        conf_matrix = confusion_matrix(y_test, y_pred_binary)
+    except Exception as e:
+        print(f"⚠️ Errore nel calcolo metriche test dettagliate: {e}")
+        report = {"natural": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 0},
+                  "attack":  {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 0}}
+        conf_matrix = np.array([[0, 0], [0, 0]])
+
+    # Stampa risultati principali su console
     print(f"  Loss: {loss:.4f}")
     print(f"  Accuracy: {accuracy:.4f}")
     print(f"  F1-Score: {f1_score_val:.4f}")
@@ -406,16 +447,22 @@ def evaluate_smartgrid_model(model, X_test, y_test, set_name="Test", threshold=0
     print(f"  Recall: {recall:.4f}")
     print(f"  AUC: {auc:.4f}")
     print(f"Classification report (per classe):")
-    print(classification_report(y_test, y_pred_binary, target_names=["natural", "attack"], zero_division=0))
+    try:
+        print(classification_report(y_test, y_pred_binary, target_names=["natural", "attack"], zero_division=0))
+    except Exception:
+        print("  (classification_report non disponibile)")
     print(f"Confusion matrix:")
     print(conf_matrix)
+
+    # Restituisce loss, accuracy e un dizionario con tutte le metriche (ora include 'loss')
     return loss, accuracy, {
-        "accuracy": accuracy,
-        "precision": precision,
-        "recall": recall,
-        "auc": auc,
-        "f1_score": f1_score_val,
-        "balanced_accuracy": balanced_acc,
+        "loss": float(loss),
+        "accuracy": float(accuracy),
+        "precision": float(precision),
+        "recall": float(recall),
+        "auc": float(auc),
+        "f1_score": float(f1_score_val),
+        "balanced_accuracy": float(balanced_acc),
         "precision_natural": report["natural"]["precision"],
         "recall_natural": report["natural"]["recall"],
         "f1_natural": report["natural"]["f1-score"],
@@ -455,18 +502,22 @@ def feature_importance_analysis(X, y, feature_names=None, n_estimators=100, titl
 
 # ========== NUOVA FUNZIONE: SALVA METRICHE E FEATURE IMPORTANCE IN FILE TXT ==========
 
-def save_centralized_training_report(history, X_val, y_val, model, feature_importance_before=None, feature_importance_after=None):
+def save_centralized_training_report(history, X_val, y_val, model, feature_importance_before=None, feature_importance_after=None, final_test_metrics=None):
     """
     Salva un file txt con una tabella delle metriche ad ogni epoca, statistiche per metrica,
     e una sezione con la feature importance prima/dopo PCA.
+
+    Modifica minima: se final_test_metrics contiene 'loss', la stampa nella sezione Test.
     """
+    import numpy as np
+    from sklearn.metrics import confusion_matrix, classification_report, balanced_accuracy_score, f1_score
 
     results_dir = os.path.join("results")
     os.makedirs(results_dir, exist_ok=True)
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     report_path = os.path.join(results_dir, f"centralized_training_report_{timestamp}.txt")
 
-    # Definisci le colonne e la larghezza
+    # Definizione colonne (come prima)
     cols = [
         ("epoch", "Epoch", 6),
         ("loss", "Loss", 11),
@@ -489,24 +540,32 @@ def save_centralized_training_report(history, X_val, y_val, model, feature_impor
             return "N/A".ljust(width)
         return f"{val:.6f}".ljust(width)
 
-    # Raccogli metriche per ogni epoca
-    n_epochs = len(history.history["loss"])
+    # Numero epoche (compatibilità Keras)
+    n_epochs = len(history.history.get("loss", []))
     metric_rows = []
     for i in range(n_epochs):
-        # Prendiamo i valori di loss, accuracy, auc da history
-        loss = history.history["val_loss"][i] if "val_loss" in history.history else np.nan
-        accuracy = history.history["val_accuracy"][i] if "val_accuracy" in history.history else np.nan
-        auc = history.history["val_auc"][i] if "val_auc" in history.history else np.nan
+        # Prendiamo i valori di loss/accuracy/auc da history (validation)
+        loss = history.history.get("val_loss", [np.nan]*n_epochs)[i] if "val_loss" in history.history else np.nan
+        accuracy = history.history.get("val_accuracy", [np.nan]*n_epochs)[i] if "val_accuracy" in history.history else np.nan
+        auc = history.history.get("val_auc", [np.nan]*n_epochs)[i] if "val_auc" in history.history else np.nan
 
-        # Per metriche custom, usiamo il modello finale (approssimazione didattica)
-        y_pred_prob = model.predict(X_val, verbose=0)
-        y_pred_binary = (y_pred_prob > 0.5).astype(int).flatten()
-        balanced_acc = balanced_accuracy_score(y_val, y_pred_binary)
-        f1_score_val = f1_score(y_val, y_pred_binary)
-        report = classification_report(y_val, y_pred_binary, target_names=["natural", "attack"], output_dict=True, zero_division=0)
-        precision = report["weighted avg"]["precision"]
-        recall = report["weighted avg"]["recall"]
-        f1_score_macro = report["weighted avg"]["f1-score"]
+        # Metriche custom calcolate con il modello finale sul validation (approssimazione)
+        try:
+            y_pred_prob = model.predict(X_val, verbose=0)
+            if y_pred_prob.ndim > 1 and y_pred_prob.shape[1] > 1:
+                y_prob_pos = y_pred_prob[:, 1]
+            else:
+                y_prob_pos = y_pred_prob.flatten()
+            y_pred_binary = (y_prob_pos > 0.5).astype(int)
+            balanced_acc = balanced_accuracy_score(y_val, y_pred_binary)
+            f1_val = f1_score(y_val, y_pred_binary, zero_division=0)
+            report_dict = classification_report(y_val, y_pred_binary, target_names=["natural", "attack"], output_dict=True, zero_division=0)
+            precision_weighted = report_dict.get("weighted avg", {}).get("precision", np.nan)
+            recall_weighted = report_dict.get("weighted avg", {}).get("recall", np.nan)
+        except Exception:
+            balanced_acc = np.nan
+            f1_val = np.nan
+            report_dict = {}
 
         metric_rows.append({
             "epoch": i+1,
@@ -514,27 +573,25 @@ def save_centralized_training_report(history, X_val, y_val, model, feature_impor
             "accuracy": accuracy,
             "balanced_accuracy": balanced_acc,
             "auc": auc,
-            "f1_score": f1_score_macro,
-            "f1_natural": report["natural"]["f1-score"],
-            "f1_attack": report["attack"]["f1-score"],
-            "precision": precision,
-            "precision_natural": report["natural"]["precision"],
-            "precision_attack": report["attack"]["precision"],
-            "recall": recall,
-            "recall_natural": report["natural"]["recall"],
-            "recall_attack": report["attack"]["recall"],
+            "f1_score": report_dict.get("weighted avg", {}).get("f1-score", np.nan),
+            "f1_natural": report_dict.get("natural", {}).get("f1-score", np.nan),
+            "f1_attack": report_dict.get("attack", {}).get("f1-score", np.nan),
+            "precision": precision_weighted,
+            "precision_natural": report_dict.get("natural", {}).get("precision", np.nan),
+            "precision_attack": report_dict.get("attack", {}).get("precision", np.nan),
+            "recall": recall_weighted,
+            "recall_natural": report_dict.get("natural", {}).get("recall", np.nan),
+            "recall_attack": report_dict.get("attack", {}).get("recall", np.nan),
         })
 
-    # Header della tabella
+    # Header tabella, statistiche ecc. (stessa logica precedente)
     title = "RESOCONTO ADDESTRAMENTO CENTRALIZZATO SMARTGRID"
     n_epochs = len(metric_rows)
     header = f"{title}\nEpoche totali: {n_epochs}\n\nTABELLA RIASSUNTIVA METRICHE:\n" + "="*140 + "\n"
     col_headers = "  ".join([name.ljust(width) for _, name, width in cols])
     sep = "-" * 140
 
-    table_lines = []
-    table_lines.append(col_headers)
-    table_lines.append(sep)
+    table_lines = [col_headers, sep]
     for row in metric_rows:
         vals = []
         for k, _, width in cols:
@@ -545,9 +602,8 @@ def save_centralized_training_report(history, X_val, y_val, model, feature_impor
                 vals.append(fmt(v, width))
         table_lines.append("  ".join(vals))
 
-    # STATISTICHE FINALI
-    stats_lines = []
-    stats_lines.append("\nSTATISTICHE FINALI:\n" + "="*60 + "\n")
+    # Statistiche finali (come prima)
+    stats_lines = ["\nSTATISTICHE FINALI:\n" + "="*60 + "\n"]
     for k, name, width in cols:
         if k == "epoch":
             continue
@@ -570,11 +626,46 @@ def save_centralized_training_report(history, X_val, y_val, model, feature_impor
         stats_lines.append(f"   Valore medio        : {fmt(meanv, 9)}")
         stats_lines.append(f"   Miglioramento       : {fmt(miglioramento, 9)} {trend}")
         stats_lines.append("")
-        
-    conf_matrix = confusion_matrix(y_val, (model.predict(X_val, verbose=0) > 0.5).astype(int).flatten())
-    conf_matrix_lines = []
-    conf_matrix_lines.append("\nMATRICE DI CONFUSIONE SUL VALIDATION SET:\n" + "-"*40)
-    conf_matrix_lines.append(f"{'tp:':<2} {conf_matrix[1, 1]:<5} {'fp:':<2} {conf_matrix[0, 1]:<5} {'fn:':<2} {conf_matrix[1, 0]:<5} {'tn:':<2} {conf_matrix[0, 0]:<5}\n")
+
+    # Matrice di confusione sul validation (modello finale)
+    try:
+        conf_matrix = confusion_matrix(y_val, (model.predict(X_val, verbose=0).flatten() > 0.5).astype(int))
+        conf_matrix_lines = []
+        conf_matrix_lines.append("\nMATRICE DI CONFUSIONE SUL VALIDATION SET:\n" + "-"*40)
+        conf_matrix_lines.append(f"{'tp:':<2} {conf_matrix[1, 1]:<5} {'fp:':<2} {conf_matrix[0, 1]:<5} {'fn:':<2} {conf_matrix[1, 0]:<5} {'tn:':<2} {conf_matrix[0, 0]:<5}\n")
+    except Exception:
+        conf_matrix_lines = ["\nMATRICE DI CONFUSIONE SUL VALIDATION SET: Non disponibile\n"]
+
+    # ====== SEZIONE TEST FINALI (MINIMA) ======
+    test_lines = []
+    if final_test_metrics is not None:
+        fm = final_test_metrics
+        test_lines.append("\nMETRICHE TEST FINALI (Valutazione indipendente):\n" + "="*60)
+        # Stampa la loss del test se presente
+        if 'loss' in fm:
+            test_lines.append(f"  Loss (test): {fm.get('loss', 0):.6f}")
+        test_lines.append(f"  Accuracy (test): {fm.get('accuracy', 0):.6f}")
+        test_lines.append(f"  F1-Score (test): {fm.get('f1_score', 0):.6f}")
+        test_lines.append(f"  Balanced Accuracy (test): {fm.get('balanced_accuracy', 0):.6f}")
+        test_lines.append(f"  Precision (test): {fm.get('precision', 0):.6f}")
+        test_lines.append(f"  Recall (test): {fm.get('recall', 0):.6f}")
+        test_lines.append(f"  AUC (test): {fm.get('auc', 0):.6f}")
+        test_lines.append("")
+        # Per-class metrics se presenti
+        if 'precision_natural' in fm:
+            test_lines.append("  METRICHE PER CLASSE (TEST):")
+            test_lines.append(f"    Natural - Precision: {fm.get('precision_natural', 0):.6f}, Recall: {fm.get('recall_natural', 0):.6f}, F1: {fm.get('f1_natural', 0):.6f}, Support: {fm.get('support_natural', 0)}")
+            test_lines.append(f"    Attack  - Precision: {fm.get('precision_attack', 0):.6f}, Recall: {fm.get('recall_attack', 0):.6f}, F1: {fm.get('f1_attack', 0):.6f}, Support: {fm.get('support_attack', 0)}")
+            test_lines.append("")
+        # Confusion matrix test se disponibile
+        if all(k in fm for k in ('tn', 'fp', 'fn', 'tp')):
+            test_lines.append("  MATRICE DI CONFUSIONE SUL TEST SET:")
+            test_lines.append(f"    TP: {fm['tp']}, FP: {fm['fp']}, FN: {fm['fn']}, TN: {fm['tn']}")
+            test_lines.append("")
+        else:
+            test_lines.append("  MATRICE DI CONFUSIONE SUL TEST SET: Non disponibile (dati mancanti)\n")
+    else:
+        test_lines.append("\nMETRICHE TEST FINALI: Non fornite\n")
 
     # SEZIONE FEATURE IMPORTANCE (PRIMA E DOPO PCA)
     fi_lines = []
@@ -595,7 +686,8 @@ def save_centralized_training_report(history, X_val, y_val, model, feature_impor
     else:
         fi_lines.append("Non disponibile")
 
-    with open(report_path, "w") as f:
+    # Scrivi il file
+    with open(report_path, "w", encoding='utf-8') as f:
         f.write(header)
         for line in table_lines:
             f.write(line + "\n")
@@ -603,6 +695,8 @@ def save_centralized_training_report(history, X_val, y_val, model, feature_impor
         for line in stats_lines:
             f.write(line + "\n")
         for line in conf_matrix_lines:
+            f.write(line + "\n")
+        for line in test_lines:
             f.write(line + "\n")
         for line in fi_lines:
             f.write(line + "\n")
@@ -631,6 +725,7 @@ def main():
         model = create_smartgrid_dnn_model(input_features)
         history = train_smartgrid_dnn_model(model, X_train_final, y_train, X_val_final, y_val, class_weights)
         print("\n" + "=" * 80)
+        # Valutazione finale SUL TEST SET (stampa su terminale) - CATTURA final_metrics
         final_loss, final_accuracy, final_metrics = evaluate_smartgrid_model(model, X_test_final, y_test, "Test", threshold=0.5)
 
         # Calcola feature importance PRIMA e DOPO la PCA (se vuoi, puoi modificarlo secondo le tue esigenze)
@@ -642,7 +737,13 @@ def main():
             X_train_final, y_train, feature_names=[f"F{i+1}" for i in range(X_train_final.shape[1])],
             title="Feature Importance (dopo preprocessing/PCA)", max_show=20
         )
-        save_centralized_training_report(history, X_val_final, y_val, model, feature_importance_before, feature_importance_after)
+        # Passiamo le metriche finali del test al report
+        save_centralized_training_report(
+            history, X_val_final, y_val, model,
+            feature_importance_before=feature_importance_before,
+            feature_importance_after=feature_importance_after,
+            final_test_metrics=final_metrics  # <-- aggiunto, minima modifica
+        )
 
         print("\nPipeline centralizzata completata.\n")
     except Exception as e:

@@ -1,0 +1,16 @@
+METADATI MODELLO RANDOM FOREST FEDERATO
+============================================================
+
+Data creazione: 2025-11-27 12:14:31
+Numero rounds: 50
+Numero alberi globali: 100
+Numero feature: 128
+Classi: [0.0, 1.0]
+Strategia aggregazione: per_forest
+Metodo selezione alberi: weighted_accuracy
+Max alberi globali: 100
+Criterio: entropy
+Max features: sqrt
+Class weight: balanced
+
+Path modello: models/federated_rf_global_20251127_121431.pkl
