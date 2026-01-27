@@ -1,5 +1,36 @@
-flwr
-torch
-scikit-learn
-pandas
-numpy
+# ============================================
+# FEDERATED LEARNING - CORE DEPENDENCIES
+# ============================================
+flwr>=1.5.0
+
+# ============================================
+# MACHINE LEARNING - FRAMEWORKS
+# ============================================
+tensorflow>=2.13.0
+torch>=2.0.0
+scikit-learn>=1.3.0
+
+# ============================================
+# DATA MANIPULATION
+# ============================================
+pandas>=2.0.0
+numpy>=1.24.0
+
+# ============================================
+# ADVERSARIAL ROBUSTNESS
+# ============================================
+adversarial-robustness-toolbox>=1.15.0
+
+# ============================================
+# HYPERPARAMETER OPTIMIZATION
+# ============================================
+optuna>=3.3.0
+
+# ============================================
+# UTILITIES
+# ============================================
+joblib>=1.3.0          # Model serialization
+tqdm>=4.65.0           # Progress bars
+matplotlib>=3.7.0      # Plotting
+seaborn>=0.12.0        # Enhanced visualizations (optional for dataset reports)
+scipy>=1.11.0          # Statistical functions
