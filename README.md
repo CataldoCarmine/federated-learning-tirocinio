@@ -370,4 +370,4 @@ Questo progetto è parte di un **tirocinio universitario** focalizzato su:
 ## 👤 Autore
 
 **Carmine Cataldo**  
-📧 [GitHub: @CataldoCarmine](https://github.com/CataldoCarmine)
+📧 [GitHub: @CataldoCarmine](https://github.com/Carm1neBread)
